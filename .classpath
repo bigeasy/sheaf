@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry excluding="**/.svn|**/.svn/**" output="artifacts/core/target/classes" kind="src" path="artifacts/core/java"/>
+	<classpathentry excluding="**/.svn|**/.svn/**" output="artifacts/core/test/junit/target/classes" kind="src" path="artifacts/core/test/junit/java"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+	<classpathentry kind="src" path="/swag"/>
+	<classpathentry kind="lib" path="/mix/lib/junit/junit.jar"/>
+	<classpathentry kind="lib" path="/mix/lib/concurrent/concurrent.jar"/>
+	<classpathentry kind="output" path="ERRORS-IN-PATH"/>
+</classpath>
