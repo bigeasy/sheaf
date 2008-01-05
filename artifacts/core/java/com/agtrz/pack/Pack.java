@@ -38,7 +38,7 @@ public class Pack
 
     private final static int ADDRESS_SIZE = 8;
 
-    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 6 + ADDRESS_SIZE;
+    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 4 + ADDRESS_SIZE;
 
     private final static int PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE + FLAG_SIZE;
 
@@ -167,7 +167,14 @@ public class Pack
         public Pack create(File file)
         {
             FileChannel fileChannel = newFileChannel(file);
-            ByteBuffer header = ByteBuffer.allocateDirect(FILE_HEADER_SIZE);
+
+            int fullHeaderSize = FILE_HEADER_SIZE + internalJournalCount * POSITION_SIZE;
+            if (fullHeaderSize % pageSize != 0)
+            {
+                fullHeaderSize += pageSize - fullHeaderSize % pageSize;
+            }
+
+            ByteBuffer header = ByteBuffer.allocateDirect(fullHeaderSize);
 
             int pointerPageCount = 1;
 
@@ -177,7 +184,7 @@ public class Pack
             header.putInt(internalJournalCount);
             header.putInt(pointerPageCount);
 
-            header.flip();
+            header.clear();
 
             try
             {
@@ -208,7 +215,11 @@ public class Pack
 
             long firstPointer = FILE_HEADER_SIZE + ((internalJournalCount) * POSITION_SIZE);
 
-            Pack pack = new Pack(new Pager(file, fileChannel, pageSize, alignment, mapOfStaticPages, journals, firstPointer, pointerPageCount));
+            Pager pager = new Pager(file, fileChannel, pageSize, alignment, mapOfStaticPages, journals, firstPointer, pointerPageCount);
+
+            pager.initialize();
+
+            Pack pack = new Pack(pager);
 
             Mutator mutator = pack.mutate();
 
@@ -285,8 +296,7 @@ public class Pack
             int bufferSize = pageSize;
             if (position % pageSize != 0L)
             {
-                long nextPosition = (long) Math.floor(position + pageSize / pageSize);
-                bufferSize = (int) (nextPosition - position);
+                bufferSize = (int) (pageSize - position % pageSize);
             }
             ByteBuffer bytes = ByteBuffer.allocateDirect(bufferSize);
             try
@@ -326,13 +336,14 @@ public class Pack
 
         public synchronized ByteBuffer getByteBuffer()
         {
+            ByteBuffer bytes = null;
             if (bufferReference == null)
             {
-                ByteBuffer bytes = load(pager, position);
+                bytes = load(pager, position);
                 bufferReference = new WeakReference(bytes);
             }
 
-            ByteBuffer bytes = (ByteBuffer) bufferReference.get();
+            bytes = (ByteBuffer) bufferReference.get();
             if (bytes == null)
             {
                 bytes = load(pager, position);
@@ -1173,6 +1184,10 @@ public class Pack
 
         private final Map mapOfPointerPages;
 
+        private final Map mapOfFreeUserPages;
+
+        private final Map mapOfFreeSystemPages;
+
         private final ByteBuffer journalBuffer;
 
         private int pointerPageCount;
@@ -1180,6 +1195,8 @@ public class Pack
         private final long firstPointer;
 
         private final ByteBuffer pointerPageCountBytes;
+
+        private long firstSystemPage;
 
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map mapOfStaticPages, ByteBuffer journalBuffer, long firstPointer, int pointerPageCount)
         {
@@ -1197,6 +1214,8 @@ public class Pack
             this.mapOfPagesBySize = new BySizePageMap(alignment);
             this.mapOfStaticPages = mapOfStaticPages;
             this.pointerPageCountBytes = ByteBuffer.allocateDirect(COUNT_SIZE);
+            this.mapOfFreeUserPages = new TreeMap();
+            this.mapOfFreeSystemPages = new TreeMap();
             this.mapOfEmptyPages = new TreeMap(new Comparator()
             {
                 public int compare(Object leftObject, Object rightObject)
@@ -1205,6 +1224,35 @@ public class Pack
                 }
             });
             this.queue = new ReferenceQueue();
+        }
+
+        public void initialize()
+        {
+            long wilderness;
+            try
+            {
+                wilderness = fileChannel.size();
+            }
+            catch (IOException e)
+            {
+                throw new Danger("io.size", e);
+            }
+
+            if (wilderness % pageSize != 0)
+            {
+                throw new IllegalStateException();
+            }
+
+            long firstPointerPage = firstPointer;
+            firstPointerPage -= firstPointerPage % pageSize;
+            long firstUserPage = firstPointerPage + pointerPageCount * pageSize;
+
+            ByteBuffer bytes = ByteBuffer.allocate(pageSize);
+            long position = wilderness - pageSize;
+            if (position == 0L)
+            {
+                firstSystemPage = position + pageSize;
+            }
         }
 
         public int getAlignment()
@@ -1265,7 +1313,7 @@ public class Pack
                 Journal journal = new Journal(this, new PageMap(this, 16));
                 long firstDataPage = 0L;
                 DataPage fromDataPage = getDataPage(firstDataPage);
-                DataPage toDataPage = getDataPage();
+                DataPage toDataPage = newDataPage();
                 Allocator allocator = fromDataPage.getAllocator();
                 journal.relocate(allocator, fromDataPage, toDataPage);
             }
@@ -1282,6 +1330,15 @@ public class Pack
 
         private long fromWilderness()
         {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
+
+            bytes.getLong(); // Checksum.
+            bytes.putInt(-1); // Is system page.
+
+            bytes.clear();
+
+            checksum(checksum, bytes);
+
             long position;
 
             synchronized (fileChannel)
@@ -1295,14 +1352,6 @@ public class Pack
                     throw new Danger("io.size", e);
                 }
 
-                ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
-
-                bytes.getLong(); // Checksum.
-                bytes.putInt(0); // Count of blocks.
-
-                checksum(checksum, bytes);
-
-                bytes.clear();
                 try
                 {
                     fileChannel.write(bytes, position);
@@ -1325,14 +1374,7 @@ public class Pack
                 }
             }
 
-            synchronized (this)
-            {
-                DataPage dataPage = new DataPage(this, position);
-
-                addPageByPosition(dataPage);
-
-                return dataPage.getPosition();
-            }
+            return position;
         }
 
         public long newTemporaryPage(Page page)
@@ -1393,7 +1435,7 @@ public class Pack
             return null;
         }
 
-        public DataPage getDataPage()
+        public DataPage newDataPage()
         {
             synchronized (mapOfEmptyPages)
             {
@@ -1490,9 +1532,31 @@ public class Pack
             return journalPage;
         }
 
-        public synchronized JournalPage newJournalPage()
+        public JournalPage newJournalPage()
         {
-            return null;
+            long position = 0L;
+            synchronized (mapOfFreeSystemPages)
+            {
+                if (mapOfFreeSystemPages.size() > 0)
+                {
+                    Long next = (Long) mapOfFreeSystemPages.values().iterator().next();
+                    position = next.longValue();
+                }
+            }
+
+            if (position == 0L)
+            {
+                position = fromWilderness();
+            }
+
+            JournalPage journalPage = new JournalPage(this, position);
+
+            synchronized (this)
+            {
+                addPageByPosition(journalPage);
+            }
+
+            return journalPage;
         }
 
         public long getPosition(long address)
@@ -2093,7 +2157,7 @@ public class Pack
             Size size = mapOfPagesBySize.bestFit(fullSize);
             if (size == null)
             {
-                size = new Size(pager.getDataPage());
+//                size = new Size(pager.getDataPage()); FIXME newSystemDataPage()
                 listOfPages.add(size.getDataPage());
             }
 
@@ -2267,7 +2331,7 @@ public class Pack
                     size = pager.mapOfPagesBySize.bestFit(fullSize);
                     if (size == null)
                     {
-                        size = new Size(pager.getDataPage());
+                        size = new Size(pager.newDataPage());
                     }
                     listOfPages.add(size.getDataPage());
                 }
