@@ -319,6 +319,8 @@ public class Pack
 
         protected abstract void initialize(ByteBuffer bytes);
 
+        public abstract boolean isSystem();
+
         protected Pager getPager()
         {
             return pager;
@@ -361,8 +363,6 @@ public class Pack
 
         private int count;
 
-        private int reserved;
-
         private long reservations;
 
         public AddressPage(Pager pager, long position)
@@ -379,8 +379,6 @@ public class Pack
                     count++;
                 }
             }
-
-            reserved = count;
         }
 
         protected void initialize(ByteBuffer bytes)
@@ -389,9 +387,9 @@ public class Pack
             bytes.putLong(0L);
         }
 
-        public synchronized int available()
+        public boolean isSystem()
         {
-            return capacity - reserved;
+            return false;
         }
 
         public synchronized long dereference(long address)
@@ -425,11 +423,6 @@ public class Pack
             }
 
             return 0L;
-        }
-
-        public synchronized void cancelReservations(int count)
-        {
-            reserved -= count;
         }
 
         public synchronized long allocate()
@@ -544,32 +537,11 @@ public class Pack
     private static abstract class RelocatablePage
     extends Page
     {
+        private Allocator allocator;
+
         public RelocatablePage(Pager pager, long position)
         {
             super(pager, position);
-        }
-    }
-
-    private static final class DataPage
-    extends RelocatablePage
-    {
-        private int remaining;
-
-        private int count;
-
-        private short type;
-
-        private Allocator allocator;
-
-        public DataPage(Pager pager, long position)
-        {
-            super(pager, position);
-        }
-
-        public DataPage(Pager pager, long position, short type)
-        {
-            super(pager, position);
-            this.type = type;
         }
 
         public synchronized boolean setAllocator(Allocator allocator, boolean wait)
@@ -606,6 +578,27 @@ public class Pack
             this.allocator = NULL_ALLOCATOR;
             notifyAll();
         }
+    }
+
+    private static final class DataPage
+    extends RelocatablePage
+    {
+        private int remaining;
+
+        private int count;
+
+        private short type;
+
+        public DataPage(Pager pager, long position)
+        {
+            super(pager, position);
+        }
+
+        public DataPage(Pager pager, long position, short type)
+        {
+            super(pager, position);
+            this.type = type;
+        }
 
         protected void initialize(ByteBuffer bytes)
         {
@@ -624,6 +617,11 @@ public class Pack
                 bytes.position(bytes.position() + advance);
             }
             return bytes.remaining();
+        }
+
+        public boolean isSystem()
+        {
+            return false;
         }
 
         public synchronized int getCount()
@@ -796,7 +794,7 @@ public class Pack
 
         public boolean write(Allocator allocator, long address, ByteBuffer data, PageMap pages)
         {
-            if (this.allocator == allocator)
+            if (getAllocator() == allocator)
             {
                 allocator.rewrite(address, data);
                 ByteBuffer bytes = getBlockRange(getByteBuffer());
@@ -838,7 +836,7 @@ public class Pack
 
         public synchronized boolean free(Allocator allocator, long address, PageMap pages)
         {
-            if (this.allocator == allocator)
+            if (getAllocator() == allocator)
             {
                 allocator.unwrite(address);
                 ByteBuffer bytes = getBlockRange(getByteBuffer());
@@ -878,7 +876,7 @@ public class Pack
     }
 
     private final static class JournalPage
-    extends Page
+    extends RelocatablePage
     {
         private ByteBuffer bytes;
 
@@ -901,6 +899,11 @@ public class Pack
         {
             bytes.putLong(0L);
             bytes.putInt(-1);
+        }
+
+        public boolean isSystem()
+        {
+            return true;
         }
 
         public boolean write(Operation operation, PageMap pages)
@@ -944,7 +947,7 @@ public class Pack
     }
 
     private static final class ReservationPage
-    extends Page
+    extends RelocatablePage
     {
         private int addressCount;
 
@@ -963,6 +966,11 @@ public class Pack
             bytes.putLong(0L);
             bytes.putInt(-1);
             bytes.putInt(0);
+        }
+
+        public boolean isSystem()
+        {
+            return true;
         }
 
         private int search(ByteBuffer bytes, int offset)
@@ -1379,13 +1387,13 @@ public class Pack
 
         public long newTemporaryPage(Page page)
         {
-            long position = newTemporaryPage();
+            long position = newSystemPage();
             page.initialize(position);
             addPageByPosition(page);
             return position;
         }
 
-        public synchronized long newTemporaryPage()
+        public synchronized long newSystemPage()
         {
             // This will be pointless if we are quick to rewind the
             // wilderness.
@@ -1437,9 +1445,9 @@ public class Pack
 
         public DataPage newDataPage()
         {
-            synchronized (mapOfEmptyPages)
+            synchronized (mapOfFreeUserPages)
             {
-                Iterator pages = mapOfEmptyPages.values().iterator();
+                Iterator pages = mapOfFreeUserPages.values().iterator();
                 if (pages.hasNext())
                 {
                     DataPage dataPage = (DataPage) pages.next();
@@ -1447,7 +1455,27 @@ public class Pack
                     return dataPage;
                 }
             }
-            return null;
+            DataPage dataPage = null;
+            synchronized (this)
+            {
+                RelocatablePage page = (ReservationPage) getPageByPosition(firstSystemPage);
+                // TODO Where I left off.
+                if (page == null)
+                {
+                    dataPage = new DataPage(this, firstSystemPage);
+                }
+                else
+                {
+                    Allocator allocator = null;
+                    do
+                    {
+                        page.getAllocator();
+                    }
+                    while (!allocator.relocate(page, newSystemPage()));
+                }
+                firstSystemPage += getPageSize();
+            }
+            return dataPage;
         }
 
         private Page getPageByPosition(long position)
@@ -2135,9 +2163,13 @@ public class Pack
             return dataPage.write(this, address, data, pages);
         }
 
+        public boolean relocate(RelocatablePage from, long to)
+        {
+            return false;
+        }
+
         public void relocate(Allocator allocator, DataPage from, DataPage to)
         {
-
         }
 
         public void markVacuum(long page)
@@ -2157,7 +2189,8 @@ public class Pack
             Size size = mapOfPagesBySize.bestFit(fullSize);
             if (size == null)
             {
-//                size = new Size(pager.getDataPage()); FIXME newSystemDataPage()
+                // size = new Size(pager.getDataPage()); FIXME
+                // newSystemDataPage()
                 listOfPages.add(size.getDataPage());
             }
 
@@ -2248,10 +2281,11 @@ public class Pack
 
     private interface Writer
     {
-        public void relocate(long from, long to);
+        public boolean relocate(RelocatablePage from, long to);
     }
 
     private interface Allocator
+    extends Writer
     {
         public boolean write(DataPage dataPage, long address, ByteBuffer data, PageMap pages);
 
@@ -2265,6 +2299,11 @@ public class Pack
     private final static class NullAllocator
     implements Allocator
     {
+        public boolean relocate(RelocatablePage from, long to)
+        {
+            return true;
+        }
+
         public boolean write(DataPage dataPage, long address, ByteBuffer data, PageMap pages)
         {
             return dataPage.write(this, address, data, pages);
