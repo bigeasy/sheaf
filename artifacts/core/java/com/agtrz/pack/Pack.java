@@ -27,8 +27,6 @@ import java.util.TreeSet;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
-import junit.runner.ReloadingTestSuiteLoader;
-
 public class Pack
 {
     private final static int FLAG_SIZE = 2;
@@ -1454,25 +1452,25 @@ public class Pack
             return address;
         }
 
-        public synchronized AddressPage getAddressPageX(long position)
+        public synchronized Page getAddressPageX(long position, PageMap pages)
         {
-            AddressPage addressPage = null;
+            Page addressPage = null;
             if (mapOfPointerPages.size() == 0)
             {
                 Journal journal = new Journal(this, new PageMap(this, 16));
                 long firstDataPage = 0L;
-                DataPage fromDataPage = getDataPage(firstDataPage);
-                DataPage toDataPage = newDataPage();
-                Allocator allocator = fromDataPage.getAllocator();
+                Page fromDataPage = getPage(firstDataPage, new DataPage());
+                Page toDataPage = newDataPage(pages);
+                Allocator allocator = ((DataPage) fromDataPage.getPageType()).getAllocator();
                 journal.relocate(allocator, fromDataPage, toDataPage);
             }
             if (position != 0L)
             {
-                addressPage = (AddressPage) getAddressPage(position);
+                addressPage = getPage(position, new AddressPage());
             }
             if (addressPage == null)
             {
-                addressPage = (AddressPage) mapOfPointerPages.values().iterator().next();
+                addressPage = (Page) mapOfPointerPages.values().iterator().next();
             }
             return addressPage;
         }
@@ -1594,58 +1592,56 @@ public class Pack
             }
         }
 
-        public DataPage newDataPage()
+        public Page newDataPage(PageMap pages)
         {
+            DataPage dataPage = new DataPage();
+            Long address = null;
             synchronized (setOfFreeUserPages)
             {
-                Iterator pages = setOfFreeUserPages.iterator();
-                if (pages.hasNext())
+                Iterator userPages = setOfFreeUserPages.iterator();
+                if (userPages.hasNext())
                 {
-                    DataPage dataPage = (DataPage) pages.next();
-                    pages.remove();
-                    return dataPage;
+                    address = (Long) userPages.next();
+                    userPages.remove();
                 }
             }
-            DataPage dataPage = null;
-            synchronized (this)
+            if (address != null)
             {
-                synchronized (setOfFreeSystemPages)
-                {
-                    if (setOfFreeSystemPages.size() != 0)
-                    {
-                        Long firstFreeSystemPage = (Long) setOfFreeSystemPages.iterator().next();
-                        if (firstFreeSystemPage.longValue() == firstSystemPage)
-                        {
-                            // FIXME Make sure page is removed from map of
-                            // pages by position.
-                            dataPage = new DataPage(this, new Object(), firstSystemPage++);
-                            addPageByPosition(dataPage);
-                            return dataPage;
-                        }
-                    }
-                }
-                synchronized (mapOfPagesByPosition)
-                {
-                    RelocatablePage page = (RelocatablePage) getPageByPosition(firstSystemPage);
-                    // TODO Where I left off.
-                    if (page == null)
-                    {
-                        dataPage = new DataPage(this, new Object(), firstSystemPage);
-                        addPageByPosition(dataPage);
-                    }
-                    else
-                    {
-                        Allocator allocator = null;
-                        do
-                        {
-                            page.getAllocator();
-                        }
-                        while (!allocator.relocate(page, newSystemPage()));
-                    }
-                    firstSystemPage += getPageSize();
-                }
+                return getPage(address.longValue(), dataPage);
             }
-            return dataPage;
+            Page page = null;
+            synchronized (setOfFreeSystemPages)
+            {
+                Iterator systemPages = setOfFreeSystemPages.iterator();
+                if (systemPages.hasNext())
+                {
+                    address = (Long) systemPages.next();
+                    if (address.longValue() == firstSystemPage)
+                    {
+                        synchronized (mapOfPagesByPosition)
+                        {
+                            page = getPageByPosition(firstSystemPage);
+                            if (page == null)
+                            {
+                                page = new Page(this, firstSystemPage);
+                                addPageByPosition(page);
+                            }
+                            dataPage.create(page, pages);
+                        }
+                    }
+                }
+                if (page == null)
+                {
+                    synchronized (mapOfPagesByPosition)
+                    {
+                        page = getPageByPosition(firstSystemPage);
+                        assert page != null;
+                    }
+                    // Move.
+                }
+                firstSystemPage += getPageSize();
+            }
+            return page;
         }
 
         private Page getPageByPosition(long position)
@@ -1682,30 +1678,6 @@ public class Pack
             mapOfPagesByPosition.put(intended.getPosition(), intended);
         }
 
-        public synchronized AddressPage getAddressPage(long position)
-        {
-            position = (long) Math.floor(position - (position % pageSize));
-            AddressPage addressPage = (AddressPage) getPageByPosition(position);
-            if (addressPage == null)
-            {
-                addressPage = new AddressPage(this, position);
-                addPageByPosition(addressPage);
-            }
-            return addressPage;
-        }
-
-        public synchronized DataPage getDataPage(long position)
-        {
-            position = (long) Math.floor(position - (position % pageSize));
-            DataPage dataPage = (DataPage) getPageByPosition(position);
-            if (dataPage == null)
-            {
-                dataPage = new DataPage(this, position);
-                addPageByPosition(dataPage);
-            }
-            return dataPage;
-        }
-
         public Page getPage(long position, PageType pageType)
         {
             synchronized (mapOfPagesByPosition)
@@ -1720,7 +1692,8 @@ public class Pack
             }
         }
 
-        public JournalPage newJournalPage()
+        // FIXME Too many flavors of newSystemPage.
+        public Page newSystemPage(PageType pageType, PageMap pages)
         {
             long position = 0L;
             synchronized (setOfFreeSystemPages)
@@ -1737,14 +1710,16 @@ public class Pack
                 position = fromWilderness();
             }
 
-            JournalPage journalPage = new JournalPage(this, position);
+            Page page = new Page(this, position);
 
-            synchronized (this)
+            pageType.create(page, pages);
+
+            synchronized (mapOfPagesByPosition)
             {
-                addPageByPosition(journalPage);
+                addPageByPosition(page);
             }
 
-            return journalPage;
+            return page;
         }
 
         public long getPosition(long address)
@@ -1927,9 +1902,9 @@ public class Pack
         {
         }
 
-        public JournalPage getJournalPage(Pager pager, JournalPage journalPage)
+        public Page getJournalPage(Pager pager, Page page)
         {
-            return journalPage;
+            return page;
         }
 
         public boolean write(Pager pager, long destination, ByteBuffer data, PageMap pages)
@@ -1937,7 +1912,7 @@ public class Pack
             return false;
         }
 
-        public boolean unwrite(JournalPage journalPage, long destination)
+        public boolean unwrite(Page journalPage, long destination)
         {
             return false;
         }
@@ -1964,14 +1939,14 @@ public class Pack
         {
             this.address = address;
             this.page = page;
-            this.position = position;
+            this.position = position; // TODO ???
             this.length = length;
         }
 
         public void commit(Pager pager, Journal journal, PageMap pages)
         {
-            DataPage dataPage = pager.getDataPage(page);
-            dataPage.allocate(address, length, pages);
+            Page p = pager.getPage(page, new DataPage());
+            ((DataPage) p.getPageType()).allocate(address, length, pages);
         }
 
         public int length()
@@ -2042,8 +2017,8 @@ public class Pack
         {
             if (address == destination)
             {
-                DataPage dataPage = pager.getDataPage(source);
-                dataPage.write(source, data, pages);
+                Page page = pager.getPage(source, new DataPage());
+                ((DataPage) page.getPageType()).write(source, data, pages);
                 return true;
             }
             return false;
@@ -2133,16 +2108,16 @@ public class Pack
 
         public void commit(Pager pager, Journal journal, PageMap pages)
         {
-            AddressPage toAddressPage = pager.getAddressPage(destination);
-            long toPosition = toAddressPage.dereference(destination);
-            DataPage toDataPage = pager.getDataPage(toPosition);
+            Page toAddressPage = pager.getPage(destination, new AddressPage());
+            long toPosition = ((AddressPage) toAddressPage.getPageType()).dereference(destination);
+            Page toDataPage = pager.getPage(toPosition, new DataPage());
 
             ByteBuffer fromBytes = journal.read(source);
 
             Allocator allocator = null;
             do
             {
-                allocator = toDataPage.getAllocator();
+                allocator = ((DataPage) toDataPage.getPageType()).getAllocator();
             }
             while (!allocator.write(toDataPage, destination, fromBytes, pages));
         }
@@ -2189,15 +2164,15 @@ public class Pack
 
         public void commit(Pager pager, Journal journal, PageMap pages)
         {
-            AddressPage addressPage = pager.getAddressPage(address);
-            long referenced = addressPage.dereference(address);
-            DataPage dataPage = pager.getDataPage(referenced);
+            Page addressPage = pager.getPage(address, new AddressPage());
+            long referenced = ((AddressPage) addressPage.getPageType()).dereference(address);
+            Page page = pager.getPage(referenced, new DataPage());
             Allocator allocator = null;
             do
             {
-                allocator = dataPage.getAllocator();
+                allocator = ((DataPage) page.getPageType()).getAllocator();
             }
-            while (!allocator.free(dataPage, address, pages));
+            while (!allocator.free(page, address, pages));
         }
 
         public void write(ByteBuffer bytes)
@@ -2251,12 +2226,6 @@ public class Pack
         {
             return FLAG_SIZE + ADDRESS_SIZE;
         }
-
-        public ByteBuffer getByteBuffer(Pager pager, ByteBuffer bytes)
-        {
-            DataPage page = pager.getDataPage(position);
-            return page.read(position, new JournalBlockReader());
-        }
     }
 
     private final static class Commit
@@ -2295,7 +2264,7 @@ public class Pack
 
         private long journalStart;
 
-        private JournalPage journalPage;
+        private Page journalPage;
 
         private final Map mapOfRelocations;
 
@@ -2303,8 +2272,8 @@ public class Pack
 
         public Journal(Pager pager, PageMap pages)
         {
-            this.journalPage = pager.newJournalPage();
-            this.journalStart = journalPage.getJournalPosition();
+            this.journalPage = pager.newSystemPage(new JournalPage(), pages);
+            this.journalStart = ((JournalPage) journalPage.getPageType()).getJournalPosition();
             this.pager = pager;
             this.listOfPages = new LinkedList();
             this.pages = pages;
@@ -2313,14 +2282,14 @@ public class Pack
             this.mapOfVacuums = new HashMap();
         }
 
-        public boolean free(DataPage dataPage, long address, PageMap pages)
+        public boolean free(Page page, long address, PageMap pages)
         {
-            return dataPage.free(this, address, pages);
+            return ((DataPage) page.getPageType()).free(this, address, pages);
         }
 
-        public synchronized boolean write(DataPage dataPage, long address, ByteBuffer data, PageMap pages)
+        public synchronized boolean write(Page page, long address, ByteBuffer data, PageMap pages)
         {
-            return dataPage.write(this, address, data, pages);
+            return ((DataPage) page.getPageType()).write(this, address, data, pages);
         }
 
         public boolean relocate(RelocatablePage from, long to)
@@ -2328,13 +2297,13 @@ public class Pack
             return false;
         }
 
-        public void relocate(Allocator allocator, DataPage from, DataPage to)
+        public void relocate(Allocator allocator, Page from, Page to)
         {
         }
 
         public void markVacuum(long page)
         {
-            mapOfVacuums.put(new Long(page), new Long(journalPage.getJournalPosition()));
+            mapOfVacuums.put(new Long(page), new Long(((JournalPage) journalPage.getPageType()).getJournalPosition()));
         }
 
         public Pager getPager()
@@ -2362,12 +2331,12 @@ public class Pack
             Long position = (Long) mapOfVacuums.get(new Long(pager.getPosition(address)));
             if (position != null)
             {
-                JournalPage journalPage = pager.getPage(position.longValue());
-                journalPage.seek(position.longValue());
+                Page journalPage = pager.getPage(position.longValue(), new JournalPage());
+                ((JournalPage) journalPage.getPageType()).seek(position.longValue());
                 Operation operation = null;
                 do
                 {
-                    operation = journalPage.next();
+                    operation = ((JournalPage) journalPage.getPageType()).next();
                     journalPage = operation.getJournalPage(pager, journalPage);
                 }
                 while (!operation.write(pager, address, data, pages));
@@ -2384,12 +2353,12 @@ public class Pack
             Long position = (Long) mapOfVacuums.get(new Long(pager.getPosition(address)));
             if (position != null)
             {
-                JournalPage journalPage = pager.getJournalPage(position.longValue());
-                journalPage.seek(position.longValue());
+                Page journalPage = pager.getPage(position.longValue(), new JournalPage());
+                ((JournalPage) journalPage.getPageType()).seek(position.longValue());
                 Operation operation = null;
                 do
                 {
-                    operation = journalPage.next();
+                    operation = ((JournalPage) journalPage.getPageType()).next();
                     journalPage = operation.getJournalPage(pager, journalPage);
                 }
                 while (!operation.unwrite(journalPage, address));
@@ -2398,28 +2367,28 @@ public class Pack
 
         public void shift(long position, ByteBuffer bytes)
         {
-            DataPage dataPage = pager.getDataPage(position);
-            dataPage.write(position, bytes, pages);
+            Page page = pager.getPage(position, new DataPage());
+            ((DataPage) page.getPageType()).write(position, bytes, pages);
         }
 
         public void write(long position, ByteBuffer bytes)
         {
-            DataPage dataPage = pager.getDataPage(position);
-            dataPage.write(position, bytes, pages);
+            Page page = pager.getPage(position, new DataPage());
+            ((DataPage) page.getPageType()).write(position, bytes, pages);
         }
 
         public ByteBuffer read(long position)
         {
-            DataPage dataPage = pager.getDataPage(position);
-            return dataPage.read(position, new JournalBlockReader());
+            Page page = pager.getPage(position, new DataPage());
+            return ((DataPage) page.getPageType()).read(position, new JournalBlockReader());
         }
 
         public void write(Operation operation)
         {
-            if (!journalPage.write(operation, pages))
+            if (!((JournalPage) journalPage.getPageType()).write(operation, pages))
             {
-                JournalPage nextJournalPage = pager.newJournalPage();
-                nextJournalPage.next(nextJournalPage.getPosition());
+                Page nextJournalPage = pager.newSystemPage(new JournalPage(), pages);
+                ((JournalPage) nextJournalPage.getPageType()).next(nextJournalPage.getPosition());
                 journalPage = nextJournalPage;
                 write(operation);
             }
@@ -2447,11 +2416,11 @@ public class Pack
     private interface Allocator
     extends Writer
     {
-        public boolean write(DataPage dataPage, long address, ByteBuffer data, PageMap pages);
+        public boolean write(Page page, long address, ByteBuffer data, PageMap pages);
 
         public void rewrite(long address, ByteBuffer data);
 
-        public boolean free(DataPage dataPage, long address, PageMap pages);
+        public boolean free(Page page, long address, PageMap pages);
 
         public void unwrite(long address);
     }
@@ -2464,14 +2433,14 @@ public class Pack
             return true;
         }
 
-        public boolean write(DataPage dataPage, long address, ByteBuffer data, PageMap pages)
+        public boolean write(Page page, long address, ByteBuffer data, PageMap pages)
         {
-            return dataPage.write(this, address, data, pages);
+            return ((DataPage) page.getPageType()).write(this, address, data, pages);
         }
 
-        public boolean free(DataPage dataPage, long address, PageMap pages)
+        public boolean free(Page page, long address, PageMap pages)
         {
-            return dataPage.free(this, address, pages);
+            return ((DataPage) page.getPageType()).free(this, address, pages);
         }
 
         public void rewrite(long address, ByteBuffer data)
@@ -2521,7 +2490,7 @@ public class Pack
             }
 
             Size size = null;
-            DataPage dataPage = null;
+            Page page = null;
             do
             {
                 size = mapOfPagesBySize.bestFit(fullSize);
@@ -2530,26 +2499,26 @@ public class Pack
                     size = pager.mapOfPagesBySize.bestFit(fullSize);
                     if (size == null)
                     {
-                        size = new Size(pager.newDataPage());
+                        size = new Size(pager.newDataPage(pages));
                     }
-                    listOfPages.add(size.getDataPage());
+                    listOfPages.add(size.getPage());
                 }
-                dataPage = size.getDataPage();
+                page = size.getPage();
             }
-            while (!dataPage.setAllocator(journal, false));
+            while (!((DataPage) page.getPageType()).setAllocator(journal, false));
 
             int remaining = size.getRemaining() - fullSize;
-            mapOfPagesBySize.add(new Size(dataPage, remaining));
+            mapOfPagesBySize.add(new Size(page, remaining));
 
             // Here is where I left off. The question is how do I manage the
             // pointer pages? Do the pointer pages create pointer objects? Do
             // I write out the entire pointer object or just the pointer?
-            AddressPage addressPage = null;
+            Page addressPage = null;
             long address = 0L;
             do
             {
-                addressPage = pager.getAddressPageX(lastPointerPage);
-                address = addressPage.reserve(pages);
+                addressPage = pager.getAddressPageX(lastPointerPage, pages);
+                address = ((AddressPage) addressPage.getPageType()).reserve(pages);
                 if (address == 0L)
                 {
                     address = pager.reserve(addressPage, pages);
@@ -2561,7 +2530,7 @@ public class Pack
 
             mapOfAddresses.put(new Long(address), new Long(position));
 
-            journal.write(new Allocate(address, dataPage.getPosition(), position, fullSize));
+            journal.write(new Allocate(address, page.getPosition(), position, fullSize));
 
             /*
              * When pointers are written out, only the 8 bytes are written
