@@ -27,6 +27,11 @@ import java.util.TreeSet;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
+import EDU.oswego.cs.dl.util.concurrent.Latch;
+import EDU.oswego.cs.dl.util.concurrent.ReadWriteLock;
+import EDU.oswego.cs.dl.util.concurrent.ReentrantWriterPreferenceReadWriteLock;
+import EDU.oswego.cs.dl.util.concurrent.Sync;
+
 public class Pack
 {
     private final static int FLAG_SIZE = 2;
@@ -279,6 +284,46 @@ public class Pack
             }
 
             return new Pack(new Pager(file, fileChannel, pageSize, alignment, mapOfStaticPages, journals, firstPointer, pointerPageCount));
+        }
+    }
+    
+    private static final class Move
+    {
+        private final long from;
+        
+        private final long to;
+        
+        private final Latch latch;
+        
+        private Move next;
+
+        public Move(long from, long to)
+        {
+            assert from != to || from == 0;
+            this.from = from;
+            this.to = to;
+            this.latch = new Latch();
+        }
+
+        public Sync getLatch()
+        {
+            return latch;
+        }
+
+        public long getFrom()
+        {
+            return from;
+        }
+
+        public long getTo()
+        {
+            return to;
+        }
+        
+        public void setNext(Move next)
+        {
+            assert this.next == null;
+            this.next = next;
         }
     }
 
@@ -1222,6 +1267,84 @@ public class Pack
         }
     }
 
+    private final static class BySizeTable
+    {
+        private final int alignment;
+
+        private final LinkedList[] linkedLists;
+
+        public BySizeTable(int pageSize, int alignment)
+        {
+            assert pageSize % alignment == 0;
+
+            LinkedList[] linkedLists = new LinkedList[pageSize / alignment];
+
+            for (int i = 0; i < linkedLists.length; i++)
+            {
+                linkedLists[i] = new LinkedList();
+            }
+
+            this.alignment = alignment;
+            this.linkedLists = linkedLists;
+        }
+
+        public void add(Page page)
+        {
+            add(new Size(page, ((DataPage) page.getPageType()).getRemaining()));
+        }
+
+        public synchronized void add(Size size)
+        {
+            // Maybe don't round down if exact.
+            int aligned = ((size.getRemaining() | alignment - 1) + 1) - alignment;
+            if (aligned != 0)
+            {
+                linkedLists[aligned / alignment].addFirst(size);
+            }
+        }
+
+        public synchronized Size bestFit(int blockSize)
+        {
+            Size bestFit = null;
+            int aligned = ((blockSize | alignment - 1) + 1); // Round up.
+            if (aligned != 0)
+            {
+                LinkedList listOfSizes = null;
+                for (int i = aligned / alignment; listOfSizes == null && i < linkedLists.length; i++)
+                {
+                    if (!linkedLists[i].isEmpty())
+                    {
+                        listOfSizes = linkedLists[i];
+                    }
+                }
+                bestFit = (Size) listOfSizes.removeFirst();
+            }
+            return bestFit;
+        }
+
+        public synchronized void remove(Page page)
+        {
+            DataPage dataPage = (DataPage) page.getPageType();
+
+            int aligned = ((dataPage.getRemaining() | alignment - 1) + 1) - alignment;
+
+            LinkedList listOfSizes = linkedLists[aligned / alignment];
+
+            Iterator pages = listOfSizes.iterator();
+            while (pages.hasNext())
+            {
+                Size candidate = (Size) pages.next();
+                if (candidate.getPage().getPosition() == page.getPosition())
+                {
+                    pages.remove();
+                    return;
+                }
+            }
+
+            throw new RuntimeException("Unmatched address in by size map.");
+        }
+    }
+
     private final static class BySizePageMap
     {
         private final int alignment;
@@ -1310,6 +1433,8 @@ public class Pack
         private final Checksum checksum;
 
         private final FileChannel fileChannel;
+        
+        private final ReadWriteLock moveLock ;
 
         private final int pageSize;
 
@@ -1344,6 +1469,8 @@ public class Pack
         private final ByteBuffer pointerPageCountBytes;
 
         private long firstSystemPage;
+        
+        private Move headOfMoves;
 
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map mapOfStaticPages, ByteBuffer journalBuffer, long firstPointer, int pointerPageCount)
         {
@@ -1371,6 +1498,8 @@ public class Pack
                 }
             });
             this.queue = new ReferenceQueue();
+            this.moveLock = new ReentrantWriterPreferenceReadWriteLock();
+            this.headOfMoves = new Move(0, 0);
         }
 
         public void initialize()
