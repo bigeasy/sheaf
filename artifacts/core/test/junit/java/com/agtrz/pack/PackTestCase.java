@@ -25,13 +25,7 @@ extends TestCase
 
     public void testCreate()
     {
-        File file = newFile();
-        Pack.Creator creator = new Pack.Creator();
-        Pack pack = creator.create(file);
-        Pack.Mutator mutator = pack.mutate();
-        mutator.allocate(1);
-        mutator.commit();
-        pack.close();
+        new Pack.Creator().create(newFile()).close();
     }
 }
 
