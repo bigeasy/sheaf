@@ -985,6 +985,8 @@ public class Pack
                 ByteBuffer bytes = getPage().getByteBuffer();
                 bytes.clear();
                 bytes.position((int) (position - getPage().getPosition()));
+                // FIXME Dies here because size is zero. Obviously not being
+                // written correctly.
                 int size = bytes.getInt();
                 bytes.limit(bytes.position() + size);
                 bytes.put(data);
@@ -1327,7 +1329,7 @@ public class Pack
         public PageLocker(int parallels)
         {
             List<Map<Long, int[]>> listOfMapsOfPages = new ArrayList<Map<Long, int[]>>(parallels);
-            for (int i = 0; i < listOfMapsOfPages.size(); i++)
+            for (int i = 0; i < parallels; i++)
             {
                 listOfMapsOfPages.add(new HashMap<Long, int[]>());
             }
@@ -1536,7 +1538,7 @@ public class Pack
 
             ArrayList<LinkedList<Size>> listOfListsOfSizes = new ArrayList<LinkedList<Size>>(pageSize / alignment);
 
-            for (int i = 0; i < listOfListsOfSizes.size(); i++)
+            for (int i = 0; i < pageSize / alignment; i++)
             {
                 listOfListsOfSizes.add(new LinkedList<Size>());
             }
@@ -2927,7 +2929,14 @@ public class Pack
             // For now, the first test will write to an allocated block, so
             // the write buffer is already there.
             
-            
+            Long position = mapOfAddresses.get(address);
+            if (position == null)
+            {
+            }
+            else
+            {
+                journal.write(position, bytes);
+            }
         }
 
         public void free(long address)
