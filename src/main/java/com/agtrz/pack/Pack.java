@@ -16,7 +16,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -65,10 +64,6 @@ public class Pack
     private final static short VACUUM = 6;
 
     private final static short SHIFT = 7;
-
-    private final static short RELOCATE = 8;
-
-    private final static short ROLLBACK = 0;
 
     private final static int NEXT_PAGE_SIZE = FLAG_SIZE + ADDRESS_SIZE;
 
@@ -630,63 +625,6 @@ public class Pack
         }
     }
 
-    private interface BlockIO
-    {
-        public ByteBuffer read(ByteBuffer block);
-
-        public void write(ByteBuffer block, ByteBuffer data);
-    }
-
-    private final static class UserBlockIO
-    implements BlockIO
-    {
-        private final long address;
-
-        public UserBlockIO(long address)
-        {
-            this.address = address;
-        }
-
-        public ByteBuffer read(ByteBuffer block)
-        {
-            if (block.getLong() != address)
-            {
-                throw new ConcurrentModificationException();
-            }
-            ByteBuffer data = ByteBuffer.allocate(block.remaining());
-            data.put(block);
-            return data;
-        }
-
-        public void write(ByteBuffer block, ByteBuffer data)
-        {
-            block.putLong(address);
-            if (data.remaining() > block.remaining())
-            {
-                data.limit(data.position() + block.remaining());
-            }
-            block.put(data);
-        }
-    }
-
-    public final static class JournalBlockIO
-    implements BlockIO
-    {
-        public ByteBuffer read(ByteBuffer block)
-        {
-            return block.slice(); // FIXME Problem with that?
-        }
-
-        public void write(ByteBuffer block, ByteBuffer data)
-        {
-            if (data.remaining() > block.remaining())
-            {
-                data.limit(data.position() + block.remaining());
-            }
-            block.put(data);
-        }
-    }
-
     private static class RelocatablePage
     implements PageType
     {
@@ -848,7 +786,7 @@ public class Pack
             return false;
         }
 
-        public ByteBuffer read(long position, BlockIO reader)
+        public ByteBuffer read(long position, long address)
         {
             synchronized (getPage())
             {
@@ -859,7 +797,11 @@ public class Pack
                 {
                     int size = getSize(bytes);
                     bytes.limit(bytes.position() + size);
-                    return reader.read(bytes);
+                    if (bytes.getLong() != address)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    return bytes.slice();
                 }
             }
             throw new ArrayIndexOutOfBoundsException();
@@ -1176,11 +1118,6 @@ public class Pack
 
             ByteBuffer bytes = page.getByteBuffer();
             this.addressCount = Math.abs(bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE));
-        }
-
-        private int getOffset(Page addressPage, long address)
-        {
-            return (int) (address - addressPage.getPosition());
         }
 
         protected void initialize(ByteBuffer bytes)
@@ -1675,13 +1612,9 @@ public class Pack
 
         private final FileChannel fileChannel;
         
-        private final ReadWriteLock moveLock ;
-
         private final int pageSize;
 
         private final Map<Long, PageReference> mapOfPagesByPosition;
-
-        private final Map<Long, Page> mapOfEmptyPages;
 
         // FIXME Outgoing.
         private final Set<Writer> setOfWriters;
@@ -1737,9 +1670,7 @@ public class Pack
             this.pointerPageCountBytes = ByteBuffer.allocateDirect(COUNT_SIZE);
             this.setOfFreeUserPages = new TreeSet<Long>();
             this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
-            this.mapOfEmptyPages = new TreeMap<Long, Page>(new Reverse<Long>());
             this.queue = new ReferenceQueue<Page>();
-            this.moveLock = new ReentrantReadWriteLock();
             this.headOfMoves = new Move(0, 0);
             this.headOfMoves.getLock().unlock();
         }
@@ -2494,7 +2425,7 @@ public class Pack
             long toPosition = ((AddressPage) toAddressPage.getPageType()).dereference(destination);
             Page toDataPage = pager.getPage(toPosition, new DataPage());
 
-            ByteBuffer fromBytes = journal.read(source);
+            ByteBuffer fromBytes = journal.read(source, destination);
 
             Allocator allocator = null;
             do
@@ -2792,10 +2723,10 @@ public class Pack
             ((DataPage) page.getPageType()).write(position, address, bytes, pages);
         }
 
-        public ByteBuffer read(long position)
+        public ByteBuffer read(long position, long address)
         {
             Page page = pager.getPage(position, new DataPage());
-            return ((DataPage) page.getPageType()).read(position, new JournalBlockIO());
+            return ((DataPage) page.getPageType()).read(position, address);
         }
 
         public void write(Operation operation)
