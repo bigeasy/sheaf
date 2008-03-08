@@ -80,11 +80,14 @@ public class Pack
 
     private final Pager pager;
     
+    private final ReadWriteLock goalPost;
+
     private final PageLocker pageLocker;
 
     public Pack(Pager pager)
     {
         this.pager = pager;
+        this.goalPost = new ReentrantReadWriteLock();
         this.pageLocker = new PageLocker(17);
     }
 
@@ -96,7 +99,7 @@ public class Pack
     public Mutator mutate()
     {
         DirtyPageMap pages = new DirtyPageMap(pager, 16);
-        return new Mutator(pager, pageLocker, new Journal(pager, pages), pages);
+        return new Mutator(pager, goalPost, pageLocker, new Journal(pager, pages), pages);
     }
 
     public void close()
@@ -364,6 +367,7 @@ public class Pack
         }
     }
 
+    // TODO Maybe rename position. Then PageType becomes Page.
     private static final class Page
     {
         private final Pager pager;
@@ -886,8 +890,8 @@ public class Pack
                         ByteBuffer fromBuffer = ByteBuffer.allocateDirect(Math.abs(size));
                         fromBuffer.put(bytes);
 
-                        long fromPosition = journal.allocate(size);
-                        journal.write(fromPosition, fromBuffer);
+                        long fromPosition = journal.allocate(size, address);
+                        journal.write(fromPosition, address, fromBuffer);
 
                         journal.write(new Shift(address, fromPosition));
                     }
@@ -978,7 +982,7 @@ public class Pack
             }
         }
 
-        public void write(long position, ByteBuffer data, DirtyPageMap pages)
+        public void write(long position, long address, ByteBuffer data, DirtyPageMap pages)
         {
             synchronized (getPage())
             {
@@ -988,7 +992,11 @@ public class Pack
                 // FIXME Dies here because size is zero. Obviously not being
                 // written correctly.
                 int size = bytes.getInt();
-                bytes.limit(bytes.position() + size);
+                if (address != bytes.getLong())
+                {
+                    throw new IllegalStateException();
+                }
+                bytes.limit(bytes.position() + (size - BLOCK_HEADER_SIZE));
                 bytes.put(data);
                 pages.put(getPage());
             }
@@ -1301,6 +1309,17 @@ public class Pack
         {
             return page;
         }
+        
+        /**
+         * The size of the bytes on the page. This may be different than block size 
+         * less remaining, since a temporary allocated block may be deleted before commit.
+         *  
+         * @return
+         */
+        public int getSize()
+        {
+            return 0;
+        }
 
         public int getRemaining()
         {
@@ -1546,6 +1565,16 @@ public class Pack
             this.alignment = alignment;
             this.listOfListsOfSizes = listOfListsOfSizes;
         }
+        
+        public int getSize()
+        {
+            int size = 0;
+            for (List<Size> listOfSizes : listOfListsOfSizes)
+            {
+                size += listOfSizes.size();
+            }
+            return size;
+        }
 
         public void add(Page page)
         {
@@ -1614,6 +1643,21 @@ public class Pack
             }
 
             throw new RuntimeException("Unmatched address in by size map.");
+        }
+        
+        public synchronized void join(BySizeTable pagesBySize, Map<Long, Size> mapOfSizes)
+        {
+            for (List<Size> listOfSizes: pagesBySize.listOfListsOfSizes)
+            {
+                for(Size size: listOfSizes)
+                {
+                    Size found = bestFit(size.getSize());
+                    if (found != null)
+                    {
+                        mapOfSizes.put(size.getPage().getPosition(), found);
+                    }
+                }
+            }
         }
     }
     
@@ -1793,6 +1837,19 @@ public class Pack
             synchronized (setOfWriters)
             {
                 setOfWriters.remove(writer);
+            }
+        }
+
+        public void newUserDataPages(int needed, Set<Long> setOfPages)
+        {
+            synchronized (setOfFreeUserPages)
+            {
+                while (setOfFreeUserPages.size() != 0 && needed != 0)
+                {
+                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
+                    setOfPages.add(freeUserPages.next());
+                    freeUserPages.remove();
+                }
             }
         }
 
@@ -2343,7 +2400,7 @@ public class Pack
             if (address == destination)
             {
                 Page page = pager.getPage(source, new DataPage());
-                ((DataPage) page.getPageType()).write(source, data, pages);
+                ((DataPage) page.getPageType()).write(source, address, data, pages);
                 return true;
             }
             return false;
@@ -2658,7 +2715,7 @@ public class Pack
          *            The user requested block size.
          * @return The file position of the allocated block.
          */
-        public long allocate(int blockSize)
+        public long allocate(int blockSize, long address)
         {
             // Add the block overhead to the block size.
             
@@ -2681,7 +2738,7 @@ public class Pack
 
             // Allocate a block from the wilderness data page.
 
-            return ((DataPage) size.getPage().getPageType()).allocate(blockSize, pages);
+            return ((DataPage) size.getPage().getPageType()).allocate(address, blockSize, pages);
         }
 
         public synchronized void rewrite(long address, ByteBuffer data)
@@ -2723,16 +2780,16 @@ public class Pack
             }
         }
 
-        public void shift(long position, ByteBuffer bytes)
+        public void shift(long position, long address, ByteBuffer bytes)
         {
             Page page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPageType()).write(position, bytes, pages);
+            ((DataPage) page.getPageType()).write(position, address, bytes, pages);
         }
 
-        public void write(long position, ByteBuffer bytes)
+        public void write(long position, long address, ByteBuffer bytes)
         {
             Page page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPageType()).write(position, bytes, pages);
+            ((DataPage) page.getPageType()).write(position, address, bytes, pages);
         }
 
         public ByteBuffer read(long position)
@@ -2810,10 +2867,11 @@ public class Pack
 
     public final static class Mutator
     {
-
         private final Pager pager;
         
         private final PageLocker pageLocker;
+        
+        private final ReadWriteLock goalPost;
 
         private final Journal journal;
 
@@ -2825,9 +2883,9 @@ public class Pack
 
         private long lastPointerPage;
 
-        private final DirtyPageMap pages;
+        private final DirtyPageMap pages; // FIXME Rename.
 
-        public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap pages)
+        public Mutator(Pager pager, ReadWriteLock goalPost, PageLocker pageLocker, Journal journal, DirtyPageMap pages)
         {
             this.pager = pager;
             this.pageLocker = pageLocker;
@@ -2836,6 +2894,7 @@ public class Pack
             this.listOfPages = new LinkedList<Long>();
             this.pages = pages;
             this.mapOfAddresses = new HashMap<Long, Long>();
+            this.goalPost = goalPost;
         }
 
         /**
@@ -2875,7 +2934,7 @@ public class Pack
             }
             Page page = size.getPage();
 
-            // Adjust the remainging size of the wilderness data page.
+            // Adjust the remaining size of the wilderness data page.
 
             int remaining = size.getRemaining() - fullSize;
             pagesBySize.add(new Size(page, remaining));
@@ -2904,7 +2963,7 @@ public class Pack
             }
             while (address == 0L);
 
-            long position = journal.allocate(fullSize);
+            long position = journal.allocate(fullSize, address);
 
             mapOfAddresses.put(new Long(address), new Long(position));
 
@@ -2915,6 +2974,42 @@ public class Pack
 
         public void commit()
         {
+            // TODO This is where I left off.
+            
+            // First, create necessary data pages? Or vacuum.
+            
+            // Consolidate pages. Eliminate the need for new pages.
+            Map<Long, Size> mapOfSizes = new TreeMap<Long, Size>(); 
+                
+            pager.pagesBySize.join(pagesBySize, mapOfSizes);
+            
+            // Determine the number of empty pages needed.
+            
+            int needed = pagesBySize.getSize() - mapOfSizes.size();
+
+            // Obtain free pages from the available free pages in the pager.
+
+            Set<Long> setOfEmptyPages = new HashSet<Long>();
+            pager.newUserDataPages(needed, setOfEmptyPages);
+            
+            needed -= setOfEmptyPages.size();
+
+            // If more pages are needed, then go and get them.
+
+            goalPost.readLock().lock();
+            try
+            {
+                while (needed != 0)
+                {
+                    
+                }
+            }
+            finally
+            {
+                goalPost.readLock().unlock();
+            }
+            
+            // 
         }
 
         public ByteBuffer read(long address)
@@ -2924,8 +3019,6 @@ public class Pack
 
         public void write(long address, ByteBuffer bytes)
         {
-            // TODO This is where I left off.
-            
             // For now, the first test will write to an allocated block, so
             // the write buffer is already there.
             
@@ -2935,7 +3028,7 @@ public class Pack
             }
             else
             {
-                journal.write(position, bytes);
+                journal.write(position, address, bytes);
             }
         }
 
