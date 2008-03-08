@@ -1,9 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <classpath>
-	<classpathentry excluding="**/.svn|**/.svn/**" kind="src" output="artifacts/core/target/classes" path="artifacts/core/java"/>
-	<classpathentry excluding="**/.svn|**/.svn/**" kind="src" output="artifacts/core/test/junit/target/classes" path="artifacts/core/test/junit/java"/>
-	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
-	<classpathentry kind="src" path="/swag"/>
-	<classpathentry kind="lib" path="/mix/lib/junit/junit.jar"/>
-	<classpathentry kind="output" path="ERRORS-IN-PATH"/>
+  <classpathentry kind="src" path="src/main/java"/>
+  <classpathentry kind="src" path="src/test/java" output="target/test-classes"/>
+  <classpathentry kind="output" path="target/classes"/>
+  <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
+  <classpathentry kind="var" path="M2_REPO/junit/junit/4.4/junit-4.4.jar" sourcepath="M2_REPO/junit/junit/4.4/junit-4.4-sources.jar"/>
 </classpath>

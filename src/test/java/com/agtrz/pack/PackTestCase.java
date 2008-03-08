@@ -3,13 +3,11 @@ package com.agtrz.pack;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
 
-import junit.framework.TestCase;
+import org.junit.Ignore;
+import org.junit.Test;
 
 public class PackTestCase
-extends TestCase
 {
     private File newFile()
     {
@@ -25,7 +23,7 @@ extends TestCase
         }
     }
 
-    public void testCreate()
+    @Ignore @Test public void create()
     {
         new Pack.Creator().create(newFile()).close();
     }
