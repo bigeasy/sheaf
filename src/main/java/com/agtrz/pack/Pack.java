@@ -75,14 +75,11 @@ public class Pack
 
     private final Pager pager;
     
-    private final ReadWriteLock goalPost;
-
     private final PageLocker pageLocker;
 
     public Pack(Pager pager)
     {
         this.pager = pager;
-        this.goalPost = new ReentrantReadWriteLock();
         this.pageLocker = new PageLocker(17);
     }
 
@@ -94,7 +91,7 @@ public class Pack
     public Mutator mutate()
     {
         DirtyPageMap pages = new DirtyPageMap(pager, 16);
-        return new Mutator(pager, goalPost, pageLocker, new Journal(pager, pages), pages);
+        return new Mutator(pager, pageLocker, new Journal(pager, pages), pages);
     }
 
     public void close()
@@ -1615,6 +1612,8 @@ public class Pack
         private final int pageSize;
 
         private final Map<Long, PageReference> mapOfPagesByPosition;
+        
+        private final ReadWriteLock goalPostLock;
 
         // FIXME Outgoing.
         private final Set<Writer> setOfWriters;
@@ -1673,11 +1672,17 @@ public class Pack
             this.queue = new ReferenceQueue<Page>();
             this.headOfMoves = new Move(0, 0);
             this.headOfMoves.getLock().unlock();
+            this.goalPostLock = new ReentrantReadWriteLock();
         }
         
         public long getFirstPointer()
         {
             return firstPointer;
+        }
+        
+        public ReadWriteLock getGoalPostLock()
+        {
+            return goalPostLock;
         }
 
         /**
@@ -2802,8 +2807,6 @@ public class Pack
         
         private final PageLocker pageLocker;
         
-        private final ReadWriteLock goalPost;
-
         private final Journal journal;
 
         private final BySizeTable pagesBySize;
@@ -2816,7 +2819,7 @@ public class Pack
 
         private final DirtyPageMap pages; // FIXME Rename.
 
-        public Mutator(Pager pager, ReadWriteLock goalPost, PageLocker pageLocker, Journal journal, DirtyPageMap pages)
+        public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap pages)
         {
             this.pager = pager;
             this.pageLocker = pageLocker;
@@ -2825,7 +2828,6 @@ public class Pack
             this.listOfPages = new LinkedList<Long>();
             this.pages = pages;
             this.mapOfAddresses = new HashMap<Long, Long>();
-            this.goalPost = goalPost;
         }
 
         /**
@@ -2927,20 +2929,21 @@ public class Pack
 
             // If more pages are needed, then go and get them.
 
-            goalPost.readLock().lock();
-            try
+            if (needed != 0)
             {
-                while (needed != 0)
+                pager.getGoalPostLock().readLock().lock();
+                try
                 {
-                    
+                    while (needed != 0)
+                    {
+                        // Get the first page in the wilderness.
+                    }
+                }
+                finally
+                {
+                    pager.getGoalPostLock().readLock().unlock();
                 }
             }
-            finally
-            {
-                goalPost.readLock().unlock();
-            }
-            
-            // 
         }
 
         public ByteBuffer read(long address)
