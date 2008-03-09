@@ -628,7 +628,7 @@ public class Pack
     implements Page
     {
         private Position page;
-
+        
         private Allocator allocator;
 
         public void create(Position page, DirtyPageMap pages)
@@ -1462,7 +1462,7 @@ public class Pack
             }
         }
         
-        public void releaseExclusive(SortedSet<Long> setOfPages)
+        public void releaseExclusive(Set<Long> setOfPages)
         {
             Iterator<Long> pages = setOfPages.iterator();
             while (pages.hasNext())
@@ -1688,6 +1688,25 @@ public class Pack
         public ReadWriteLock getGoalPostLock()
         {
             return goalPostLock;
+        }
+        
+        public synchronized long getFirstInterimPage()
+        {
+            return firstSystemPage;
+        }
+
+        public synchronized void setFirstInterimPage(long firstInterimPage)
+        {
+            this.firstSystemPage = firstInterimPage;
+        }
+        
+        public synchronized long getGoalPost()
+        {
+            return 0L;
+        }
+        
+        public synchronized void setGoalPost(long goalPost)
+        {
         }
 
         /**
@@ -2800,7 +2819,7 @@ public class Pack
 
         private final BySizeTable pagesBySize;
 
-        private final LinkedList<Long> listOfPages;
+        private final Set<Long> setOfPages;
 
         private final Map<Long, Long> mapOfAddresses;
 
@@ -2814,7 +2833,7 @@ public class Pack
             this.pageLocker = pageLocker;
             this.journal = journal;
             this.pagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
-            this.listOfPages = new LinkedList<Long>();
+            this.setOfPages = new HashSet<Long>();
             this.pages = pages;
             this.mapOfAddresses = new HashMap<Long, Long>();
         }
@@ -2852,7 +2871,7 @@ public class Pack
             if (size == null)
             {
                 size = new Size(pager.newSystemPage(new DataPage(), pages));
-                listOfPages.add(new Long(size.getPage().getPosition()));
+                setOfPages.add(new Long(size.getPage().getPosition()));
             }
             Position page = size.getPage();
 
@@ -2897,8 +2916,13 @@ public class Pack
         public void commit()
         {
             // TODO This is where I left off.
+            Logger log = pager.getLogger();
+            
+            log.debug("Commit.");
             
             // First, create necessary data pages? Or vacuum.
+            
+            log.debug("Total pages needed {}.", setOfPages.size());
             
             // Consolidate pages. Eliminate the need for new pages.
             Map<Long, Size> mapOfSizes = new TreeMap<Long, Size>(); 
@@ -2907,25 +2931,47 @@ public class Pack
             
             // Determine the number of empty pages needed.
             
-            int needed = pagesBySize.getSize() - mapOfSizes.size();
+            int needed = setOfPages.size() - mapOfSizes.size();
+            
+            log.debug("Pages merged with existing pages {}.", setOfPages.size() - needed);
 
             // Obtain free pages from the available free pages in the pager.
 
             Set<Long> setOfEmptyPages = new HashSet<Long>();
             pager.newUserDataPages(needed, setOfEmptyPages);
-            
+
+            log.debug("Number of empty pages used {}.", setOfEmptyPages.size());
+
             needed -= setOfEmptyPages.size();
 
             // If more pages are needed, then go and get them.
 
             if (needed != 0)
             {
+                log.debug("Number of pages needed to move {}.", needed);
+
                 pager.getGoalPostLock().readLock().lock();
                 try
                 {
                     while (needed != 0)
                     {
+                        Set<Long> setOfLocked = new HashSet<Long>();
                         // Get the first page in the wilderness.
+                        long wilderness = pager.getFirstInterimPage();
+                        long goalPost = pager.getGoalPost();
+                        RelocatablePage first = (RelocatablePage) pager.getPage(wilderness, new RelocatablePage()).getPageType();
+                        while (wilderness < goalPost)
+                        {
+                            try
+                            {
+                                pageLocker.acquireExclusive(singleton(first.getPage().getPosition()));
+                                
+                            }
+                            finally
+                            {
+                                pageLocker.releaseExclusive(setOfLocked);
+                            }
+                        }
                     }
                 }
                 finally
