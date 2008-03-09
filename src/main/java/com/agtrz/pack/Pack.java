@@ -363,7 +363,7 @@ public class Pack
     {
         private final Pager pager;
 
-        private PageType pageType;
+        private Page pageType;
 
         private long position;
 
@@ -397,12 +397,12 @@ public class Pack
             return bytes;
         }
 
-        public void setPageType(PageType pageType)
+        public void setPageType(Page pageType)
         {
             this.pageType = pageType;
         }
 
-        public PageType getPageType()
+        public Page getPageType()
         {
             return pageType;
         }
@@ -447,7 +447,7 @@ public class Pack
         }
     }
 
-    private interface PageType
+    private interface Page
     {
         public void create(Position page, DirtyPageMap pages);
 
@@ -457,7 +457,7 @@ public class Pack
     }
 
     private static final class AddressPage
-    implements PageType
+    implements Page
     {
         private Position page;
 
@@ -622,7 +622,7 @@ public class Pack
     }
 
     private static class RelocatablePage
-    implements PageType
+    implements Page
     {
         private Position page;
 
@@ -1976,7 +1976,7 @@ public class Pack
             mapOfPagesByPosition.put(intended.getPosition(), intended);
         }
 
-        public Position getPage(long position, PageType pageType)
+        public Position getPage(long position, Page pageType)
         {
             synchronized (mapOfPagesByPosition)
             {
@@ -1997,7 +1997,7 @@ public class Pack
         }
 
         // FIXME Too many flavors of newSystemPage.
-        public Position newSystemPage(PageType pageType, DirtyPageMap pages)
+        public Position newSystemPage(Page pageType, DirtyPageMap pages)
         {
             // We pull from the end of the interim space to take pressure of of
             // the durable pages, which are more than likely multiply in number
