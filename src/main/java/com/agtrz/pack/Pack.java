@@ -1557,29 +1557,6 @@ public class Pack
             return bestFit;
         }
 
-        public synchronized void _remove(Position page)
-        {
-            // FIXME Does not work. We need to know the size. Where is this used?
-            DataPage dataPage = (DataPage) page.getPage();
-
-            int aligned = ((dataPage.getRemaining() | alignment - 1) + 1) - alignment;
-
-            LinkedList<Size> listOfSizes = listOfListsOfSizes.get(aligned / alignment);
-
-            Iterator<Size> pages = listOfSizes.iterator();
-            while (pages.hasNext())
-            {
-                Size candidate = (Size) pages.next();
-                if (candidate.getPage().getValue() == page.getValue())
-                {
-                    pages.remove();
-                    return;
-                }
-            }
-
-            throw new RuntimeException("Unmatched address in by size map.");
-        }
-        
         public synchronized void join(BySizeTable pagesBySize, Map<Long, Size> mapOfSizes)
         {
             for (List<Size> listOfSizes: pagesBySize.listOfListsOfSizes)
@@ -2035,7 +2012,7 @@ public class Pack
 
             // FIXME A concurrency question, what if this interim page is in the
             // midst of a move? If we removed it from the set of interim pages,
-            // then a moving thread might be attempting to create a relocatable
+            // then a moving thread might be attempting to create a relocateble
             // page and moving the page. We need to lock it!?
 
             Position page = new Position(this, position);
@@ -2827,16 +2804,16 @@ public class Pack
 
         private long lastPointerPage;
 
-        private final DirtyPageMap pages; // FIXME Rename.
+        private final DirtyPageMap dirtyPages;
 
-        public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap pages)
+        public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap dirtyPages)
         {
             this.pager = pager;
             this.pageLocker = pageLocker;
             this.journal = journal;
             this.pagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
             this.setOfPages = new HashSet<Long>();
-            this.pages = pages;
+            this.dirtyPages = dirtyPages;
             this.mapOfAddresses = new HashMap<Long, Long>();
         }
 
@@ -2872,7 +2849,7 @@ public class Pack
             Size size = pagesBySize.bestFit(fullSize);
             if (size == null)
             {
-                size = new Size(pager.newSystemPage(new DataPage(), pages));
+                size = new Size(pager.newSystemPage(new DataPage(), dirtyPages));
                 setOfPages.add(new Long(size.getPage().getValue()));
             }
             Position page = size.getPage();
@@ -2892,7 +2869,7 @@ public class Pack
                 try
                 {
                     addressPage = pager.getPage(lastPointerPage, new AddressPage());
-                    address = ((AddressPage) addressPage.getPage()).reserve(pages);
+                    address = ((AddressPage) addressPage.getPage()).reserve(dirtyPages);
                 }
                 finally
                 {
@@ -2901,7 +2878,7 @@ public class Pack
                 if (address == 0L)
                 {
                     // Allocate a different page.
-                    address = pager.reserve(addressPage, pages);
+                    address = pager.reserve(addressPage, dirtyPages);
                 }
             }
             while (address == 0L);
