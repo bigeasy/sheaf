@@ -33,6 +33,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class Pack
 {
     private final static int FLAG_SIZE = 2;
@@ -1604,6 +1607,8 @@ public class Pack
 
     private final static class Pager
     {
+        private final Logger logger = LoggerFactory.getLogger(Pack.class);
+
         private final Checksum checksum;
 
         private final FileChannel fileChannel;
@@ -1672,6 +1677,11 @@ public class Pack
             this.headOfMoves = new Move(0, 0);
             this.headOfMoves.getLock().unlock();
             this.goalPostLock = new ReentrantReadWriteLock();
+        }
+        
+        public Logger getLogger()
+        {
+            return logger;
         }
         
         public long getFirstPointer()

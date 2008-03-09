@@ -26,6 +26,16 @@
 
     <dependencies>
             <!--  JUNIT DEPENDENCY FOR TESTING -->
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-log4j12</artifactId>
+			<version>1.4.2</version>
+		</dependency>
+		<dependency>
+			<groupId>log4j</groupId>
+			<artifactId>log4j</artifactId>
+			<version>1.2.14</version>
+		</dependency>
          <dependency>
              <groupId>junit</groupId>
              <artifactId>junit</artifactId>
