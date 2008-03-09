@@ -1619,9 +1619,6 @@ public class Pack
         
         private final ReadWriteLock goalPostLock;
 
-        // FIXME Outgoing.
-        private final Set<Writer> setOfWriters;
-
         private final ReferenceQueue<Position> queue;
 
         public final File file;
@@ -1665,7 +1662,6 @@ public class Pack
             this.pointerPageCount = pointerPageCount;
             this.checksum = new Adler32();
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
-            this.setOfWriters = new HashSet<Writer>();
             this.journalBuffer = journalBuffer;
             this.mapOfPointerPages = new HashMap<Long, Position>();
             this.pagesBySize = new BySizeTable(pageSize, alignment);
@@ -1767,22 +1763,6 @@ public class Pack
         public int getPageSize()
         {
             return pageSize;
-        }
-
-        public void addWriter(Writer writer)
-        {
-            synchronized (setOfWriters)
-            {
-                setOfWriters.add(writer);
-            }
-        }
-
-        public void removeWriter(Writer writer)
-        {
-            synchronized (setOfWriters)
-            {
-                setOfWriters.remove(writer);
-            }
         }
 
         public void newUserDataPages(int needed, Set<Long> setOfPages)
