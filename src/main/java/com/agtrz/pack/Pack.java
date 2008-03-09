@@ -33,9 +33,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class Pack
 {
     private final static int FLAG_SIZE = 2;
@@ -1344,7 +1341,7 @@ public class Pack
             {
                 int[] value = mapOfPages.get(position);
                 
-                assert value == null || value[0] != 0;
+                assert value != null && value[0] != 0;
                 
                 value[0] += increment;
                 
@@ -1404,7 +1401,7 @@ public class Pack
             {
                 value = mapOfPages.get(position);
                 
-                assert value == null || value[0] > 0;
+                assert value == null;
                 
                 if (value == null)
                 {
@@ -1583,8 +1580,6 @@ public class Pack
 
     private final static class Pager
     {
-        private final Logger logger = LoggerFactory.getLogger(Pack.class);
-
         private final Checksum checksum;
 
         private final FileChannel fileChannel;
@@ -1593,6 +1588,16 @@ public class Pack
 
         private final Map<Long, PageReference> mapOfPagesByPosition;
         
+        /**
+         * A lock to ensure that only one mutator at a time is moving pages in
+         * the interim page area.
+         */
+        private final Lock moveLock;
+
+        /**
+         * A read/write lock that protects the boundary below which pages in the
+         * interim page area are locked for relocation and for commit.
+         */
         private final ReadWriteLock goalPostLock;
 
         private final ReferenceQueue<Position> queue;
@@ -1626,6 +1631,8 @@ public class Pack
 
         private long firstSystemPage;
         
+        private long goalPost;
+        
         private Move headOfMoves;
 
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, ByteBuffer journalBuffer, long firstPointer, int pointerPageCount)
@@ -1649,16 +1656,18 @@ public class Pack
             this.headOfMoves = new Move(0, 0);
             this.headOfMoves.getLock().unlock();
             this.goalPostLock = new ReentrantReadWriteLock();
-        }
-        
-        public Logger getLogger()
-        {
-            return logger;
+            this.goalPost = firstSystemPage;
+            this.moveLock = new ReentrantLock();
         }
         
         public long getFirstPointer()
         {
             return firstPointer;
+        }
+        
+        public Lock getMoveLock()
+        {
+            return moveLock;
         }
         
         public ReadWriteLock getGoalPostLock()
@@ -1676,13 +1685,14 @@ public class Pack
             this.firstSystemPage = firstInterimPage;
         }
         
-        public synchronized long getGoalPost()
+        public long getGoalPost()
         {
-            return 0L;
+            return goalPost;
         }
         
-        public synchronized void setGoalPost(long goalPost)
+        public void setGoalPost(long goalPost)
         {
+            this.goalPost = goalPost;
         }
 
         /**
@@ -2895,31 +2905,22 @@ public class Pack
         public void commit()
         {
             // TODO This is where I left off.
-            Logger log = pager.getLogger();
-            
-            log.debug("Commit.");
-            
+
             // First, create necessary data pages? Or vacuum.
             
-            log.debug("Total pages needed {}.", setOfPages.size());
-            
             // Consolidate pages. Eliminate the need for new pages.
+
             Map<Long, Size> mapOfSizes = new TreeMap<Long, Size>(); 
-                
             pager.pagesBySize.join(pagesBySize, mapOfSizes);
             
             // Determine the number of empty pages needed.
             
             int needed = setOfPages.size() - mapOfSizes.size();
             
-            log.debug("Pages merged with existing pages {}.", setOfPages.size() - needed);
-
             // Obtain free pages from the available free pages in the pager.
 
             Set<Long> setOfEmptyPages = new HashSet<Long>();
             pager.newUserDataPages(needed, setOfEmptyPages);
-
-            log.debug("Number of empty pages used {}.", setOfEmptyPages.size());
 
             needed -= setOfEmptyPages.size();
 
@@ -2927,35 +2928,67 @@ public class Pack
 
             if (needed != 0)
             {
-                log.debug("Number of pages needed to move {}.", needed);
-
+                pager.getMoveLock().lock();
+                Set<Long> setOfLocked = new HashSet<Long>();
                 pager.getGoalPostLock().readLock().lock();
                 try
                 {
-                    while (needed != 0)
+                    GOAL_POST: while (needed != 0)
                     {
-                        Set<Long> setOfLocked = new HashSet<Long>();
                         // Get the first page in the wilderness.
-                        long wilderness = pager.getFirstInterimPage();
-                        long goalPost = pager.getGoalPost();
-                        RelocatablePage first = (RelocatablePage) pager.getPage(wilderness, new RelocatablePage()).getPage();
-                        while (wilderness < goalPost)
+                        try
                         {
-                            try
+                            int acquired = 0;
+                            long wilderness = pager.getFirstInterimPage();
+                            long goalPost = pager.getGoalPost();
+                            while (wilderness < goalPost && acquired < needed)
                             {
-                                pageLocker.acquireExclusive(singleton(first.getPosition().getValue()));
-                                
+                                pageLocker.acquireExclusive(singleton(wilderness));
+                                setOfLocked.add(wilderness);
+                                acquired++;
                             }
-                            finally
+                            
+                            // TODO This is where I left off.
+                            for (int i = 0; i < acquired; i++)
                             {
-                                pageLocker.releaseExclusive(setOfLocked);
+                                // TODO Move the pages.
                             }
+                            
+                            needed -= acquired;
+                            
+                            if (needed != 0)
+                            {
+                                pager.getGoalPostLock().readLock().unlock();
+                                try
+                                {
+                                    pager.getGoalPostLock().writeLock().lock();
+                                    try
+                                    {
+                                        pager.setGoalPost(pager.getGoalPost() + pager.getPageSize() * (long) (needed * 1.25));
+                                    }
+                                    finally
+                                    {
+                                        pager.getGoalPostLock().writeLock().unlock();
+                                    }
+                                }
+                                finally
+                                {
+                                    pager.getGoalPostLock().readLock().lock();
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            pageLocker.releaseExclusive(setOfLocked);
+                            setOfLocked.clear();
                         }
                     }
                 }
                 finally
                 {
+                    pageLocker.releaseExclusive(setOfLocked);
                     pager.getGoalPostLock().readLock().unlock();
+                    pager.getMoveLock().unlock();
                 }
             }
         }
