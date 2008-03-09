@@ -23,7 +23,7 @@ public class PackTestCase
         }
     }
 
-    @Test public void create()
+    @Ignore @Test public void create()
     {
         new Pack.Creator().create(newFile()).close();
     }

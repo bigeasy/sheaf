@@ -366,30 +366,30 @@ public class Pack
     {
         private final Pager pager;
 
-        private Page pageType;
+        private Page page;
 
-        private long position;
+        private long value;
 
-        private Reference<ByteBuffer> bufferReference;
+        private Reference<ByteBuffer> byteBufferReference;
 
-        public Position(Pager pager, long position)
+        public Position(Pager pager, long value)
         {
             this.pager = pager;
-            this.position = position;
+            this.value = value;
         }
 
-        private ByteBuffer load(Pager pager, long position)
+        private ByteBuffer load(Pager pager, long value)
         {
             int pageSize = pager.getPageSize();
             int bufferSize = pageSize;
-            if (position % pageSize != 0L)
+            if (value % pageSize != 0L)
             {
-                bufferSize = (int) (pageSize - position % pageSize);
+                bufferSize = (int) (pageSize - value % pageSize);
             }
             ByteBuffer bytes = ByteBuffer.allocateDirect(bufferSize);
             try
             {
-                pager.getFileChannel().read(bytes, position);
+                pager.getFileChannel().read(bytes, value);
             }
             catch (IOException e)
             {
@@ -400,14 +400,14 @@ public class Pack
             return bytes;
         }
 
-        public void setPageType(Page pageType)
+        public void setPage(Page page)
         {
-            this.pageType = pageType;
+            this.page = page;
         }
 
-        public Page getPageType()
+        public Page getPage()
         {
-            return pageType;
+            return page;
         }
 
         public Pager getPager()
@@ -417,33 +417,33 @@ public class Pack
 
         protected Reference<ByteBuffer> getByteBufferReference()
         {
-            return bufferReference;
+            return byteBufferReference;
         }
 
-        public synchronized long getPosition()
+        public synchronized long getValue()
         {
-            return position;
+            return value;
         }
 
-        protected synchronized void setPosition(long position)
+        protected synchronized void setValue(long value)
         {
-            this.position = position;
+            this.value = value;
         }
 
         public synchronized ByteBuffer getByteBuffer()
         {
             ByteBuffer bytes = null;
-            if (bufferReference == null)
+            if (byteBufferReference == null)
             {
-                bytes = load(pager, position);
-                bufferReference = new WeakReference<ByteBuffer>(bytes);
+                bytes = load(pager, value);
+                byteBufferReference = new WeakReference<ByteBuffer>(bytes);
             }
 
-            bytes = (ByteBuffer) bufferReference.get();
+            bytes = (ByteBuffer) byteBufferReference.get();
             if (bytes == null)
             {
-                bytes = load(pager, position);
-                bufferReference = new WeakReference<ByteBuffer>(bytes);
+                bytes = load(pager, value);
+                byteBufferReference = new WeakReference<ByteBuffer>(bytes);
             }
 
             return bytes;
@@ -456,19 +456,19 @@ public class Pack
 
         public void load(Position page);
 
-        public boolean isSystem();
+        public boolean isInterim();
     }
 
     private static final class AddressPage
     implements Page
     {
-        private Position page;
+        private Position position;
 
         private long reservations;
 
-        public void create(Position page, DirtyPageMap pages)
+        public void create(Position position, DirtyPageMap pages)
         {
-            ByteBuffer bytes = page.getByteBuffer();
+            ByteBuffer bytes = position.getByteBuffer();
 
             int capacity = bytes.capacity() / ADDRESS_SIZE;
             for (int i = 0; i < capacity; i++)
@@ -476,9 +476,9 @@ public class Pack
                 bytes.putLong(i * ADDRESS_SIZE, 0L);
             }
 
-            pages.put(page);
+            pages.put(position);
 
-            this.page = page;
+            this.position = position;
         }
 
         /**
@@ -491,24 +491,21 @@ public class Pack
         private int getStartOffset()
         {
             int offset = 0;
-            long firstPointer = page.getPager().getFirstPointer();
-            if (page.getPosition() < firstPointer)
+            long firstPointer = position.getPager().getFirstPointer();
+            if (position.getValue() < firstPointer)
             {
                 offset = (int) firstPointer / POSITION_SIZE;
             }
             return offset + (ADDRESS_PAGE_HEADER_SIZE / POSITION_SIZE);
         }
         
-        public void load(Position page)
+        public void load(Position position)
         {
-            page.setPageType(this);
-            this.page = page;
+            position.setPage(this);
+            this.position = position;
         }
 
-        /**
-         * TODO: This should read is wilderness.
-         */
-        public boolean isSystem()
+        public boolean isInterim()
         {
             return false;
         }
@@ -520,32 +517,32 @@ public class Pack
          */
         public long dereference(long address)
         {
-            synchronized (page)
+            synchronized (position)
             {
-                int offset = (int) (address - page.getPosition());
-                long position = page.getByteBuffer().getLong(offset);
+                int offset = (int) (address - position.getValue());
+                long actual = position.getByteBuffer().getLong(offset);
 
-                assert position != 0L; 
+                assert actual != 0L; 
 
-                return position;
+                return actual;
             }
         }
 
         private ReservationPage getReservationPage(DirtyPageMap dirtyPages)
         {
-            Pager pager = page.getPager();
+            Pager pager = position.getPager();
             Position page = null;
             if (reservations == 0L)
             {
                 page = pager.newSystemPage(new ReservationPage(), dirtyPages);
-                reservations = page.getPosition();
+                reservations = page.getValue();
             }
             else
             {
                 page = pager.getPage(reservations, new ReservationPage());
             }
 
-            return (ReservationPage) page.getPageType();
+            return (ReservationPage) page.getPage();
         }
 
         /**
@@ -563,7 +560,7 @@ public class Pack
          */
         public long reserve(DirtyPageMap dirtyPages)
         {
-            synchronized (page)
+            synchronized (position)
             {
                 // Get the reservation page. Note that the page type holds a
                 // hard reference to the page. 
@@ -572,7 +569,7 @@ public class Pack
 
                 // Get the page buffer.
                 
-                ByteBuffer bytes = page.getByteBuffer();
+                ByteBuffer bytes = position.getByteBuffer();
 
                 // Iterate the page buffer looking for a zeroed address that has
                 // not been reserved, reserving it and returning it if found.
@@ -581,7 +578,7 @@ public class Pack
                 {
                     if (bytes.getLong(i) == 0L && reserver.reserve(i, dirtyPages))
                     {
-                        return page.getPosition() + (i * ADDRESS_SIZE);
+                        return position.getValue() + (i * ADDRESS_SIZE);
                     }
                 }
 
@@ -593,28 +590,28 @@ public class Pack
 
         public long allocate()
         {
-            synchronized (page)
+            synchronized (position)
             {
-                ByteBuffer bytes = page.getByteBuffer();
+                ByteBuffer bytes = position.getByteBuffer();
                 int addresses = bytes.capacity() / ADDRESS_SIZE;
                 for (int i = 0; i < addresses; i++)
                 {
                     if (bytes.getLong(i * ADDRESS_SIZE) > 0L)
                     {
                         bytes.putLong(i * ADDRESS_SIZE, -1L);
-                        return page.getPosition() + i * ADDRESS_SIZE;
+                        return position.getValue() + i * ADDRESS_SIZE;
                     }
                 }
             }
             throw new IllegalStateException();
         }
 
-        public void set(long address, long position)
+        public void set(long address, long value)
         {
-            synchronized (page)
+            synchronized (position)
             {
-                ByteBuffer bytes = page.getByteBuffer();
-                bytes.putLong((int) (address - page.getPosition()), position);
+                ByteBuffer bytes = position.getByteBuffer();
+                bytes.putLong((int) (address - position.getValue()), value);
             }
         }
 
@@ -627,29 +624,29 @@ public class Pack
     private static class RelocatablePage
     implements Page
     {
-        private Position page;
+        private Position position;
         
         private Allocator allocator;
 
-        public void create(Position page, DirtyPageMap pages)
+        public void create(Position position, DirtyPageMap dirtyPages)
         {
-            this.page = page;
-            page.setPageType(this);
+            this.position = position;
+            position.setPage(this);
         }
 
-        public void load(Position page)
+        public void load(Position position)
         {
-            page.setPageType(this);
+            position.setPage(this);
         }
 
-        protected Position getPage()
+        protected Position getPosition()
         {
-            return page;
+            return position;
         }
 
         public Allocator getAllocator()
         {
-            synchronized (page)
+            synchronized (position)
             {
                 return allocator;
             }
@@ -657,14 +654,14 @@ public class Pack
 
         public void clearAllocator()
         {
-            synchronized (page)
+            synchronized (position)
             {
                 this.allocator = NULL_ALLOCATOR;
-                page.notifyAll();
+                position.notifyAll();
             }
         }
 
-        public boolean isSystem()
+        public boolean isInterim()
         {
             return false;
         }
@@ -683,17 +680,17 @@ public class Pack
 
         private boolean system;
         
-        public void create(Position page, DirtyPageMap pages)
+        public void create(Position position, DirtyPageMap dirtyPages)
         {
-            super.create(page, pages);
+            super.create(position, dirtyPages);
             
             this.count = 0;
-            this.remaining = page.getPager().getPageSize() - DATA_PAGE_HEADER_SIZE; 
+            this.remaining = position.getPager().getPageSize() - DATA_PAGE_HEADER_SIZE; 
         }
 
-        public void load(Position page)
+        public void load(Position position)
         {
-            ByteBuffer bytes = page.getByteBuffer();
+            ByteBuffer bytes = position.getByteBuffer();
             this.count = bytes.getInt();
             this.remaining = getRemaining(count, bytes);
         }
@@ -710,14 +707,14 @@ public class Pack
             return bytes.remaining();
         }
 
-        public boolean isSystem()
+        public boolean isInterim()
         {
             return system;
         }
 
         public int getCount()
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 return count;
             }
@@ -725,7 +722,7 @@ public class Pack
 
         public int getRemaining()
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 return remaining;
             }
@@ -733,10 +730,10 @@ public class Pack
 
         public void reset(short type)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 this.count = 0;
-                this.remaining = getRemaining(count, getPage().getByteBuffer());
+                this.remaining = getRemaining(count, getPosition().getByteBuffer());
             }
         }
 
@@ -787,9 +784,9 @@ public class Pack
 
         public ByteBuffer read(long position, long address)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 int offset = getOffset(position);
 
                 if (seek(bytes, offset))
@@ -808,10 +805,10 @@ public class Pack
 
         public void vacuum(Journal journal, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                journal.markVacuum(getPage().getPosition());
-                ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                journal.markVacuum(getPosition().getValue());
+                ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 int block = 0;
                 while (block != count)
                 {
@@ -842,9 +839,9 @@ public class Pack
 
         public long allocate(int length, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 long position = 0L;
                 int block = 0;
                 while (block != count && position == 0L)
@@ -856,16 +853,16 @@ public class Pack
                     }
                     bytes.position(bytes.position() + Math.abs(size));
                 }
-                return getPage().getPosition() + bytes.position();
+                return getPosition().getValue() + bytes.position();
             }
         }
 
         public long allocate(long address, int length, DirtyPageMap pages)
         {
             long position = 0L;
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 int block = 0;
                 while (block != count && position == 0L)
                 {
@@ -873,7 +870,7 @@ public class Pack
                     int size = getSize(bytes);
                     if (size > 0 && bytes.getLong(bytes.position()) == address)
                     {
-                        position = getPage().getPosition() + offset;
+                        position = getPosition().getValue() + offset;
                     }
                     else
                     {
@@ -883,7 +880,7 @@ public class Pack
 
                 if (position == 0L)
                 {
-                    position = getPage().getPosition() + bytes.position();
+                    position = getPosition().getValue() + bytes.position();
 
                     bytes.putInt(length);
                     bytes.putLong(address);
@@ -896,26 +893,26 @@ public class Pack
                 }
             }
 
-            pages.put(getPage());
+            pages.put(getPosition());
 
             return position;
         }
 
         public boolean write(Allocator allocator, long address, ByteBuffer data, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 if (getAllocator() == allocator)
                 {
                     allocator.rewrite(address, data);
-                    ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                    ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                     if (seek(bytes, address))
                     {
                         int size = getSize(bytes);
                         bytes.putLong(address);
                         bytes.limit(size - POSITION_SIZE);
                         bytes.put(data);
-                        pages.put(getPage());
+                        pages.put(getPosition());
                         return true;
                     }
                 }
@@ -925,13 +922,11 @@ public class Pack
 
         public void write(long position, long address, ByteBuffer data, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getPage().getByteBuffer();
+                ByteBuffer bytes = getPosition().getByteBuffer();
                 bytes.clear();
-                bytes.position((int) (position - getPage().getPosition()));
-                // FIXME Dies here because size is zero. Obviously not being
-                // written correctly.
+                bytes.position((int) (position - getPosition().getValue()));
                 int size = bytes.getInt();
                 if (address != bytes.getLong())
                 {
@@ -939,7 +934,7 @@ public class Pack
                 }
                 bytes.limit(bytes.position() + (size - BLOCK_HEADER_SIZE));
                 bytes.put(data);
-                pages.put(getPage());
+                pages.put(getPosition());
             }
         }
 
@@ -952,17 +947,17 @@ public class Pack
 
         private int getOffset(long position)
         {
-            return (int) (position - getPage().getPosition());
+            return (int) (position - getPosition().getValue());
         }
 
         public boolean free(Allocator allocator, long address, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 if (getAllocator() == allocator)
                 {
                     allocator.unwrite(address);
-                    ByteBuffer bytes = getBlockRange(getPage().getByteBuffer());
+                    ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                     if (seek(bytes, address))
                     {
                         int offset = bytes.position();
@@ -974,7 +969,7 @@ public class Pack
                         }
                         bytes.putInt(offset, size);
 
-                        pages.put(getPage());
+                        pages.put(getPosition());
                     }
                     return true;
                 }
@@ -984,9 +979,9 @@ public class Pack
 
         public void relocate(Position to, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                getPage().setPosition(to.getPosition());
+                getPosition().setValue(to.getValue());
                 ByteBuffer bytes = to.getByteBuffer();
                 for (int i = 0; i < count; i++)
                 {
@@ -994,10 +989,10 @@ public class Pack
                     int length = bytes.getInt();
                     long address = bytes.getLong();
 
-                    Position addressPage = getPage().getPager().getPage(address, new AddressPage());
+                    Position addressPage = getPosition().getPager().getPage(address, new AddressPage());
 
-                    AddressPage addressType = (AddressPage) addressPage.getPageType();
-                    addressType.set(address, getPage().getPosition() + offset);
+                    AddressPage addressType = (AddressPage) addressPage.getPage();
+                    addressType.set(address, getPosition().getValue() + offset);
 
                     pages.put(addressPage);
 
@@ -1010,48 +1005,52 @@ public class Pack
     private final static class JournalPage
     extends RelocatablePage
     {
-        private ByteBuffer bytes; // TODO Necessary?
-
         private int offset;
 
-        public void create(Position page, DirtyPageMap pages)
+        public void create(Position page, DirtyPageMap dirtyPages)
         {
-            super.create(page, pages);
+            super.create(page, dirtyPages);
 
-            bytes = getPage().getByteBuffer();
+            ByteBuffer bytes = getPosition().getByteBuffer();
             
             bytes.clear();
             bytes.getLong();
-            bytes.putInt(-1);
+            bytes.putInt(-(bytes.position() + COUNT_SIZE));
 
             offset = bytes.position();
 
-            getPage().setPageType(this);
+            getPosition().setPage(this);
         }
 
         public void load(Position page)
         {
             super.load(page);
 
-            bytes.putLong(0L);
-            bytes.putInt(-1);
+            ByteBuffer bytes = getPosition().getByteBuffer();
+            
+            bytes.clear();
+            bytes.getLong();
+            
+            offset = - bytes.getInt();
+            
+            getPosition().setPage(this);
         }
 
-        public boolean isSystem()
+        public boolean isInterim()
         {
             return true;
         }
 
         public boolean write(Operation operation, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getPage().getByteBuffer();
+                ByteBuffer bytes = getPosition().getByteBuffer();
                 if (operation.length() + NEXT_PAGE_SIZE < bytes.capacity() - offset)
                 {
                     bytes.position(offset);
                     operation.write(bytes);
-                    pages.put(getPage());
+                    pages.put(getPosition());
                     return true;
                 }
                 return false;
@@ -1060,9 +1059,9 @@ public class Pack
 
         public void next(long position)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getPage().getByteBuffer();
+                ByteBuffer bytes = getPosition().getByteBuffer();
                 bytes.position(offset);
                 new NextOperation(position).write(bytes);
             }
@@ -1070,9 +1069,9 @@ public class Pack
 
         public long getJournalPosition()
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                return getPage().getPosition() + offset;
+                return getPosition().getValue() + offset;
             }
         }
 
@@ -1126,14 +1125,14 @@ public class Pack
             bytes.putInt(0);
         }
 
-        public boolean isSystem()
+        public boolean isInterim()
         {
             return true;
         }
 
         private int search(ByteBuffer bytes, int offset)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
                 int low = 0;
                 int high = addressCount;
@@ -1166,9 +1165,9 @@ public class Pack
 
         public boolean reserve(int offset, DirtyPageMap pages)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getPage().getByteBuffer();
+                ByteBuffer bytes = getPosition().getByteBuffer();
                 int index = addressCount == 0 ? 0 : search(bytes, offset);
                 if (index < 0 || addressCount == 0)
                 {
@@ -1180,7 +1179,7 @@ public class Pack
                     bytes.putInt(index, offset);
                     addressCount++;
                     bytes.putInt(CHECKSUM_SIZE, addressCount);
-                    pages.put(getPage());
+                    pages.put(getPosition());
                     return true;
                 }
                 return false;
@@ -1189,9 +1188,9 @@ public class Pack
 
         public void remove(int offset)
         {
-            synchronized (getPage())
+            synchronized (getPosition())
             {
-                ByteBuffer bytes = getPage().getByteBuffer();
+                ByteBuffer bytes = getPosition().getByteBuffer();
                 int index = search(bytes, offset);
                 if (index > 0)
                 {
@@ -1214,7 +1213,7 @@ public class Pack
         public PageReference(Position page, ReferenceQueue<Position> queue)
         {
             super(page, queue);
-            this.position = new Long(page.getPosition());
+            this.position = new Long(page.getValue());
         }
 
         public Long getPosition()
@@ -1232,7 +1231,7 @@ public class Pack
         public Size(Position page)
         {
             this.page = page;
-            this.remaining = ((DataPage) page.getPageType()).getRemaining();
+            this.remaining = ((DataPage) page.getPage()).getRemaining();
         }
 
         public Size(Position page, int size)
@@ -1514,7 +1513,7 @@ public class Pack
 
         public void add(Position page)
         {
-            add(new Size(page, ((DataPage) page.getPageType()).getRemaining()));
+            add(new Size(page, ((DataPage) page.getPage()).getRemaining()));
         }
 
         public synchronized void add(Size size)
@@ -1561,7 +1560,7 @@ public class Pack
         public synchronized void _remove(Position page)
         {
             // FIXME Does not work. We need to know the size. Where is this used?
-            DataPage dataPage = (DataPage) page.getPageType();
+            DataPage dataPage = (DataPage) page.getPage();
 
             int aligned = ((dataPage.getRemaining() | alignment - 1) + 1) - alignment;
 
@@ -1571,7 +1570,7 @@ public class Pack
             while (pages.hasNext())
             {
                 Size candidate = (Size) pages.next();
-                if (candidate.getPage().getPosition() == page.getPosition())
+                if (candidate.getPage().getValue() == page.getValue())
                 {
                     pages.remove();
                     return;
@@ -1590,7 +1589,7 @@ public class Pack
                     Size found = bestFit(size.getSize());
                     if (found != null)
                     {
-                        mapOfSizes.put(size.getPage().getPosition(), found);
+                        mapOfSizes.put(size.getPage().getValue(), found);
                     }
                 }
             }
@@ -1808,10 +1807,10 @@ public class Pack
 
         public synchronized long reserve(Position page, DirtyPageMap pages)
         {
-            long address = ((AddressPage) page.getPageType()).reserve(pages);
+            long address = ((AddressPage) page.getPage()).reserve(pages);
             if (address == 0L)
             {
-                mapOfPointerPages.remove(new Long(page.getPosition()));
+                mapOfPointerPages.remove(new Long(page.getValue()));
             }
             return address;
         }
@@ -1825,7 +1824,7 @@ public class Pack
                 long firstDataPage = 0L;
                 Position fromDataPage = getPage(firstDataPage, new DataPage());
                 Position toDataPage = newDataPage(pages);
-                Allocator allocator = ((DataPage) fromDataPage.getPageType()).getAllocator();
+                Allocator allocator = ((DataPage) fromDataPage.getPage()).getAllocator();
                 journal.relocate(allocator, fromDataPage, toDataPage);
             }
             if (position != 0L)
@@ -1997,7 +1996,7 @@ public class Pack
                     pageType.load(page);
                     addPageByPosition(page);
                 }
-                else if(page.getPageType().getClass() != pageType.getClass())
+                else if(page.getPage().getClass() != pageType.getClass())
                 {
                     pageType.load(page);
                 }
@@ -2077,8 +2076,8 @@ public class Pack
 
         public void put(Position page)
         {
-            mapOfPages.put(page.getPosition(), page);
-            mapOfByteBuffers.put(page.getPosition(), page.getByteBuffer());
+            mapOfPages.put(page.getValue(), page);
+            mapOfByteBuffers.put(page.getValue(), page.getByteBuffer());
             if (mapOfPages.size() > capacity)
             {
                 flush();
@@ -2096,7 +2095,7 @@ public class Pack
                     bytes.clear();
                     try
                     {
-                        fileChannel.write(bytes, page.getPosition());
+                        fileChannel.write(bytes, page.getValue());
                     }
                     catch (IOException e)
                     {
@@ -2265,14 +2264,17 @@ public class Pack
         {
             this.address = address;
             this.page = page;
-            this.position = position; // TODO ???
+            this.position = position;
             this.length = length;
         }
 
         public void commit(Pager pager, Journal journal, DirtyPageMap pages)
         {
-            Position p = pager.getPage(page, new DataPage());
-            ((DataPage) p.getPageType()).allocate(address, length, pages);
+            DataPage dataPage = (DataPage) pager.getPage(page, new DataPage()).getPage();
+            long location = dataPage.allocate(address, length, pages);
+            DataPage interimPage = (DataPage) pager.getPage(position, new DataPage()).getPage();
+            ByteBuffer bytes = interimPage.read(position, address);
+            dataPage.write(location, address, bytes, pages);
         }
 
         public int length()
@@ -2344,7 +2346,7 @@ public class Pack
             if (address == destination)
             {
                 Position page = pager.getPage(source, new DataPage());
-                ((DataPage) page.getPageType()).write(source, address, data, pages);
+                ((DataPage) page.getPage()).write(source, address, data, pages);
                 return true;
             }
             return false;
@@ -2435,7 +2437,7 @@ public class Pack
         public void commit(Pager pager, Journal journal, DirtyPageMap pages)
         {
             Position toAddressPage = pager.getPage(destination, new AddressPage());
-            long toPosition = ((AddressPage) toAddressPage.getPageType()).dereference(destination);
+            long toPosition = ((AddressPage) toAddressPage.getPage()).dereference(destination);
             Position toDataPage = pager.getPage(toPosition, new DataPage());
 
             ByteBuffer fromBytes = journal.read(source, destination);
@@ -2443,7 +2445,7 @@ public class Pack
             Allocator allocator = null;
             do
             {
-                allocator = ((DataPage) toDataPage.getPageType()).getAllocator();
+                allocator = ((DataPage) toDataPage.getPage()).getAllocator();
             }
             while (!allocator.write(toDataPage, destination, fromBytes, pages));
         }
@@ -2491,12 +2493,12 @@ public class Pack
         public void commit(Pager pager, Journal journal, DirtyPageMap pages)
         {
             Position addressPage = pager.getPage(address, new AddressPage());
-            long referenced = ((AddressPage) addressPage.getPageType()).dereference(address);
+            long referenced = ((AddressPage) addressPage.getPage()).dereference(address);
             Position page = pager.getPage(referenced, new DataPage());
             Allocator allocator = null;
             do
             {
-                allocator = ((DataPage) page.getPageType()).getAllocator();
+                allocator = ((DataPage) page.getPage()).getAllocator();
             }
             while (!allocator.free(page, address, pages));
         }
@@ -2612,7 +2614,7 @@ public class Pack
         public Journal(Pager pager, DirtyPageMap pages)
         {
             this.journalPage = pager.newSystemPage(new JournalPage(), pages);
-            this.journalStart = ((JournalPage) journalPage.getPageType()).getJournalPosition();
+            this.journalStart = ((JournalPage) journalPage.getPage()).getJournalPosition();
             this.pager = pager;
             this.listOfPages = new LinkedList<Position>();
             this.pages = pages;
@@ -2623,12 +2625,12 @@ public class Pack
 
         public boolean free(Position page, long address, DirtyPageMap pages)
         {
-            return ((DataPage) page.getPageType()).free(this, address, pages);
+            return ((DataPage) page.getPage()).free(this, address, pages);
         }
 
         public synchronized boolean write(Position page, long address, ByteBuffer data, DirtyPageMap pages)
         {
-            return ((DataPage) page.getPageType()).write(this, address, data, pages);
+            return ((DataPage) page.getPage()).write(this, address, data, pages);
         }
 
         public boolean relocate(RelocatablePage from, long to)
@@ -2642,7 +2644,7 @@ public class Pack
 
         public void markVacuum(long page)
         {
-            mapOfVacuums.put(new Long(page), new Long(((JournalPage) journalPage.getPageType()).getJournalPosition()));
+            mapOfVacuums.put(new Long(page), new Long(((JournalPage) journalPage.getPage()).getJournalPosition()));
         }
 
         public Pager getPager()
@@ -2682,7 +2684,7 @@ public class Pack
 
             // Allocate a block from the wilderness data page.
 
-            return ((DataPage) size.getPage().getPageType()).allocate(address, blockSize, pages);
+            return ((DataPage) size.getPage().getPage()).allocate(address, blockSize, pages);
         }
 
         public synchronized void rewrite(long address, ByteBuffer data)
@@ -2691,11 +2693,11 @@ public class Pack
             if (position != null)
             {
                 Position journalPage = pager.getPage(position.longValue(), new JournalPage());
-                ((JournalPage) journalPage.getPageType()).seek(position.longValue());
+                ((JournalPage) journalPage.getPage()).seek(position.longValue());
                 Operation operation = null;
                 do
                 {
-                    operation = ((JournalPage) journalPage.getPageType()).next();
+                    operation = ((JournalPage) journalPage.getPage()).next();
                     journalPage = operation.getJournalPage(pager, journalPage);
                 }
                 while (!operation.write(pager, address, data, pages));
@@ -2713,11 +2715,11 @@ public class Pack
             if (position != null)
             {
                 Position journalPage = pager.getPage(position.longValue(), new JournalPage());
-                ((JournalPage) journalPage.getPageType()).seek(position.longValue());
+                ((JournalPage) journalPage.getPage()).seek(position.longValue());
                 Operation operation = null;
                 do
                 {
-                    operation = ((JournalPage) journalPage.getPageType()).next();
+                    operation = ((JournalPage) journalPage.getPage()).next();
                     journalPage = operation.getJournalPage(pager, journalPage);
                 }
                 while (!operation.unwrite(journalPage, address));
@@ -2727,27 +2729,27 @@ public class Pack
         public void shift(long position, long address, ByteBuffer bytes)
         {
             Position page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPageType()).write(position, address, bytes, pages);
+            ((DataPage) page.getPage()).write(position, address, bytes, pages);
         }
 
         public void write(long position, long address, ByteBuffer bytes)
         {
             Position page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPageType()).write(position, address, bytes, pages);
+            ((DataPage) page.getPage()).write(position, address, bytes, pages);
         }
 
         public ByteBuffer read(long position, long address)
         {
             Position page = pager.getPage(position, new DataPage());
-            return ((DataPage) page.getPageType()).read(position, address);
+            return ((DataPage) page.getPage()).read(position, address);
         }
 
         public void write(Operation operation)
         {
-            if (!((JournalPage) journalPage.getPageType()).write(operation, pages))
+            if (!((JournalPage) journalPage.getPage()).write(operation, pages))
             {
                 Position nextJournalPage = pager.newSystemPage(new JournalPage(), pages);
-                ((JournalPage) nextJournalPage.getPageType()).next(nextJournalPage.getPosition());
+                ((JournalPage) nextJournalPage.getPage()).next(nextJournalPage.getValue());
                 journalPage = nextJournalPage;
                 write(operation);
             }
@@ -2792,12 +2794,12 @@ public class Pack
 
         public boolean write(Position page, long address, ByteBuffer data, DirtyPageMap pages)
         {
-            return ((DataPage) page.getPageType()).write(this, address, data, pages);
+            return ((DataPage) page.getPage()).write(this, address, data, pages);
         }
 
         public boolean free(Position page, long address, DirtyPageMap pages)
         {
-            return ((DataPage) page.getPageType()).free(this, address, pages);
+            return ((DataPage) page.getPage()).free(this, address, pages);
         }
 
         public void rewrite(long address, ByteBuffer data)
@@ -2871,7 +2873,7 @@ public class Pack
             if (size == null)
             {
                 size = new Size(pager.newSystemPage(new DataPage(), pages));
-                setOfPages.add(new Long(size.getPage().getPosition()));
+                setOfPages.add(new Long(size.getPage().getValue()));
             }
             Position page = size.getPage();
 
@@ -2890,7 +2892,7 @@ public class Pack
                 try
                 {
                     addressPage = pager.getPage(lastPointerPage, new AddressPage());
-                    address = ((AddressPage) addressPage.getPageType()).reserve(pages);
+                    address = ((AddressPage) addressPage.getPage()).reserve(pages);
                 }
                 finally
                 {
@@ -2908,7 +2910,7 @@ public class Pack
 
             mapOfAddresses.put(new Long(address), new Long(position));
 
-            journal.write(new Allocate(address, page.getPosition(), position, fullSize));
+            journal.write(new Allocate(address, page.getValue(), position, fullSize));
 
             return address;
         }
@@ -2959,12 +2961,12 @@ public class Pack
                         // Get the first page in the wilderness.
                         long wilderness = pager.getFirstInterimPage();
                         long goalPost = pager.getGoalPost();
-                        RelocatablePage first = (RelocatablePage) pager.getPage(wilderness, new RelocatablePage()).getPageType();
+                        RelocatablePage first = (RelocatablePage) pager.getPage(wilderness, new RelocatablePage()).getPage();
                         while (wilderness < goalPost)
                         {
                             try
                             {
-                                pageLocker.acquireExclusive(singleton(first.getPage().getPosition()));
+                                pageLocker.acquireExclusive(singleton(first.getPosition().getValue()));
                                 
                             }
                             finally
