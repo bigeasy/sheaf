@@ -324,7 +324,7 @@ public class Pack
         
         private Move next;
 
-        public Move(long from, long to)
+        public Move(long from, long to, Move next)
         {
             assert from != to || from == 0;
             
@@ -334,6 +334,7 @@ public class Pack
             this.from = from;
             this.to = to;
             this.lock = lock;
+            this.next = next;
         }
 
         public Lock getLock()
@@ -351,6 +352,11 @@ public class Pack
             return to;
         }
         
+        public Move getNext()
+        {
+            return next;
+        }
+
         public void setNext(Move next)
         {
             assert this.next == null;
@@ -1589,6 +1595,11 @@ public class Pack
         private final Map<Long, PageReference> mapOfPagesByPosition;
         
         /**
+         * A read/write lock that protects the end of the move list.
+         */
+        private final ReadWriteLock moveListLock;
+        
+        /**
          * A lock to ensure that only one mutator at a time is moving pages in
          * the interim page area.
          */
@@ -1630,11 +1641,11 @@ public class Pack
         private final ByteBuffer pointerPageCountBytes;
 
         private long firstSystemPage;
-        
-        private long goalPost;
-        
-        private Move headOfMoves;
 
+        private long goalPost;
+            
+        private Move headOfMoves;
+        
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, ByteBuffer journalBuffer, long firstPointer, int pointerPageCount)
         {
             this.file = file;
@@ -1653,11 +1664,12 @@ public class Pack
             this.setOfFreeUserPages = new TreeSet<Long>();
             this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
             this.queue = new ReferenceQueue<Position>();
-            this.headOfMoves = new Move(0, 0);
-            this.headOfMoves.getLock().unlock();
             this.goalPostLock = new ReentrantReadWriteLock();
             this.goalPost = firstSystemPage;
+            this.moveListLock = new ReentrantReadWriteLock();
             this.moveLock = new ReentrantLock();
+            this.headOfMoves = new Move(0, 0, null);
+            this.headOfMoves.getLock().unlock();
         }
         
         public long getFirstPointer()
@@ -1673,6 +1685,11 @@ public class Pack
         public ReadWriteLock getGoalPostLock()
         {
             return goalPostLock;
+        }
+        
+        public ReadWriteLock getMoveListLock()
+        {
+            return moveListLock;
         }
         
         public synchronized long getFirstInterimPage()
@@ -1693,6 +1710,18 @@ public class Pack
         public void setGoalPost(long goalPost)
         {
             this.goalPost = goalPost;
+        }
+        
+        public void add(Move move)
+        {
+            Move iterator = headOfMoves;
+            while (iterator.getNext() != null)
+            {
+                iterator = iterator.getNext();
+            }
+            iterator.setNext(move);
+            
+            headOfMoves = iterator;
         }
 
         /**
@@ -1991,7 +2020,6 @@ public class Pack
             }
         }
 
-        // FIXME Too many flavors of newSystemPage.
         public Position newSystemPage(Page pageType, DirtyPageMap pages)
         {
             // We pull from the end of the interim space to take pressure of of
@@ -2040,6 +2068,27 @@ public class Pack
         public long getPosition(long address)
         {
             return (long) Math.floor(address / pageSize);
+        }
+        
+        public long newStaticInterimPage()
+        {
+            long position = 0L;
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.size() != 0)
+                {
+                    position = setOfFreeInterimPages.last();
+                    if (position < goalPost)
+                    {
+                        setOfFreeInterimPages.remove(position);
+                    }
+                }
+            }
+            if (position < goalPost)
+            {
+                position = fromWilderness();
+            }
+            return position;
         }
     }
 
@@ -2904,8 +2953,6 @@ public class Pack
 
         public void commit()
         {
-            // TODO This is where I left off.
-
             // First, create necessary data pages? Or vacuum.
             
             // Consolidate pages. Eliminate the need for new pages.
@@ -2926,62 +2973,82 @@ public class Pack
 
             // If more pages are needed, then go and get them.
 
-            if (needed != 0)
+            // FIXME Remember that you do not need to record the moves yet,
+            // just add your own. Should not be a problem.
+            while (needed != 0)
             {
+                // FIXME Probably need to lock the move list. It cannot change.
+                // But then this lock locks out everyone else from locking the move list.
+                // So, maybe more liveness for other processes who are just writing.
                 pager.getMoveLock().lock();
                 Set<Long> setOfLocked = new HashSet<Long>();
                 pager.getGoalPostLock().readLock().lock();
                 try
                 {
-                    GOAL_POST: while (needed != 0)
+                    // Get the first page in the wilderness.
+                    try
                     {
-                        // Get the first page in the wilderness.
+                        // FIXME Deadlock of locking of page interleaves with 
+                        // locking of list.
+                        int acquired = 0;
+                        long wilderness = pager.getFirstInterimPage();
+                        long goalPost = pager.getGoalPost();
+                        while (wilderness < goalPost && acquired < needed)
+                        {
+                            pageLocker.acquireExclusive(singleton(wilderness));
+                            setOfLocked.add(wilderness);
+                            acquired++;
+                        }
+
+                        // TODO This is where I left off.
+                        Move move = null;
+                        for (long from : setOfLocked)
+                        {
+                            move = new Move(from, pager.newStaticInterimPage(), move);
+                        }
+
+                        pager.getMoveListLock().writeLock().lock();
                         try
                         {
-                            int acquired = 0;
-                            long wilderness = pager.getFirstInterimPage();
-                            long goalPost = pager.getGoalPost();
-                            while (wilderness < goalPost && acquired < needed)
-                            {
-                                pageLocker.acquireExclusive(singleton(wilderness));
-                                setOfLocked.add(wilderness);
-                                acquired++;
-                            }
-                            
-                            // TODO This is where I left off.
-                            for (int i = 0; i < acquired; i++)
-                            {
-                                // TODO Move the pages.
-                            }
-                            
-                            needed -= acquired;
-                            
-                            if (needed != 0)
-                            {
-                                pager.getGoalPostLock().readLock().unlock();
-                                try
-                                {
-                                    pager.getGoalPostLock().writeLock().lock();
-                                    try
-                                    {
-                                        pager.setGoalPost(pager.getGoalPost() + pager.getPageSize() * (long) (needed * 1.25));
-                                    }
-                                    finally
-                                    {
-                                        pager.getGoalPostLock().writeLock().unlock();
-                                    }
-                                }
-                                finally
-                                {
-                                    pager.getGoalPostLock().readLock().lock();
-                                }
-                            }
+                            pager.add(move);
                         }
                         finally
                         {
-                            pageLocker.releaseExclusive(setOfLocked);
-                            setOfLocked.clear();
+                            pager.getMoveListLock().writeLock().unlock();
                         }
+
+                        for (long position : setOfLocked)
+                        {
+                            RelocatablePage page = (RelocatablePage) pager.getPage(position, new RelocatablePage()).getPage();
+                        }
+
+                        needed -= acquired;
+
+                        if (needed != 0)
+                        {
+                            pager.getGoalPostLock().readLock().unlock();
+                            try
+                            {
+                                pager.getGoalPostLock().writeLock().lock();
+                                try
+                                {
+                                    pager.setGoalPost(pager.getGoalPost() + pager.getPageSize() * (long) (needed * 1.25));
+                                }
+                                finally
+                                {
+                                    pager.getGoalPostLock().writeLock().unlock();
+                                }
+                            }
+                            finally
+                            {
+                                pager.getGoalPostLock().readLock().lock();
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        pageLocker.releaseExclusive(setOfLocked);
+                        setOfLocked.clear();
                     }
                 }
                 finally
