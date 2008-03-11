@@ -314,15 +314,19 @@ public class Pack
         }
     }
     
-    private static final class Move
+    private static final class Move extends Operation
     {
-        private final long from;
+        private long from;
         
-        private final long to;
+        private long to;
         
-        private final Lock lock;
+        private Lock lock;
         
         private Move next;
+
+        public Move()
+        {
+        }
 
         public Move(long from, long to, Move next)
         {
@@ -362,6 +366,26 @@ public class Pack
             assert this.next == null;
 
             this.next = next;
+        }
+        
+        @Override
+        public int length()
+        {
+            return POSITION_SIZE * 2;
+        }
+        
+        @Override
+        public void read(ByteBuffer bytes)
+        {
+            from = bytes.getLong();
+            to = bytes.getLong();
+        }
+        
+        @Override
+        public void write(ByteBuffer bytes)
+        {
+            bytes.putLong(from);
+            bytes.putLong(to);
         }
     }
 
@@ -639,6 +663,7 @@ public class Pack
 
         public void load(Position position)
         {
+            this.position = position;
             position.setPage(this);
         }
 
@@ -671,6 +696,23 @@ public class Pack
 
         protected void initialize(ByteBuffer bytes)
         {
+        }
+
+        public void relocate(long to)
+        {
+            Position position = getPosition();
+            ByteBuffer bytes = position.getByteBuffer();
+            FileChannel fileChannel = position.getPager().getFileChannel();
+            bytes.clear();
+            try
+            {
+                fileChannel.write(bytes, to);
+            }
+            catch (IOException e)
+            {
+                e.printStackTrace();
+            }
+            position.setValue(to);
         }
     }
 
@@ -1483,6 +1525,11 @@ public class Pack
         }
     }
 
+    private interface Recorder
+    {
+        public void record(Operation operation);
+    }
+
     private final static class BySizeTable
     {
         private final int alignment;
@@ -1576,6 +1623,52 @@ public class Pack
         }
     }
     
+    private interface Returnable<T>
+    {
+        public T run();
+    }
+    
+    private final static class MoveList
+    {
+        private final Recorder recorder;
+
+        private final ReadWriteLock readWriteLock;
+
+        private Move headOfMoves;
+        
+        public MoveList()
+        {
+            this.recorder = null;
+            this.headOfMoves = new Move(0, 0, null);
+            this.readWriteLock = new ReentrantReadWriteLock();
+        }
+
+        public void add(Move move)
+        {
+            readWriteLock.writeLock().lock();
+            try
+            {
+                Move iterator = headOfMoves;
+                while (iterator.getNext() != null)
+                {
+                    iterator = iterator.getNext();
+                }
+                iterator.setNext(move);
+                
+                headOfMoves = iterator;
+            }
+            finally
+            {
+                readWriteLock.writeLock().unlock();
+            }
+        }
+        
+        public <T> T run(Returnable<T> hello)
+        {
+            return hello.run();
+        }
+    }
+
     private final static class Reverse<T extends Comparable<T>> implements Comparator<T>
     {
         public int compare(T left, T right)
@@ -1978,14 +2071,17 @@ public class Pack
             return page;
         }
 
-        private void removePageByPosition(long position)
+        private Position removePageByPosition(long position)
         {
             PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
+            Position p = null;
             if (existing != null)
             {
+                p = existing.get();
                 existing.enqueue();
                 collect();
             }
+            return p;
         }
 
         private void addPageByPosition(Position page)
@@ -2089,6 +2185,32 @@ public class Pack
                 position = fromWilderness();
             }
             return position;
+        }
+        
+        public boolean removeInterimPageIfFree(long position)
+        {
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.contains(position))
+                {
+                    setOfFreeUserPages.remove(position);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void relocate(Move head)
+        {
+            synchronized (mapOfPagesByPosition)
+            {
+                Position position = removePageByPosition(head.getFrom());
+                if (position != null)
+                {
+                    assert head.getTo() == position.getValue();
+                    addPageByPosition(position);
+                }
+            }
         }
     }
 
@@ -2846,7 +2968,7 @@ public class Pack
         {
         }
     }
-
+    
     public final static class Mutator
     {
         private final Pager pager;
@@ -2864,6 +2986,10 @@ public class Pack
         private long lastPointerPage;
 
         private final DirtyPageMap dirtyPages;
+        
+        private final List<Move> listOfMoves;
+        
+        private Move headOfMoves;
 
         public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap dirtyPages)
         {
@@ -2874,6 +3000,8 @@ public class Pack
             this.setOfPages = new HashSet<Long>();
             this.dirtyPages = dirtyPages;
             this.mapOfAddresses = new HashMap<Long, Long>();
+            this.listOfMoves = new LinkedList<Move>();
+            this.headOfMoves = pager.headOfMoves;
         }
 
         /**
@@ -2977,87 +3105,171 @@ public class Pack
             // just add your own. Should not be a problem.
             while (needed != 0)
             {
-                // FIXME Probably need to lock the move list. It cannot change.
-                // But then this lock locks out everyone else from locking the move list.
-                // So, maybe more liveness for other processes who are just writing.
-                pager.getMoveLock().lock();
-                Set<Long> setOfLocked = new HashSet<Long>();
-                pager.getGoalPostLock().readLock().lock();
-                try
+                needed = move(needed, null);
+            }
+        }
+    
+        /**
+         * Iterate through the pages in the interim area up to the relocatable
+         * page boundary.
+         * <p>
+         * If the page is in the list of free interim pages, remove it. We
+         * will not lock it. No other mutator will reference a free page
+         * because no other mutator is moving pages and no other mutator will
+         * be using it for work space.
+         * <p>
+         * If the page is not in the list of free interim pages, we do have to
+         * lock it.
+         */
+        private int gatherPages(int needed, SortedSet<Long> setOfInUse, Set<Long> setOfFree)
+        {
+            long position = pager.getFirstInterimPage();
+
+            // FIXME Deadlock of locking of page interleaves with
+            // locking of list.
+
+            int acquired = 0;
+            long goalPost = pager.getGoalPost();
+            while (position < goalPost && acquired < needed)
+            {
+                if (pager.removeInterimPageIfFree(position))
                 {
-                    // Get the first page in the wilderness.
+                    setOfFree.add(position);
+                }
+                else
+                {
+                    setOfInUse.add(position);
+                }
+                acquired++;
+                position += pager.getPageSize();
+            }
+            
+            return acquired;
+        }
+        
+        private void move(Move head)
+        {
+            while (head != null)
+            {
+                RelocatablePage page = (RelocatablePage) pager.getPage(head.getFrom(), new RelocatablePage()).getPage();
+                page.relocate(head.getTo());
+                // TODO Curious about this. Will this get out of sync? Do I have
+                // things locked down enough?
+                
+                // Need to look at each method in mutator and assure myself that
+                // no one else is reading the pager's page map. The
+                // syncrhoniation of the page map is needed between mutators for
+                // ordinary tasks. Here, though, everyone else should be all
+                // locked down.
+                pager.relocate(head);
+                head = head.getNext();
+            }  
+        }
+
+        private int move(int needed, Set<Long> setOfFreePages)
+        {
+            // FIXME Probably need to lock the move list. It cannot change. But
+            // then this lock locks out everyone else from locking the move
+            // list. So, maybe more liveness for other processes who are just
+            // writing.
+            pager.getMoveLock().lock();
+            SortedSet<Long> setOfInUse = new TreeSet<Long>();
+            SortedSet<Long> setOfLocked = new TreeSet<Long>();
+            Set<Long> setOfFree = new HashSet<Long>();
+            pager.getGoalPostLock().readLock().lock();
+            try
+            {
+                // FIXME Loop?
+
+                // Get the first page in the wilderness.
+
+                int acquired = gatherPages(needed, setOfInUse, setOfFree);
+
+                // For the set of pages in use, add the page to the move list.
+
+                Move head = null;
+                Move move = null;
+                Iterator<Long> inUse = setOfInUse.iterator();
+                if (inUse.hasNext())
+                {
+                    long from = inUse.next();
+                    head = move = new Move(from, pager.newStaticInterimPage(), null);
+                }
+                while (inUse.hasNext())
+                {
+                    long from = inUse.next();
+                    move = new Move(from, pager.newStaticInterimPage(), move);
+                }
+
+                if (head != null)
+                {
+                    pager.getMoveListLock().writeLock().lock();
                     try
                     {
-                        // FIXME Deadlock of locking of page interleaves with 
-                        // locking of list.
-                        int acquired = 0;
-                        long wilderness = pager.getFirstInterimPage();
-                        long goalPost = pager.getGoalPost();
-                        while (wilderness < goalPost && acquired < needed)
-                        {
-                            pageLocker.acquireExclusive(singleton(wilderness));
-                            setOfLocked.add(wilderness);
-                            acquired++;
-                        }
+                        pager.add(move);
+                    }
+                    finally
+                    {
+                        pager.getMoveListLock().writeLock().unlock();
+                    }
+                }
+                
+                // At this point, no one else is moving because we have a
+                // monitor that only allows one mutator to move at once. Other
+                // mutators may be referencing pages that are moved. Appending
+                // to the move list blocked referencing mutators with a latch on
+                // each move. We are clear to move the pages that are in use.
 
-                        // TODO This is where I left off.
-                        Move move = null;
-                        for (long from : setOfLocked)
-                        {
-                            move = new Move(from, pager.newStaticInterimPage(), move);
-                        }
+                if (head != null)
+                {
+                    move(head);
+                }
 
-                        pager.getMoveListLock().writeLock().lock();
+                needed -= acquired;
+
+                // FIXME Do we move the goal post here? Or do we move it when we
+                // get back? I mean, does it matter if two people move the goal
+                // post? We'll both add by the same amount.
+                
+                // FIXME Okay. Looks like locking the relocatable pages doesn't
+                // matter since any other commit is going to wait on completion
+                // of the move list. The move list is getting confusing.
+                
+                // We can mark pages as interim in the move list, then try to
+                // convince yourself that we can determine when our interim
+                // pages have moved. We're trying to avoid the case where a huge
+                // move will lock a lot of pages, but we want liveness for small
+                // moves that move only a few pages. This may be falling out of
+                // the move list. A list I have to maintain anyway.
+
+                if (needed != 0)
+                {
+                    pager.getGoalPostLock().readLock().unlock();
+                    try
+                    {
+                        pager.getGoalPostLock().writeLock().lock();
                         try
                         {
-                            pager.add(move);
+                            pager.setGoalPost(pager.getGoalPost() + pager.getPageSize() * (long) (needed * 1.25));
                         }
                         finally
                         {
-                            pager.getMoveListLock().writeLock().unlock();
-                        }
-
-                        for (long position : setOfLocked)
-                        {
-                            RelocatablePage page = (RelocatablePage) pager.getPage(position, new RelocatablePage()).getPage();
-                        }
-
-                        needed -= acquired;
-
-                        if (needed != 0)
-                        {
-                            pager.getGoalPostLock().readLock().unlock();
-                            try
-                            {
-                                pager.getGoalPostLock().writeLock().lock();
-                                try
-                                {
-                                    pager.setGoalPost(pager.getGoalPost() + pager.getPageSize() * (long) (needed * 1.25));
-                                }
-                                finally
-                                {
-                                    pager.getGoalPostLock().writeLock().unlock();
-                                }
-                            }
-                            finally
-                            {
-                                pager.getGoalPostLock().readLock().lock();
-                            }
+                            pager.getGoalPostLock().writeLock().unlock();
                         }
                     }
                     finally
                     {
-                        pageLocker.releaseExclusive(setOfLocked);
-                        setOfLocked.clear();
+                        pager.getGoalPostLock().readLock().lock();
                     }
                 }
-                finally
-                {
-                    pageLocker.releaseExclusive(setOfLocked);
-                    pager.getGoalPostLock().readLock().unlock();
-                    pager.getMoveLock().unlock();
-                }
             }
+            finally
+            {
+                pageLocker.releaseExclusive(setOfLocked);
+                pager.getGoalPostLock().readLock().unlock();
+                pager.getMoveLock().unlock();
+            }
+            return needed;
         }
 
         public ByteBuffer read(long address)
@@ -3065,24 +3277,67 @@ public class Pack
             return null;
         }
 
-        public void write(long address, ByteBuffer bytes)
+        public void write(final long address, final ByteBuffer bytes)
         {
-            // For now, the first test will write to an allocated block, so
-            // the write buffer is already there.
-            
-            Long position = mapOfAddresses.get(address);
-            if (position == null)
+            mutate(new Runnable()
             {
-            }
-            else
-            {
-                journal.write(position, address, bytes);
-            }
+                public void run()
+                {
+                    // For now, the first test will write to an allocated block, so
+                    // the write buffer is already there.
+                    
+                    Long position = mapOfAddresses.get(address);
+                    if (position == null)
+                    {
+                    }
+                    else
+                    {
+                        journal.write(position, address, bytes);
+                    }
+                }
+            });
         }
 
-        public void free(long address)
+        public void free(final long address)
         {
-
+            mutate(new Runnable()
+            {
+                public void run()
+                {
+                    
+                }
+            });
+        }
+        
+        private void mutate(Runnable runnable)
+        {
+            for (;;)
+            {
+                pager.getMoveListLock().readLock().lock();
+                try
+                {
+                    if (headOfMoves.next == null)
+                    {
+                        runnable.run();
+                        break;
+                    }
+                    else
+                    {
+                        headOfMoves = headOfMoves.next;
+                        headOfMoves.getLock().lock();
+                        headOfMoves.getLock().unlock();
+                        write(headOfMoves);
+                    }
+                }
+                finally
+                {
+                    pager.getMoveListLock().readLock().unlock();
+                }
+            }
+        }
+        
+        private void write(Operation operation)
+        {
         }
     }
 
