@@ -65,6 +65,10 @@ public class Pack
 
     private final static short SHIFT = 7;
 
+    private final static short MOVE = 8;
+    
+    private final static short MOVED = 9;
+
     private final static int NEXT_PAGE_SIZE = FLAG_SIZE + ADDRESS_SIZE;
 
     private final static int ADDRESS_PAGE_HEADER_SIZE = CHECKSUM_SIZE + POSITION_SIZE;
@@ -314,6 +318,25 @@ public class Pack
         }
     }
     
+    private static final class Moved extends Operation
+    {
+        @Override
+        public int length()
+        {
+            return FLAG_SIZE;
+        }
+        
+        @Override
+        public void write(ByteBuffer bytes)
+        {
+            bytes.putShort(MOVED);
+        }
+        
+        @Override
+        public void read(ByteBuffer bytes)
+        {
+        }
+    }
     private static final class Move extends Operation
     {
         private long from;
@@ -371,7 +394,7 @@ public class Pack
         @Override
         public int length()
         {
-            return POSITION_SIZE * 2;
+            return FLAG_SIZE + POSITION_SIZE * 2;
         }
         
         @Override
@@ -384,6 +407,7 @@ public class Pack
         @Override
         public void write(ByteBuffer bytes)
         {
+            bytes.putShort(MOVE);
             bytes.putLong(from);
             bytes.putLong(to);
         }
@@ -558,7 +582,7 @@ public class Pack
         private ReservationPage getReservationPage(DirtyPageMap dirtyPages)
         {
             Pager pager = position.getPager();
-            Position page = null;
+            ReservationPage page = null;
             if (reservations == 0L)
             {
                 page = pager.newSystemPage(new ReservationPage(), dirtyPages);
@@ -1525,9 +1549,9 @@ public class Pack
         }
     }
 
-    private interface Recorder
+    private interface MoveRecorder
     {
-        public void record(Operation operation);
+        public void record(Move move);
     }
 
     private final static class BySizeTable
@@ -1630,7 +1654,7 @@ public class Pack
     
     private final static class MoveList
     {
-        private final Recorder recorder;
+        private final MoveRecorder recorder;
 
         private final ReadWriteLock readWriteLock;
 
@@ -1643,6 +1667,12 @@ public class Pack
             this.readWriteLock = new ReentrantReadWriteLock();
         }
 
+        public MoveList(MoveRecorder recorder, MoveList listOfMoves)
+        {
+            this.recorder = recorder;
+            this.headOfMoves = listOfMoves.headOfMoves;
+            this.readWriteLock = listOfMoves.readWriteLock;
+        }
         public void add(Move move)
         {
             readWriteLock.writeLock().lock();
@@ -1663,9 +1693,57 @@ public class Pack
             }
         }
         
-        public <T> T run(Returnable<T> hello)
+        public <T> T mutate(Returnable<T> returnable)
         {
-            return hello.run();
+            for (;;)
+            {
+                readWriteLock.readLock().lock();
+                try
+                {
+                    if (headOfMoves.next == null)
+                    {
+                        return returnable.run();
+                    }
+                    else
+                    {
+                        headOfMoves = headOfMoves.next;
+                        headOfMoves.getLock().lock();
+                        headOfMoves.getLock().unlock();
+                        recorder.record(headOfMoves);
+                    }
+                }
+                finally
+                {
+                    readWriteLock.readLock().unlock();
+                }
+            }
+        }
+        
+        public void mutate(Runnable runnable)
+        {
+            for (;;)
+            {
+                readWriteLock.readLock().lock();
+                try
+                {
+                    if (headOfMoves.next == null)
+                    {
+                        runnable.run();
+                        break;
+                    }
+                    else
+                    {
+                        headOfMoves = headOfMoves.next;
+                        headOfMoves.getLock().lock();
+                        headOfMoves.getLock().unlock();
+                        recorder.record(headOfMoves);
+                    }
+                }
+                finally
+                {
+                    readWriteLock.readLock().unlock();
+                }
+            }
         }
     }
 
@@ -1737,7 +1815,7 @@ public class Pack
 
         private long goalPost;
             
-        private Move headOfMoves;
+        private final MoveList listOfMoves;
         
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, ByteBuffer journalBuffer, long firstPointer, int pointerPageCount)
         {
@@ -1761,8 +1839,7 @@ public class Pack
             this.goalPost = firstSystemPage;
             this.moveListLock = new ReentrantReadWriteLock();
             this.moveLock = new ReentrantLock();
-            this.headOfMoves = new Move(0, 0, null);
-            this.headOfMoves.getLock().unlock();
+            this.listOfMoves = new MoveList();
         }
         
         public long getFirstPointer()
@@ -1805,18 +1882,11 @@ public class Pack
             this.goalPost = goalPost;
         }
         
-        public void add(Move move)
+        public MoveList getMoveList()
         {
-            Move iterator = headOfMoves;
-            while (iterator.getNext() != null)
-            {
-                iterator = iterator.getNext();
-            }
-            iterator.setNext(move);
-            
-            headOfMoves = iterator;
+            return listOfMoves;
         }
-
+        
         /**
          * Initialize the 
          */
@@ -2096,27 +2166,36 @@ public class Pack
             mapOfPagesByPosition.put(intended.getPosition(), intended);
         }
 
-        public Position getPage(long position, Page pageType)
+        public Page getPage(long value, Page page)
         {
+            Position position = null;
             synchronized (mapOfPagesByPosition)
             {
-                position = (long) Math.floor(position - (position % pageSize));
-                Position page = getPageByPosition(position);
-                if (page == null)
+                value = (long) Math.floor(value - (value % pageSize));
+                position = getPageByPosition(value);
+                if (position == null)
                 {
-                    page = new Position(this, position);
-                    pageType.load(page);
-                    addPageByPosition(page);
+                    position = new Position(this, value);
+                    page.load(position);
+                    addPageByPosition(position);
                 }
-                else if(page.getPage().getClass() != pageType.getClass())
+                // FIXME Is this thread safe?
+                else if(position.getPage().getClass() != page.getClass())
                 {
-                    pageType.load(page);
+                    page.load(position);
                 }
-                return page;
             }
+            synchronized (position)
+            {
+                if (!position.getPage().getClass().equals(page.getClass()))
+                {
+                    page.load(position);
+                }
+            }
+            return position.getPage();
         }
 
-        public Position newSystemPage(Page pageType, DirtyPageMap pages)
+        public Page newSystemPage(Page pageType, DirtyPageMap pages)
         {
             // We pull from the end of the interim space to take pressure of of
             // the durable pages, which are more than likely multiply in number
@@ -2525,6 +2604,12 @@ public class Pack
     private final static class Vacuum
     extends Operation
     {
+        private int offset;
+        
+        private long source;
+        
+        private long destination;
+
         public void commit(Pager pager, Journal journal, DirtyPageMap pages)
         {
         }
@@ -2631,6 +2716,27 @@ public class Pack
         public ByteBuffer getByteBuffer(Pager pager, ByteBuffer bytes)
         {
             return bytes;
+        }
+    }
+
+    private final static class MoveEntry
+    extends Operation
+    {
+        @Override
+        public int length()
+        {
+            return 0;
+        }
+        
+        @Override
+        public void write(ByteBuffer bytes)
+        {
+            
+        }
+        
+        @Override
+        public void read(ByteBuffer bytes)
+        {
         }
     }
 
@@ -2744,7 +2850,7 @@ public class Pack
 
         private final LinkedList<Position> listOfPages;
 
-        private final DirtyPageMap pages;
+        private final DirtyPageMap dirtyPages;
 
         /**
          * A table of the wilderness data pages used by the journal to create
@@ -2754,9 +2860,7 @@ public class Pack
 
         private long journalStart;
 
-        private Position journalPage;
-
-        private final Map<Long, Long> mapOfRelocations;
+        private JournalPage journalPage;
 
         private final Map<Long, Long> mapOfVacuums;
 
@@ -2771,14 +2875,23 @@ public class Pack
          */
         public Journal(Pager pager, DirtyPageMap pages)
         {
-            this.journalPage = pager.newSystemPage(new JournalPage(), pages);
-            this.journalStart = ((JournalPage) journalPage.getPage()).getJournalPosition();
+            this.journalPage = (JournalPage) pager.newSystemPage(new JournalPage(), pages).getPage();
+            this.journalStart = journalPage.getJournalPosition();
             this.pager = pager;
             this.listOfPages = new LinkedList<Position>();
-            this.pages = pages;
+            this.dirtyPages = pages;
             this.pagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
-            this.mapOfRelocations = new HashMap<Long, Long>();
             this.mapOfVacuums = new HashMap<Long, Long>();
+        }
+        
+        public long getJournalStart()
+        {
+            return journalStart;
+        }
+        
+        public long getJournalPosition()
+        {
+            return journalPage.getJournalPosition();
         }
 
         public boolean free(Position page, long address, DirtyPageMap pages)
@@ -2802,7 +2915,7 @@ public class Pack
 
         public void markVacuum(long page)
         {
-            mapOfVacuums.put(new Long(page), new Long(((JournalPage) journalPage.getPage()).getJournalPosition()));
+            mapOfVacuums.put(new Long(page), new Long(journalPage.getJournalPosition()));
         }
 
         public Pager getPager()
@@ -2831,7 +2944,7 @@ public class Pack
             Size size = pagesBySize.bestFit(fullSize);
             if (size == null)
             {
-                size = new Size(pager.newSystemPage(new DataPage(), pages));
+                size = new Size(pager.newSystemPage(new DataPage(), dirtyPages));
                 listOfPages.add(size.getPage());
             }
 
@@ -2842,7 +2955,7 @@ public class Pack
 
             // Allocate a block from the wilderness data page.
 
-            return ((DataPage) size.getPage().getPage()).allocate(address, blockSize, pages);
+            return ((DataPage) size.getPage().getPage()).allocate(address, blockSize, dirtyPages);
         }
 
         public synchronized void rewrite(long address, ByteBuffer data)
@@ -2858,7 +2971,7 @@ public class Pack
                     operation = ((JournalPage) journalPage.getPage()).next();
                     journalPage = operation.getJournalPage(pager, journalPage);
                 }
-                while (!operation.write(pager, address, data, pages));
+                while (!operation.write(pager, address, data, dirtyPages));
             }
         }
 
@@ -2887,13 +3000,13 @@ public class Pack
         public void shift(long position, long address, ByteBuffer bytes)
         {
             Position page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPage()).write(position, address, bytes, pages);
+            ((DataPage) page.getPage()).write(position, address, bytes, dirtyPages);
         }
 
         public void write(long position, long address, ByteBuffer bytes)
         {
             Position page = pager.getPage(position, new DataPage());
-            ((DataPage) page.getPage()).write(position, address, bytes, pages);
+            ((DataPage) page.getPage()).write(position, address, bytes, dirtyPages);
         }
 
         public ByteBuffer read(long position, long address)
@@ -2904,24 +3017,13 @@ public class Pack
 
         public void write(Operation operation)
         {
-            if (!((JournalPage) journalPage.getPage()).write(operation, pages))
+            if (!journalPage.write(operation, dirtyPages))
             {
-                Position nextJournalPage = pager.newSystemPage(new JournalPage(), pages);
-                ((JournalPage) nextJournalPage.getPage()).next(nextJournalPage.getValue());
+                JournalPage nextJournalPage = (JournalPage) pager.newSystemPage(new JournalPage(), dirtyPages).getPage();
+                journalPage.write(new NextOperation(nextJournalPage.getJournalPosition()), dirtyPages);
                 journalPage = nextJournalPage;
                 write(operation);
             }
-        }
-
-        public long terminate()
-        {
-            for (Map.Entry<Long, Long> entry: mapOfRelocations.entrySet())
-            {
-                Long from = (Long) entry.getKey();
-                Long to = (Long) entry.getValue();
-                write(new Relocate(from.longValue(), to.longValue()));
-            }
-            return 0;
         }
     }
 
@@ -2969,7 +3071,7 @@ public class Pack
         }
     }
     
-    public final static class Mutator
+    public final static class Mutator implements MoveRecorder
     {
         private final Pager pager;
         
@@ -2987,9 +3089,9 @@ public class Pack
 
         private final DirtyPageMap dirtyPages;
         
-        private final List<Move> listOfMoves;
+        private final List<Move> listOfMoved;
         
-        private Move headOfMoves;
+        private final MoveList listOfMoves;
 
         public Mutator(Pager pager, PageLocker pageLocker, Journal journal, DirtyPageMap dirtyPages)
         {
@@ -3000,8 +3102,8 @@ public class Pack
             this.setOfPages = new HashSet<Long>();
             this.dirtyPages = dirtyPages;
             this.mapOfAddresses = new HashMap<Long, Long>();
-            this.listOfMoves = new LinkedList<Move>();
-            this.headOfMoves = pager.headOfMoves;
+            this.listOfMoved = new LinkedList<Move>();
+            this.listOfMoves = new MoveList(this, pager.getMoveList());
         }
 
         /**
@@ -3085,7 +3187,7 @@ public class Pack
             
             // Consolidate pages. Eliminate the need for new pages.
 
-            Map<Long, Size> mapOfSizes = new TreeMap<Long, Size>(); 
+            final Map<Long, Size> mapOfSizes = new TreeMap<Long, Size>(); 
             pager.pagesBySize.join(pagesBySize, mapOfSizes);
             
             // Determine the number of empty pages needed.
@@ -3094,7 +3196,7 @@ public class Pack
             
             // Obtain free pages from the available free pages in the pager.
 
-            Set<Long> setOfEmptyPages = new HashSet<Long>();
+            final Set<Long> setOfEmptyPages = new HashSet<Long>();
             pager.newUserDataPages(needed, setOfEmptyPages);
 
             needed -= setOfEmptyPages.size();
@@ -3107,6 +3209,42 @@ public class Pack
             {
                 needed = move(needed, null);
             }
+            
+            listOfMoves.mutate(new Runnable()
+            {
+                public void run()
+                {
+                    // Grab the position. This is where we start.
+                    long position = journal.getJournalPosition();
+                    
+                    // Create the list of moves.
+                    for (Move move: listOfMoved)
+                    {
+                        record(move);
+                    }
+                    
+                    // Create an operation for all the vacuums.
+                    for (Map.Entry<Long, Size> entry: mapOfSizes.entrySet())
+                    {
+                        DataPage dataPage = (DataPage) pager.getPage(entry.getKey(), new DataPage()).getPage();
+                        journal.write(new Vacuum());
+                    }
+                    
+                    // Insert a break, so that we can run vacuums ahead of
+                    // everything else during recovery.
+                    
+                    // TODO Abstract journal replay out, so it can be used
+                    // here and during recovery.
+                    
+                    // Create a next pointer to point at the start of operations.
+                    
+                    // Obtain a journal header and record the head.
+                    
+                    // First do the vacuums.
+                    
+                    // Then do everything else.
+                }
+            });
         }
     
         /**
@@ -3203,15 +3341,7 @@ public class Pack
 
                 if (head != null)
                 {
-                    pager.getMoveListLock().writeLock().lock();
-                    try
-                    {
-                        pager.add(move);
-                    }
-                    finally
-                    {
-                        pager.getMoveListLock().writeLock().unlock();
-                    }
+                    pager.getMoveList().add(move);
                 }
                 
                 // At this point, no one else is moving because we have a
@@ -3279,7 +3409,7 @@ public class Pack
 
         public void write(final long address, final ByteBuffer bytes)
         {
-            mutate(new Runnable()
+            listOfMoves.mutate(new Runnable()
             {
                 public void run()
                 {
@@ -3300,7 +3430,7 @@ public class Pack
 
         public void free(final long address)
         {
-            mutate(new Runnable()
+            listOfMoves.mutate(new Runnable()
             {
                 public void run()
                 {
@@ -3309,34 +3439,13 @@ public class Pack
             });
         }
         
-        private void mutate(Runnable runnable)
+        public void record(Move move)
         {
-            for (;;)
-            {
-                pager.getMoveListLock().readLock().lock();
-                try
-                {
-                    if (headOfMoves.next == null)
-                    {
-                        runnable.run();
-                        break;
-                    }
-                    else
-                    {
-                        headOfMoves = headOfMoves.next;
-                        headOfMoves.getLock().lock();
-                        headOfMoves.getLock().unlock();
-                        write(headOfMoves);
-                    }
-                }
-                finally
-                {
-                    pager.getMoveListLock().readLock().unlock();
-                }
-            }
+            listOfMoved.add(move);
+            record(new Moved());
         }
-        
-        private void write(Operation operation)
+
+        public void record(Operation operation)
         {
         }
     }
