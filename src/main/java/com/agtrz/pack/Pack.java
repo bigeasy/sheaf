@@ -3120,7 +3120,7 @@ public class Pack
                     // Create the list of moves.
                     for (Move move: listOfMoved)
                     {
-                        record(move);
+                        record((Operation) move);
                     }
                     
                     // Create an operation for all the vacuums.
