@@ -4,6 +4,7 @@ package com.agtrz.pack;
 import java.io.File;
 import java.io.IOException;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 public class PackTestCase
@@ -25,6 +26,13 @@ public class PackTestCase
     @Test public void create()
     {
         new Pack.Creator().create(newFile()).close();
+    }
+    
+    @Ignore @Test public void reopen()
+    {
+        File file = newFile();
+        new Pack.Creator().create(file).close();
+        new Pack.Opener().open(file).close();
     }
 }
 

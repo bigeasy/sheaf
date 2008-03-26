@@ -313,6 +313,14 @@ public class Pack
         }
     }
     
+    public final static class Opener
+    {
+        public Pack open(File file)
+        {
+            return null;
+        }
+    }
+
     private static final class ShiftMove extends Operation
     {
         @Override
@@ -1534,7 +1542,7 @@ public class Pack
     private interface MoveRecorder
     {
         public boolean contains(long position);
-        // FIXME Add a test to see if the recording is necessary.
+
         public void record(Move move);
     }
 
