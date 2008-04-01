@@ -95,15 +95,38 @@ public class Pack
     public Mutator mutate()
     {
         // FIXME Need to lock the move map shared.
-        DirtyPageMap dirtyPages = new DirtyPageMap(pager, 16);
-        MoveNode moveNode = new MoveNode(new Move(0, 0));
-        PageRecorder pageRecorder = new PageRecorder();
-        Journal journal = new Journal(pager, pageRecorder, moveNode, dirtyPages);
-        return new Mutator(pager, pageRecorder, journal, moveNode, dirtyPages);
+        final PageRecorder pageRecorder = new PageRecorder();
+        final MoveList listOfMoves = new MoveList(pageRecorder, pager.getMoveList());
+        return listOfMoves.mutate(new Returnable<Mutator>()
+        {
+            public Mutator run()
+            {
+                MoveNode moveNode = new MoveNode(new Move(0, 0));
+                DirtyPageMap dirtyPages = new DirtyPageMap(pager, 16);
+                Journal journal = new Journal(pager, pageRecorder, moveNode, dirtyPages);
+                return new Mutator(pager, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+            }
+        });
     }
 
     public void close()
     {
+        pager.getCompactLock().writeLock().lock();
+        try
+        {
+            try
+            {
+                pager.getFileChannel().close();
+            }
+            catch (IOException e)
+            {
+                throw new Danger("io.close", e);
+            }
+        }
+        finally
+        {
+            pager.getCompactLock().writeLock().unlock();
+        }
     }
 
     private static FileChannel newFileChannel(File file)
@@ -1498,7 +1521,7 @@ public class Pack
         }
     }
 
-    private final static class PageRecorder
+    private final static class PageRecorder implements MoveRecorder
     {
         private final Set<Long> setOfInterimPages;
         
@@ -2212,6 +2235,7 @@ public class Pack
             {
                 if (setOfFreeInterimPages.size() > 0)
                 {
+                    // FIXME Not removing!
                     Long next = (Long) setOfFreeInterimPages.iterator().next();
                     value = next.longValue();
                 }
@@ -2225,10 +2249,15 @@ public class Pack
                 value = fromWilderness();
             }
 
+            
             // FIXME A concurrency question, what if this interim page is in the
             // midst of a move? If we removed it from the set of interim pages,
-            // then a moving thread might be attempting to create a relocateble
+            // then a moving thread might be attempting to create a relocatable
             // page and moving the page. We need to lock it!?
+            
+            // FIXME Something is telling me that nothing can move while you
+            // adding a page to the position map. Once a page is in the position
+            // map, then you have the one reference.
 
             Position position = new Position(this, value);
 
@@ -2961,13 +2990,26 @@ public class Pack
         private JournalPage journalPage;
 
         /**
-         * Create a new journal associated with the given pager whose page
-         * writes are managed by the given dirty page map. The dirty page map
-         * will record the creation of wilderness pages.
-         *
-         * @param pager The pager of the mutator for the journal.
-         * @param dirtyPages A dirty page map where page writes are cached
-         * before being written to disk.
+         * Create a new journal to record mutations. The dirty page map will
+         * record the creation of wilderness pages.
+         * <p>
+         * The move node is necessary to create a movable position that will
+         * track the position of journal head. This move node is the same move
+         * node that is at the head of the mutator.
+         * <p>
+         * We will use the page recorder to record which pages we're using as
+         * journal pages.
+         * 
+         * @param pager
+         *            The pager of the mutator for the journal.
+         * @param pageRecorder
+         *            Records the allocation of new journal pages.
+         * @param moveNode
+         *            Needed to create a movable position that will reference
+         *            the first journal page.
+         * @param dirtyPages
+         *            A dirty page map where page writes are cached before
+         *            being written to disk.
          */
         public Journal(Pager pager, PageRecorder pageRecorder, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
@@ -3289,7 +3331,7 @@ public class Pack
         
         private final MoveList listOfMoves;
 
-        public Mutator(Pager pager, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
+        public Mutator(Pager pager, MoveList listOfMoves, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
             this.pager = pager;
             this.journal = journal;
@@ -3298,7 +3340,7 @@ public class Pack
             this.dirtyPages = dirtyPages;
             this.mapOfAddresses = new HashMap<Long, MovablePosition>();
             this.moveRecorder = new MutateMoveRecorder(pageRecorder, journal, moveNode);
-            this.listOfMoves = new MoveList(moveRecorder, pager.getMoveList());
+            this.listOfMoves = new MoveList(moveRecorder, listOfMoves);
             this.pageRecorder = pageRecorder;
         }
         
