@@ -639,7 +639,7 @@ public class Pack
                 bytes.putLong(i * ADDRESS_SIZE, 0L);
             }
 
-            pages.put(position);
+            pages.add(position);
 
             this.position = position;
         }
@@ -708,7 +708,7 @@ public class Pack
                 
                 bytes.putLong(CHECKSUM_SIZE, 0L);
 
-                dirtyPages.put(getPosition());
+                dirtyPages.add(getPosition());
             }
             else
             {
@@ -802,7 +802,7 @@ public class Pack
                 }
             }
             
-            dirtyPages.put(getPosition());
+            dirtyPages.add(getPosition());
         }
     }
 
@@ -874,7 +874,7 @@ public class Pack
             this.count = 0;
             this.remaining = position.getPager().getPageSize() - DATA_PAGE_HEADER_SIZE;
             
-            dirtyPages.put(position);
+            dirtyPages.add(position);
         }
 
         public void load(Position position)
@@ -1082,7 +1082,7 @@ public class Pack
                 }
             }
 
-            dirtyPages.put(getPosition());
+            dirtyPages.add(getPosition());
 
             return position;
         }
@@ -1092,6 +1092,7 @@ public class Pack
         {
             synchronized (getPosition())
             {
+                // FIXME I forgot what this was about.
                 while (vacuumed)
                 {
                     try
@@ -1109,7 +1110,7 @@ public class Pack
                     bytes.putLong(address);
                     bytes.limit(size - POSITION_SIZE);
                     bytes.put(data);
-                    pages.put(getPosition());
+                    pages.add(getPosition());
                     return true;
                 }
                 return false;
@@ -1117,7 +1118,8 @@ public class Pack
         }
 
         public void write(long position, long address, ByteBuffer data, DirtyPageMap dirtyPages)
-        {// FIXME Seek.
+        {
+            // FIXME Seek.
             synchronized (getPosition())
             {
                 ByteBuffer bytes = getPosition().getByteBuffer();
@@ -1130,7 +1132,7 @@ public class Pack
                 }
                 bytes.limit(bytes.position() + (size - BLOCK_HEADER_SIZE));
                 bytes.put(data);
-                dirtyPages.put(getPosition());
+                dirtyPages.add(getPosition());
             }
         }
 
@@ -1168,7 +1170,7 @@ public class Pack
                     }
                     bytes.putInt(offset, size);
 
-                    pages.put(getPosition());
+                    pages.add(getPosition());
                 }
                 return true;
             }
@@ -1190,7 +1192,7 @@ public class Pack
 
                     addressPage.set(address, getPosition().getValue() + offset, dirtyPages);
 
-                    dirtyPages.put(addressPage.getPosition());
+                    dirtyPages.add(addressPage.getPosition());
 
                     bytes.position(bytes.position() + length - POSITION_SIZE);
                 }
@@ -1238,7 +1240,7 @@ public class Pack
                 }
             }
             // FIXME No hard reference to bytes.
-            dirtyPages.put(getPosition());
+            dirtyPages.add(getPosition());
         }
 
         public void commit(DataPage dataPage, DirtyPageMap dirtyPages)
@@ -1331,7 +1333,7 @@ public class Pack
                 {
                     operation.write(bytes);
                     offset = bytes.position();
-                    dirtyPages.put(getPosition());
+                    dirtyPages.add(getPosition());
                     return true;
                 }
                 
@@ -1417,7 +1419,7 @@ public class Pack
                 bytes.put((byte) 0);
             }
 
-            dirtyPages.put(page);
+            dirtyPages.add(page);
         }
 
         public void load(Position page)
@@ -1457,7 +1459,7 @@ public class Pack
                 if (bytes.get(offset) == 0) 
                 {
                     bytes.put(offset, (byte) 1);
-                    dirtyPages.put(getPosition());
+                    dirtyPages.add(getPosition());
                     reserved++;
                     return true;
                 }
@@ -1481,7 +1483,7 @@ public class Pack
                 if (bytes.get(offset) == 1)
                 {
                     bytes.put(offset, (byte) 0);
-                    dirtyPages.put(getPosition());
+                    dirtyPages.add(getPosition());
                     reserved--;
                 }
                 assert bytes.get(offset) == 0;
@@ -1837,7 +1839,7 @@ public class Pack
          * that we can quickly obtain the last free interim page within interim
          * page space.
          * <p>
-         * This set of free iterim pages guards against overrites by a simple
+         * This set of free interim pages guards against overwrites by a simple
          * method. If the position is in the set of free interim pages, then it
          * is free, if not it is not free. System pages must be allocated while
          * the move lock is locked for reading, or locked for writing in the
@@ -2440,8 +2442,7 @@ public class Pack
             this.capacity = capacity;
         }
 
-        // FIXME Rename add.
-        public void put(Position page)
+        public void add(Position page)
         {
             // FIXME Make calls to flush explicit.
             mapOfPages.put(page.getValue(), page);
@@ -3664,9 +3665,6 @@ public class Pack
         private long gatherPages(CommitMoveRecorder commit, Set<Long> setOfInUse, Set<Long> setOfGathered)
         {
             long position = pager.getFirstInterimPage();
-
-            // FIXME Deadlock of locking of page interleaves with
-            // locking of list.
 
             while (pageRecorder.getAllocationPageSet().size() != 0)
             {
