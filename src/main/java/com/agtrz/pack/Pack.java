@@ -82,6 +82,12 @@ public class Pack
 
     private final Pager pager;
     
+    /**
+     * Create a new pack from the specified pager.
+     * <p>
+     * One of these days, I'll have to determine if the pager class contents
+     * could be within the pack.
+     */
     public Pack(Pager pager)
     {
         this.pager = pager;
@@ -94,7 +100,6 @@ public class Pack
      */
     public Mutator mutate()
     {
-        // FIXME Need to lock the move map shared.
         final PageRecorder pageRecorder = new PageRecorder();
         final MoveList listOfMoves = new MoveList(pageRecorder, pager.getMoveList());
         return listOfMoves.mutate(new Returnable<Mutator>()
@@ -109,6 +114,12 @@ public class Pack
         });
     }
 
+    /**
+     * Soft close of the pack will wait until all mutators commit or rollback
+     * and then compact the pack before closing the file.
+     * <p>
+     * FIXME This is an incomplete implementation of close.
+     */
     public void close()
     {
         pager.getCompactLock().writeLock().lock();
@@ -129,6 +140,12 @@ public class Pack
         }
     }
 
+    /**
+     * Create a new file channel from the specified file.
+     * 
+     * @param file The file to read and write.
+     * @return A file channel that reads and writes the specified file.
+     */
     private static FileChannel newFileChannel(File file)
     {
         RandomAccessFile raf;
@@ -1819,6 +1836,23 @@ public class Pack
          * A sorted set of of free interim pages sorted in descending order so
          * that we can quickly obtain the last free interim page within interim
          * page space.
+         * <p>
+         * This set of free iterim pages guards against overrites by a simple
+         * method. If the position is in the set of free interim pages, then it
+         * is free, if not it is not free. System pages must be allocated while
+         * the move lock is locked for reading, or locked for writing in the
+         * case of removing free pages from the start of the interim page area
+         * when the user area expands.
+         * <p>
+         * Question: Can't an interim page allocated from the set of free pages
+         * be moved while we are first writing to it?
+         * <p>
+         * Answer: No, because the moving mutator will have to add the moves to
+         * the move list before it can move the pages. Adding to move list
+         * requires an exclusive lock on the move list.
+         * <p>
+         * Remember: Only one mutator can move pages in the interim area at a
+         * time.
          */
         private final SortedSet<Long> setOfFreeInterimPages;
 
@@ -2220,8 +2254,42 @@ public class Pack
             return (P) position.getPage();
         }
 
+        private long popFreeInterimPage()
+        {
+            long position = 0L;
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.size() > 0)
+                {
+                    position = setOfFreeInterimPages.last();
+                    setOfFreeInterimPages.remove(position);
+                }
+            }
+            return position;
+        }
+
+        /**
+         * Allocate a new interim position that is initialized by the
+         * specified page strategy.
+         * <p>
+         * This method can only be called from within one of the
+         * <code>MoveList.mutate</code> methods. A page obtained from the set of
+         * free interim pages will not be moved while the move list is locked
+         * shared. 
+         * 
+         * @param <T>
+         *            The page strategy for the position.
+         * @param page
+         *            An instance of the page strategy that will initialize
+         *            the page at the position.
+         * @param dirtyPages
+         *            A map of dirty pages.
+         * @return A new interim page.
+         */
         public <T extends Page> T newSystemPage(T page, DirtyPageMap dirtyPages)
         {
+            // FIXME Rename newInterimPage.
+
             // We pull from the end of the interim space to take pressure of of
             // the durable pages, which are more than likely multiply in number
             // and move interim pages out of the way. We could change the order
@@ -2229,17 +2297,7 @@ public class Pack
             // from the front of the interim page space, if we want to rewind
             // the interim page space and shrink the file more frequently.
 
-            long value = 0L;
-
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.size() > 0)
-                {
-                    // FIXME Not removing!
-                    Long next = (Long) setOfFreeInterimPages.iterator().next();
-                    value = next.longValue();
-                }
-            }
+            long value = popFreeInterimPage();
 
             // If we do not have a free interim page available, we will obtain
             // create one out of the wilderness.
@@ -2248,16 +2306,6 @@ public class Pack
             {
                 value = fromWilderness();
             }
-
-            
-            // FIXME A concurrency question, what if this interim page is in the
-            // midst of a move? If we removed it from the set of interim pages,
-            // then a moving thread might be attempting to create a relocatable
-            // page and moving the page. We need to lock it!?
-            
-            // FIXME Something is telling me that nothing can move while you
-            // adding a page to the position map. Once a page is in the position
-            // map, then you have the one reference.
 
             Position position = new Position(this, value);
 
@@ -2276,19 +2324,23 @@ public class Pack
             return (long) Math.floor(address / pageSize);
         }
         
-        public long newStaticInterimPage()
+        /**
+         * Return an interim page for use as a move destination.
+         * <p>
+         * Question: How do we ensure that free interim pages do not slip into
+         * the user data page section? That is, how do we ensure that we're
+         * not moving an interium page to a spot that also needs to move?
+         * <p>
+         * Simple. We gather all the pages that need to move first. Then we
+         * assign blank pages only to the pages that are in use and need to
+         * move. See <code>tryMove</code> for more discussion.
+         * 
+         * @return A blank position in the interim area that for use as the
+         *         target of a move.
+         */
+        public long newBlankInterimPage()
         {
-            long position = 0L;
-            // FIXME How do we ensure that free interim pages do not slip
-            // into the user data page section.
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.size() != 0)
-                {
-                	position = setOfFreeInterimPages.last();
-                    setOfFreeInterimPages.remove(position);
-                }
-            }
+            long position = popFreeInterimPage();
             if (position == 0L)
             {
                 position = fromWilderness();
@@ -2296,6 +2348,16 @@ public class Pack
             return position;
         }
         
+        /**
+         * Remove the interim page from the set of free interim pages if the
+         * page is in the set of free interim pages. Returns true if the page
+         * was in the set of free interim pages.
+         * <p>
+         * This method can only be called while holding the expand lock in the
+         * pager class.
+         *
+         * @param position The position of the iterim free page.
+         */
         public boolean removeInterimPageIfFree(long position)
         {
             synchronized (setOfFreeInterimPages)
@@ -3357,69 +3419,76 @@ public class Pack
         public long allocate(int blockSize)
         {
             // Add the header size to the block size.
-
-            int fullSize = blockSize + BLOCK_HEADER_SIZE;
-
-            // This is unimplemented: Creating a linked list of blocks when the
-            // block size exceeds the size of a page.
-
-            int pageSize = pager.getPageSize();
-            if (fullSize + DATA_PAGE_HEADER_SIZE > pageSize)
+                    
+            final int fullSize = blockSize + BLOCK_HEADER_SIZE;
+           
+            return listOfMoves.mutate(new Returnable<Long>()
             {
-                // Recurse.
-            }
-
-            // If we already have a wilderness data page that will fit the
-            // block, use that page. Otherwise, allocate a new wilderness data
-            // page for allocation.
-
-            DataPage allocPage = null;
-            long alloc = allocPagesBySize.bestFit(fullSize);
-            if (alloc == 0L)
-            {
-                allocPage = pager.newSystemPage(new DataPage(), dirtyPages);
-                moveRecorder.getPageRecorder().getAllocationPageSet().add(allocPage.getPosition().getValue());
-            }
-            else
-            {
-                allocPage = pager.getPage(alloc, new DataPage());
-            }
-
-            // Reserve an address.
-
-            AddressPage addressPage = null;
-            long address = 0L;
-            do
-            {
-                addressPage = pager.getPage(lastPointerPage, new AddressPage());
-                addressPage.getLock().lock();
-                try
+                public Long run()
                 {
-                    address = addressPage.reserve(dirtyPages);
+                    
+                    // This is unimplemented: Creating a linked list of blocks
+                    // when the block size exceeds the size of a page.
+                    
+                    int pageSize = pager.getPageSize();
+                    if (fullSize + DATA_PAGE_HEADER_SIZE > pageSize)
+                    {
+                        // Recurse.
+                    }
+                    
+                    // If we already have a wilderness data page that will fit
+                    // the block, use that page. Otherwise, allocate a new
+                    // wilderness data page for allocation.
+                    
+                    DataPage allocPage = null;
+                    long alloc = allocPagesBySize.bestFit(fullSize);
+                    if (alloc == 0L)
+                    {
+                        allocPage = pager.newSystemPage(new DataPage(), dirtyPages);
+                        moveRecorder.getPageRecorder().getAllocationPageSet().add(allocPage.getPosition().getValue());
+                    }
+                    else
+                    {
+                        allocPage = pager.getPage(alloc, new DataPage());
+                    }
+                    
+                    // Reserve an address.
+                    
+                    AddressPage addressPage = null;
+                    long address = 0L;
+                    do
+                    {
+                        addressPage = pager.getPage(lastPointerPage, new AddressPage());
+                        addressPage.getLock().lock();
+                        try
+                        {
+                            address = addressPage.reserve(dirtyPages);
+                        }
+                        finally
+                        {
+                            addressPage.getLock().unlock();
+                        }
+                        if (address == 0L)
+                        {
+                            // Allocate a different page.
+                            address = pager.reserve(addressPage, dirtyPages);
+                        }
+                    }
+                    while (address == 0L);
+                    
+                    // Allocate a block from the wilderness data page.
+                    
+                    long position = allocPage.allocate(address, fullSize, dirtyPages);
+                    
+                    allocPagesBySize.add(allocPage);
+                    
+                    mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), position));
+                    
+                    journal.write(new Allocate(address, alloc, position, fullSize));
+                    
+                    return address;
                 }
-                finally
-                {
-                    addressPage.getLock().unlock();
-                }
-                if (address == 0L)
-                {
-                    // Allocate a different page.
-                    address = pager.reserve(addressPage, dirtyPages);
-                }
-            }
-            while (address == 0L);
-
-            // Allocate a block from the wilderness data page.
-
-            long position = allocPage.allocate(address, fullSize, dirtyPages);
-            
-            allocPagesBySize.add(allocPage);
-
-            mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), position));
-
-            journal.write(new Allocate(address, alloc, position, fullSize));
-
-            return address;
+            });
         }
 
         public void commit()
@@ -3476,12 +3545,20 @@ public class Pack
                 pager.getExpandLock().lock();
                 try
                 {
+                    // This invocation is to flush the move list for the current
+                    // mutator. You may think that this is pointless, but it's
+                    // not. It will ensure that the relocatable references are
+                    // all up to date before we try to move.
+
                     new MoveList(commit, listOfMoves).mutate(new Runnable()
                     {
                         public void run()
                         {
                         }
                     });
+
+                    // Now we can try to move the pages.
+
                     tryMove(commit);
                 }
                 finally
