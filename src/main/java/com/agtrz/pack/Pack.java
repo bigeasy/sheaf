@@ -3729,12 +3729,12 @@ public class Pack
             if (inUse.hasNext())
             {
                 long from = inUse.next();
-                head = move = new MoveLatch(new Move(from, pager.newStaticInterimPage()), null);
+                head = move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), null);
             }
             while (inUse.hasNext())
             {
                 long from = inUse.next();
-                move = new MoveLatch(new Move(from, pager.newStaticInterimPage()), move);
+                move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), move);
             }
 
             if (head != null)
