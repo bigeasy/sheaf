@@ -52,8 +52,7 @@ public class Pack
 
     private final static int BLOCK_HEADER_SIZE = POSITION_SIZE + COUNT_SIZE;
 
-    private final static short ALLOCATE = 1;
-
+    // FIXME Reorder these numbers.
     private final static short WRITE = 2;
 
     private final static short FREE = 3;
@@ -851,6 +850,47 @@ public class Pack
         }
     }
 
+    /**
+     * A page strategy that manages the page a list of data blocks.
+     * <p>
+     * Vacuum must work in two stages. The page is mirrored. The blocks that
+     * are preceded by one or more freed blocks are copied into interim pages.
+     * Then during journal play back, the compacting is performed by copying
+     * the mirrored blocks into place over the freed blocks.
+     * <p>
+     * Once a page is mirrored, no other mutator can write to that page, since
+     * that would put it out of sync with the mirroring of the page. If we
+     * were to mirror a page and then another mutator updated a block in the
+     * page, if the blocks is preceded by one or more freed blocks, then that
+     * block would be reverted when we compact the page from the mirror.
+     * <p>
+     * Initially, you thought that a strategy was have the writing mutator
+     * also update the mirror. This caused a lot of confusion, since now the
+     * journal was changing after the switch to play back. How does one
+     * mutator write to another mutator's journal? Which mutator commits that
+     * change? This raised so many questions, I can't remember them all.
+     * <p>
+     * The mirrored property is checked before an mutator writes or frees a
+     * block. If it is true, indicating that the page is mirrored but not
+     * compacted, then the operation will block until the compacting makes the
+     * vacuum complete.
+     * <p>
+     * Vacuums occur before all other play back operations. During play back
+     * after a hard shutdown, we run the vacuums before all other operations.
+     * We run the vacuums of each journal, then we run the remainder of each
+     * journal.
+     * <p>
+     * Every once and a while, you forget and worry about deadlock. You're
+     * afraid that one thread holding on a mirrored data page will attempt to
+     * write to a mirrored data page of anther thread while that thread is
+     * trying to write a mirrored data page held the this thread. This cannot
+     * happen, of course, because vacuums happen before write or free
+     * operations.
+     * <p>
+     * You cannot deadlock by mirroring, because only one mutator at a time
+     * will ever vacuum a data page, because only one mutator at a time can
+     * use a data page for block allocation.
+     */
     private static final class DataPage
     extends RelocatablePage
     {
@@ -860,11 +900,15 @@ public class Pack
 
         private boolean system;
         
-        private boolean vacuumed;
+        /**
+         * True if the page is in the midst of a vacuum and should not
+         * be written to.
+         */
+        private boolean mirrored;
         
         public DataPage()
         {
-            vacuumed = false;
+            mirrored = false;
         }
         
         public void create(Position position, DirtyPageMap dirtyPages)
@@ -994,12 +1038,12 @@ public class Pack
             throw new ArrayIndexOutOfBoundsException();
         }
 
-        public boolean vacuum(Pager pager, Journal journal, DirtyPageMap dirtyPages)
+        public boolean mirror(Pager pager, Journal journal, DirtyPageMap dirtyPages)
         {
             DataPage vacuumPage = null;
             synchronized (getPosition())
             {
-                assert !vacuumed;
+                assert !mirrored;
 
                 ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 int block = 0;
@@ -1036,10 +1080,10 @@ public class Pack
                 }
                 if (vacuumPage != null)
                 {
-                    vacuumed = true;
+                    mirrored = true;
                     journal.write(new AddVacuum(vacuumPage.getPosition().getValue()));
                 }
-                return vacuumed;
+                return mirrored;
             }
         }
 
@@ -1048,7 +1092,7 @@ public class Pack
             long position = 0L;
             synchronized (getPosition())
             {
-                assert ! vacuumed;
+                assert ! mirrored;
 
                 ByteBuffer bytes = getBlockRange(getPosition().getByteBuffer());
                 int block = 0;
@@ -1093,7 +1137,7 @@ public class Pack
             synchronized (getPosition())
             {
                 // FIXME I forgot what this was about.
-                while (vacuumed)
+                while (mirrored)
                 {
                     try
                     {
@@ -1199,8 +1243,9 @@ public class Pack
             }
         }
 
-        public void flushVacuum()
+        public void compact()
         {
+            throw new UnsupportedOperationException();
         }
         
         public void commit(long address, ByteBuffer block, DirtyPageMap dirtyPages)
@@ -1361,8 +1406,6 @@ public class Pack
         {
             switch (type)
             {
-                case ALLOCATE:
-                    return new Allocate();
                 case WRITE:
                     return new Write();
                 case FREE:
@@ -2639,61 +2682,6 @@ public class Pack
         public abstract void read(ByteBuffer bytes);
     }
 
-    private final static class Allocate
-    extends Operation
-    {
-        private long address;
-
-        private long position;
-
-        private long page;
-
-        private int length;
-
-        public Allocate()
-        {
-        }
-
-        public Allocate(long address, long page, long position, int length)
-        {
-            this.address = address;
-            this.page = page;
-            this.position = position;
-            this.length = length;
-        }
-
-        public void _commit(Player player)
-        {
-            DataPage dataPage = player.getPager().getPage(page, new DataPage());
-            long location = dataPage.allocate(address, length, player.getDirtyPages());
-            DataPage interimPage = player.getPager().getPage(position, new DataPage());
-            ByteBuffer bytes = interimPage.read(position, address);
-            dataPage.write(location, address, bytes, player.getDirtyPages());
-        }
-
-        public int length()
-        {
-            return ADDRESS_SIZE * 3 + COUNT_SIZE;
-        }
-
-        public void write(ByteBuffer bytes)
-        {
-            bytes.putShort(ALLOCATE);
-            bytes.putLong(address);
-            bytes.putLong(page);
-            bytes.putLong(position);
-            bytes.putInt(length);
-        }
-
-        public void read(ByteBuffer bytes)
-        {
-            address = bytes.getLong();
-            page = bytes.getLong();
-            position = bytes.getLong();
-            length = bytes.getInt();
-        }
-    }
-    
     private final static class AddVacuum
     extends Operation
     {
@@ -2781,7 +2769,7 @@ public class Pack
             for (long position: player.getVacuumPageSet())
             {
                 DataPage dataPage = player.getPager().getPage(position, new DataPage());
-                dataPage.flushVacuum();
+                dataPage.compact();
             }
             ByteBuffer bytes = player.getJournalHeader().getByteBuffer();
             bytes.clear();
@@ -3453,6 +3441,9 @@ public class Pack
                         allocPage = pager.getPage(alloc, new DataPage());
                     }
                     
+                    // FIXME This is where we split things up so we can grow
+                    // the data page sections. 
+                    
                     // Reserve an address.
                     
                     AddressPage addressPage = null;
@@ -3477,6 +3468,9 @@ public class Pack
                     }
                     while (address == 0L);
                     
+                    // FIXME After we have the address, we need to go 
+                    // back into the move list.
+                    
                     // Allocate a block from the wilderness data page.
                     
                     long position = allocPage.allocate(address, fullSize, dirtyPages);
@@ -3484,8 +3478,6 @@ public class Pack
                     allocPagesBySize.add(allocPage);
                     
                     mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), position));
-                    
-                    journal.write(new Allocate(address, alloc, position, fullSize));
                     
                     return address;
                 }
@@ -3582,7 +3574,7 @@ public class Pack
                     {
                         // FIXME This has not run yet.
                         DataPage dataPage = pager.getPage(entry.getValue().getValue(pager), new DataPage());
-                        dataPage.vacuum(pager, journal, dirtyPages);
+                        dataPage.mirror(pager, journal, dirtyPages);
                     }
 
                     long afterVacuum = journal.getJournalPosition(); 
