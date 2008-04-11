@@ -643,6 +643,11 @@ public class Pack
             this.position = position;
         }
 
+        public int getRemainingCount()
+        {
+            throw new UnsupportedOperationException();
+        }
+
         public Lock getLock()
         {
             return lock;
@@ -1909,6 +1914,10 @@ public class Pack
         
         private final PositionSet setOfJournalHeaders;
         
+        private final SortedSet<Long> setOfAddressPages;
+        
+        private final Set<Long> setOfReturningAddressPages;
+        
         public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, int pointerPageCount)
         {
             this.file = file;
@@ -1929,6 +1938,8 @@ public class Pack
             this.expandLock = new ReentrantLock();
             this.listOfMoves = new MoveList();
             this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, internalJournalCount);
+            this.setOfAddressPages = new TreeSet<Long>();
+            this.setOfReturningAddressPages = new HashSet<Long>();
         }
         
         public long getFirstPointer()
@@ -2272,6 +2283,86 @@ public class Pack
             }
 
             return (P) position.getPage();
+        }
+        
+        public AddressPage getAddressPage(long lastSelected)
+        {
+            for (;;)
+            {
+                AddressPage addressPage = tryGetAddressPage(lastSelected);
+                if (addressPage != null)
+                {
+                    return addressPage;
+                }
+            }
+        }
+        
+        public AddressPage tryGetAddressPage(long lastSelected)
+        {
+            synchronized (setOfAddressPages)
+            {
+                long position = 0L;
+                if (setOfReturningAddressPages.size() == 0)
+                {
+                    final PageRecorder pageRecorder = new PageRecorder();
+                    final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
+                    Mutator mutator = listOfMoves.mutate(new Returnable<Mutator>()
+                    {
+                        public Mutator run()
+                        {
+                            MoveNode moveNode = new MoveNode(new Move(0, 0));
+                            DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
+                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
+                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                        }
+                    });
+                    setOfAddressPages.add(mutator.newAddressPage());
+                    return null;
+                }
+                else
+                {
+                    if (setOfAddressPages.contains(lastSelected))
+                    {
+                        position = lastSelected;
+                    }
+                    else if (setOfAddressPages.size() != 0)
+                    {
+                        position = setOfAddressPages.first();
+                    }
+                    else
+                    {
+                        try
+                        {
+                            setOfAddressPages.wait();
+                        }
+                        catch (InterruptedException e)
+                        {
+                        }
+                        return null;
+                    }
+                    setOfAddressPages.remove(position);
+                }
+                AddressPage addressPage = getPage(position, new AddressPage());
+                if (addressPage.getRemainingCount() > 1)
+                {
+                    setOfReturningAddressPages.add(position);
+                }
+                return addressPage;
+            }
+        }
+        
+        public void returnAddressPage(AddressPage addressPage)
+        {
+            if (addressPage.getRemainingCount() != 0)
+            {
+                long position = addressPage.getPosition().getValue();
+                synchronized (setOfAddressPages)
+                {
+                    setOfReturningAddressPages.remove(position);
+                    setOfAddressPages.add(position);
+                    setOfAddressPages.notifyAll();
+                }
+            }
         }
 
         @SuppressWarnings("unchecked")
@@ -3407,6 +3498,31 @@ public class Pack
          */
         public long allocate(int blockSize)
         {
+            AddressPage addressPage = null;
+            long address = 0L;
+            addressPage = pager.getAddressPage(lastPointerPage);
+            try
+            {
+                addressPage.getLock().lock();
+                try
+                {
+                    address = addressPage.reserve(dirtyPages);
+                }
+                finally
+                {
+                    addressPage.getLock().unlock();
+                }
+            }
+            finally
+            {
+                pager.returnAddressPage(addressPage);
+            }
+            
+            return allocate(address, blockSize);
+        }
+        
+        private long allocate(final long address, int blockSize)
+        {
             // Add the header size to the block size.
                     
             final int fullSize = blockSize + BLOCK_HEADER_SIZE;
@@ -3441,36 +3557,6 @@ public class Pack
                         allocPage = pager.getPage(alloc, new DataPage());
                     }
                     
-                    // FIXME This is where we split things up so we can grow
-                    // the data page sections. 
-                    
-                    // Reserve an address.
-                    
-                    AddressPage addressPage = null;
-                    long address = 0L;
-                    do
-                    {
-                        addressPage = pager.getPage(lastPointerPage, new AddressPage());
-                        addressPage.getLock().lock();
-                        try
-                        {
-                            address = addressPage.reserve(dirtyPages);
-                        }
-                        finally
-                        {
-                            addressPage.getLock().unlock();
-                        }
-                        if (address == 0L)
-                        {
-                            // Allocate a different page.
-                            address = pager.reserve(addressPage, dirtyPages);
-                        }
-                    }
-                    while (address == 0L);
-                    
-                    // FIXME After we have the address, we need to go 
-                    // back into the move list.
-                    
                     // Allocate a block from the wilderness data page.
                     
                     long position = allocPage.allocate(address, fullSize, dirtyPages);
@@ -3482,6 +3568,14 @@ public class Pack
                     return address;
                 }
             });
+        }
+
+        public long newAddressPage()
+        {
+            // FIXME This is where I left off!!!!
+            
+            // Write the page move operation.
+            return 0L;
         }
 
         public void commit()
