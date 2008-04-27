@@ -15,6 +15,7 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,6 +37,12 @@ import java.util.zip.Checksum;
 
 public class Pack
 {
+    private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
+    
+//    private final static int SOFT_SHUTDOWN = 0xAAAAAAAA;
+
+    private final static int HARD_SHUTDOWN = 0x55555555;
+    
     private final static int FLAG_SIZE = 2;
 
     private final static int COUNT_SIZE = 4;
@@ -46,7 +53,7 @@ public class Pack
 
     private final static int ADDRESS_SIZE = 8;
 
-    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 4 + ADDRESS_SIZE;
+    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 4 + ADDRESS_SIZE * 3;
 
     private final static int DATA_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
 
@@ -245,11 +252,16 @@ public class Pack
 
             int pointerPageCount = 1;
 
+            long firstPointer = FILE_HEADER_SIZE + (internalJournalCount * POSITION_SIZE);
+            long dataBoundary = (firstPointer + pageSize - 1) / pageSize * pageSize;
+
+            header.putLong(SIGNATURE);
+            header.putInt(HARD_SHUTDOWN);
             header.putInt(pageSize);
             header.putInt(alignment);
-            header.putLong(0L);
             header.putInt(internalJournalCount);
-            header.putInt(pointerPageCount);
+            header.putLong(0L);
+            header.putLong(dataBoundary);
 
             header.clear();
 
@@ -329,11 +341,13 @@ public class Pack
 
             header.clear();
 
+            header.putLong(SIGNATURE);
+            header.putInt(HARD_SHUTDOWN);
             header.putInt(pageSize);
             header.putInt(alignment);
-            header.putLong(staticPages);
             header.putInt(internalJournalCount);
-            header.putInt(pointerPageCount);
+            header.putLong(staticPages);
+            header.putLong(dataBoundary);
 
             header.flip();
 
@@ -1906,9 +1920,9 @@ public class Pack
          */
         private final SortedSet<Long> setOfFreeInterimPages;
 
-        private int pointerPageCount;
-
-        private long firstSystemPage;
+        private final Boundary dataBoundary;
+        
+        private final Boundary interimBoundary;
             
         private final MoveList listOfMoves;
         
@@ -1918,13 +1932,21 @@ public class Pack
         
         private final Set<Long> setOfReturningAddressPages;
         
-        public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, int pointerPageCount)
+        public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, long dataBoundary)
         {
             this.file = file;
             this.fileChannel = fileChannel;
             this.alignment = alignment;
             this.pageSize = pageSize;
-            this.pointerPageCount = pointerPageCount;
+            this.dataBoundary = new Boundary(pageSize, dataBoundary);
+            try
+            {
+                this.interimBoundary = new Boundary(pageSize, fileChannel.size());
+            }
+            catch (IOException e)
+            {
+                throw new Danger("io.size", e);
+            }
             this.checksum = new Adler32();
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
             this.mapOfPointerPages = new TreeMap<Long, AddressPage>();
@@ -1967,19 +1989,14 @@ public class Pack
             return moveListLock;
         }
         
-        public synchronized long getFirstInterimPage()
+        public Boundary getDataBoundary()
         {
-            return firstSystemPage;
+            return dataBoundary;
         }
         
-        public synchronized void setFirstSystemPage(long firstSystemPage)
+        public Boundary getInterimBoundary()
         {
-            this.firstSystemPage = firstSystemPage;
-        }
-
-        public synchronized void setFirstInterimPage(long firstInterimPage)
-        {
-            this.firstSystemPage = firstInterimPage;
+            return interimBoundary;
         }
         
         public MoveList getMoveList()
@@ -1987,38 +2004,32 @@ public class Pack
             return listOfMoves;
         }
         
-        /**
-         * Initialize the 
-         */
         public void initialize()
         {
-            long wilderness;
-            try
-            {
-                wilderness = fileChannel.size();
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.size", e);
-            }
-
-            if (wilderness % pageSize != 0)
-            {
-                throw new IllegalStateException();
-            }
+            // FIXME Not initializing very well at all. Does this method
+            // also perform recovery?
+//            long wilderness;
+//            try
+//            {
+//                wilderness = fileChannel.size();
+//            }
+//            catch (IOException e)
+//            {
+//                throw new Danger("io.size", e);
+//            }
+//
+//            if (wilderness % pageSize != 0)
+//            {
+//                throw new IllegalStateException();
+//            }
 
             long firstPointerPage = getFirstPointer();
             firstPointerPage -= firstPointerPage % pageSize;
-            long firstUserPage = firstPointerPage + pointerPageCount * pageSize;
+            long firstUserPage = getDataBoundary().getPosition();
 
             ByteBuffer bytes = ByteBuffer.allocate(pageSize);
-            long position = wilderness - pageSize;
-            if (position == 0L)
-            {
-                firstSystemPage = position + pageSize;
-            }
-            
-            while (firstPointerPage < firstUserPage)
+            long position = firstPointerPage;
+            while (position < firstUserPage)
             {
                 try
                 {
@@ -2169,69 +2180,6 @@ public class Pack
             return position;
         }
 
-        public void freeSystemPage(long position)
-        {
-            synchronized (setOfFreeInterimPages)
-            {
-                if (position >= firstSystemPage)
-                {
-                    setOfFreeInterimPages.add(new Long(position));
-                }
-            }
-        }
-
-        public DataPage newDataPage(DirtyPageMap pages)
-        {
-            DataPage dataPage = new DataPage();
-            Long address = null;
-            synchronized (setOfFreeUserPages)
-            {
-                Iterator<Long> userPages = setOfFreeUserPages.iterator();
-                if (userPages.hasNext())
-                {
-                    address = userPages.next();
-                    userPages.remove();
-                }
-            }
-            if (address != null)
-            {
-                return getPage(address.longValue(), dataPage);
-            }
-            Position position = null;
-            synchronized (setOfFreeInterimPages)
-            {
-                Iterator<Long> systemPages = setOfFreeInterimPages.iterator();
-                if (systemPages.hasNext())
-                {
-                    address = systemPages.next();
-                    if (address.longValue() == firstSystemPage)
-                    {
-                        synchronized (mapOfPagesByPosition)
-                        {
-                            position = getPageByPosition(firstSystemPage);
-                            if (position == null)
-                            {
-                                position = new Position(this, firstSystemPage);
-                                addPageByPosition(position);
-                            }
-                            dataPage.create(position, pages);
-                        }
-                    }
-                }
-                if (position == null)
-                {
-                    synchronized (mapOfPagesByPosition)
-                    {
-                        position = getPageByPosition(firstSystemPage);
-                        assert position != null;
-                    }
-                    // Move.
-                }
-                firstSystemPage += getPageSize();
-            }
-            return dataPage;
-        }
-
         private Position getPageByPosition(long position)
         {
             Position page = null;
@@ -2316,8 +2264,10 @@ public class Pack
                             return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
                         }
                     });
-                    setOfAddressPages.add(mutator.newAddressPage());
-                    return null;
+                    long address = mutator.newAddressPage();
+                    mutator.commit();
+                    setOfAddressPages.add(address);
+                    return tryGetAddressPage(lastSelected);
                 }
                 else
                 {
@@ -2500,13 +2450,25 @@ public class Pack
             {
                 if (setOfFreeInterimPages.contains(position))
                 {
-                    setOfFreeUserPages.remove(position);
+                    setOfFreeInterimPages.remove(position);
                     return true;
                 }
             }
             return false;
         }
 
+        public boolean removeDataPageIfFree(long position)
+        {
+            synchronized (setOfFreeUserPages)
+            {
+                if (setOfFreeUserPages.contains(position))
+                {
+                    setOfFreeUserPages.remove(position);
+                    return true;
+                }
+            }
+            return false;
+        }
         public void relocate(MoveLatch head)
         {
             synchronized (mapOfPagesByPosition)
@@ -3371,6 +3333,8 @@ public class Pack
         
         private final SortedMap<Long, MovablePosition> mapOfPages;
         
+        private final SortedMap<Long, MovablePosition> mapOfMovePages;
+        
         private final MoveNode firstMoveNode;
 
         private MoveNode moveNode;
@@ -3382,6 +3346,7 @@ public class Pack
             this.setOfDataPages = new HashSet<Long>();
             this.mapOfVacuums = new TreeMap<Long, MovablePosition>();
             this.mapOfPages = new TreeMap<Long, MovablePosition>();
+            this.mapOfMovePages = new TreeMap<Long, MovablePosition>();
             this.firstMoveNode = moveNode;
             this.moveNode = moveNode;
         }
@@ -3445,9 +3410,45 @@ public class Pack
             return mapOfPages;
         }
         
+        public SortedMap<Long, MovablePosition> getMovePageMap()
+        {
+            return mapOfMovePages;
+        }
+        
         public PageRecorder getPageRecorder()
         {
             return pageRecorder;
+        }
+    }
+    
+    /**
+     * A superfluous little class.
+     */
+    private final static class Boundary
+    {
+        private final int pageSize;
+        
+        private long position;
+        
+        public Boundary(int pageSize, long position)
+        {
+            this.pageSize = pageSize;
+            this.position = position;
+        }
+        
+        public long getPosition()
+        {
+            return position;
+        }
+        
+        public void increment()
+        {
+            position += pageSize;
+        }
+        
+        public void decrement()
+        {
+            position -= pageSize;
         }
     }
 
@@ -3463,8 +3464,6 @@ public class Pack
 
         private final Map<Long, MovablePosition> mapOfAddresses;
 
-        private long lastPointerPage;
-
         private final DirtyPageMap dirtyPages;
         
         private MutateMoveRecorder moveRecorder;
@@ -3472,6 +3471,8 @@ public class Pack
         private final PageRecorder pageRecorder;
         
         private final MoveList listOfMoves;
+        
+        private long lastPointerPage;
 
         public Mutator(Pager pager, MoveList listOfMoves, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
@@ -3572,8 +3573,20 @@ public class Pack
 
         public long newAddressPage()
         {
-            // FIXME This is where I left off!!!!
+            pager.getCompactLock().readLock().lock();
             
+            try
+            {
+                Set<Long> setOfPageAddress = new HashSet<Long>();
+                setOfPageAddress.add(pager.getDataBoundary().getPosition());
+                pager.getDataBoundary().increment();
+                tryCommit(setOfPageAddress);
+            }
+            finally
+            {
+                pager.getCompactLock().readLock().unlock();
+            }
+
             // Write the page move operation.
             return 0L;
         }
@@ -3589,7 +3602,8 @@ public class Pack
             pager.getCompactLock().readLock().lock();
             try
             {
-                tryCommit();
+                Set<Long> setOfPageAddress = Collections.emptySet();
+                tryCommit(setOfPageAddress);
             }
             finally
             {
@@ -3597,15 +3611,43 @@ public class Pack
             }
         }
         
-        private void tryCommit()
+        private void tryCommit(Set<Long> setOfAddressPages)
         {
             final CommitMoveRecorder commit = new CommitMoveRecorder(pageRecorder, journal, moveRecorder.getMoveNode());
 
+            // The set of address pages is a set of pages that need to be
+            // moved to new data pages. The data boundary has already been
+            // adjusted. The pages need to be moved.
+            
+            // We're going to create a set of address pages to move, which 
+            // is separate from the full set of address pages to initialize.
+            
+            final Set<Long> setOfDataPages = new HashSet<Long>(setOfAddressPages);
+            
+            // If the new address page is in the set of free data pages, the
+            // page does not have to be removed.
+            if (setOfDataPages.size() != 0)
+            {
+                Iterator<Long> positions = setOfDataPages.iterator();
+                while (positions.hasNext())
+                {
+                    long position = positions.next();
+                    if (pager.removeInterimPageIfFree(position))
+                    {
+                        positions.remove();
+                    }
+                }
+            }
+            
+            if (setOfDataPages.size() != 0)
+            {
+                
+            }
+            
             // FIXME Not all the pages in the by size map are allocations. Some
             // of them are writes.
 
             // First we mate the interim data pages with 
-
             listOfMoves.mutate(new Runnable()
             {
                 public void run()
@@ -3658,12 +3700,18 @@ public class Pack
             {
                 public void run()
                 {
+                    // Write a terminate to end the playback loop. This
+                    // terminate is the true end of the journal.
+
                     journal.write(new Terminate());
 
-                    // Grab the position. This is where we start.
+                    // Grab the current position of the journal. This is the
+                    // actual start of playback.
+
                     long beforeVacuum = journal.getJournalPosition();
                     
-                    // Create an operation for all the vacuums.
+                    // Create a vacuum operation for all the vacuums.
+
                     for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
                     {
                         // FIXME This has not run yet.
@@ -3687,6 +3735,7 @@ public class Pack
                     // Two ways to deal with writing to a vacuumed page. One it
                     // to overwrite the vacuum journal. The other is to wait
                     // until the vacuumed journal is written.
+
                     journal.write(new Vacuum(afterVacuum));
                     
                     journal.write(new Terminate());
@@ -3737,40 +3786,89 @@ public class Pack
         }
     
         /**
-         * Iterate through the pages in the interim area up to the relocatable
-         * page boundary.
+         * Map the pages in the set of pages to a soon to be moved interim
+         * that is immediately after the data to interim page boundary. Each
+         * page in the set will be mapped to a page immediately after the data
+         * to interim boundary, incrementing the boundary as the page is
+         * allocated.
          * <p>
-         * If the page is in the list of free interim pages, remove it. We
-         * will not lock it. No other mutator will reference a free page
-         * because no other mutator is moving pages and no other mutator will
-         * be using it for work space.
+         * If the interim page is in the list of free interim pages, remove
+         * it. We will not lock it. No other mutator will reference a free
+         * page because no other mutator is moving pages and no other mutator
+         * will be using it for work space.
          * <p>
          * If the page is not in the list of free interim pages, we do have to
          * lock it.
+         * 
+         * @param setOfPages
+         *            The set of pages that needs to be moved or copied into a
+         *            page in data region of the file.
+         * @param setOfMovingPages
+         *            A set that will keep track of which pages this mutation
+         *            references used in conjunction with the move list.
+         * @param mapOfPages
+         *            A map that associates one of the pages with an interim
+         *            page that will be converted to a data page.
+         * @param setOfInUse
+         *            A set of the interim pages that need to be moved to a
+         *            new interim pages as opposed to pages that were free.
+         * @param setOfGahtered
+         *            A set of the newly created data positions.
          */
-        private long gatherPages(CommitMoveRecorder commit, Set<Long> setOfInUse, Set<Long> setOfGathered)
+        private void gatherPages(Set<Long> setOfPages,
+            Set<Long> setOfMovingPages, Map<Long, MovablePosition> mapOfPages,
+            Set<Long> setOfInUse, Set<Long> setOfGathered)
         {
-            long position = pager.getFirstInterimPage();
-
-            while (pageRecorder.getAllocationPageSet().size() != 0)
+            // For each page in the data page set.
+            while (setOfPages.size() != 0)
             {
+                // Use the page that is at the data to interim boundary.
+
+                long position = pager.getInterimBoundary().getPosition();
+
+                // If it is not in the set of free pages it needs to be moved,
+                // so we add it to the set of in use.
+
                 if (!pager.removeInterimPageIfFree(position))
                 {
                     setOfInUse.add(position);
                 }
 
-                long from = pageRecorder.getAllocationPageSet().iterator().next();
-                pageRecorder.getAllocationPageSet().remove(from);
+                // Remove a page from the set of pages.
+
+                // TODO Sorted set? Then I don't have to create an iterator.
+
+                long from = setOfPages.iterator().next();
+                setOfPages.remove(from);
+
+                // Add the page to the set of pages used to track the pages
+                // referenced in regards to the move list. We are going to move
+                // this page and we are aware of this move. Negating the value
+                // tells us not adjust our own move list for the first move
+                // detected for this position.
+
+                // Synapse: What if this page is already in our set?
+
+                // This set is for data pages only. There is a separate set of
+                // referenced interim pages. We're okay if we're moving our own
+                // interim page.
                 
-                commit.getDataPageSet().add(-position);
-                commit.getPageMap().put(from, new SkippingMovablePosition(moveRecorder.getMoveNode(), position));
+                setOfMovingPages.add(-position);
+
+                // We associate the move with a skipping movable position that
+                // will skip the first move in the linked list of moves for this
+                // mutator.
+
+                mapOfPages.put(from, new SkippingMovablePosition(moveRecorder.getMoveNode(), position));
+
+                // Add this page to the set of new data pages.
                 
                 setOfGathered.add(position);
 
-                position += pager.getPageSize();
-            }
+                // Increment the data to interim boundary.
 
-            return position;
+                pager.getInterimBoundary().increment();
+            }
         }
         
         private void tryMove(MoveLatch head)
@@ -3802,8 +3900,15 @@ public class Pack
         {
             SortedSet<Long> setOfInUse = new TreeSet<Long>();
             SortedSet<Long> setOfGathered = new TreeSet<Long>();
-            
-            long firstIterimPage = gatherPages(commit, setOfInUse, setOfGathered);
+
+            // Gather the interim pages that will become data pages, moving the
+            // data to interim boundary.
+
+            gatherPages(pageRecorder.getAllocationPageSet(),
+                        commit.getDataPageSet(),
+                        commit.getPageMap(),
+                        setOfInUse,
+                        setOfGathered);
 
             // For the set of pages in use, add the page to the move list.
 
@@ -3833,8 +3938,24 @@ public class Pack
 
                 tryMove(head);
             }
-            
-            pager.setFirstInterimPage(firstIterimPage);
+
+            // Set the new data pages. Setting them means you are assigning a
+            // blank data page to them. This ensures that they will be
+            // initialized to blank data pages. However, we do know that the
+            // pages will get written at some point in the commit, so this is
+            // probably unnescessary.
+
+            // FIXME Wait? Did we get our journal yet? These moves might not
+            // actually be committed yet! This is destroying data. Interim data,
+            // but data none the less. Wait, no. The pages have been moved.
+            // Moves are not part of the commit. FIXME This is not necessary.
+
+            // Probably need to set page, simply to clear out the existing
+            // contents? Or does asking for a type that is not interim change
+            // matters? If the interim page is a data page, then the pager
+            // returns the existing data page if it is in memory.
+
+            // This probably does need to be done, but after the switch.
             
             for (long gathered: setOfGathered)
             {
