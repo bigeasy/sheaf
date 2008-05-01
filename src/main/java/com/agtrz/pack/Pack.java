@@ -516,8 +516,26 @@ public class Pack
         }
     }
 
+    /**
+     * A position in the file that begins a region that is the length of the
+     * page size of the Pack file that is always aligned to a page boundary. 
+     * The name position could be confusing. Running out of words. Instnaces of
+     * this class reference a raw page, one that has the basic attributes of the
+     * position and the byte buffer.  is participant in a strategy design
+     * pattern, where the content of the bytes at the position are who's
+     * contents are interpreted by an assocaited implementation of {@link
+     * Pack.Page}.  
+     * <p>
+     * The <code>Position</code> maintains soft reference to a byte buffer of
+     * the bytes of the raw page and is itself soft referenced within the map of
+     * pages by position within {@link Pack.Pager}.
+     * <p>
+     * The soft references allow both the raw page and the byte buffer to be
+     * reclaimed.
+     */
     private static final class Position
     {
+        // FIXME How do you feel about naming this RawPage?
         private final Pager pager;
 
         private Page page;
@@ -615,6 +633,32 @@ public class Pack
         public boolean isInterim();
     }
 
+    /**
+     * Interprets a page at a position as an array of addresses that reference
+     * specific positions in the data region of the file. A user address
+     * refereneces a position in an address page that contains a long value
+     * indicating the position of the user data in the data region of the file.
+     * <p>
+     * The address itself is a long value indicating the actual position of
+     * the user data file position long value in the address page.  
+     * It is an indirection. To find the position of a user data block, we read
+     * the long value at the position indicated by the address to find the
+     * position of the user block, then we read the user block.
+     * <p>
+     * Unused addresses are indicated by a zero data position value. If an
+     * address is in use, there will be a non-zero position value in the slot.
+     * <p>
+     * When we allocate a new block, because of isolation, we cannot write out
+     * the address of the new data block until we are playing back a flushed
+     * journal. Thus, during the mutation phase of a mutation, we need to
+     * reserve a free address. Reservations are tracked in an interim
+     * reservation page defined by {@link Pack.ReservationPage}. The reservation
+     * page says which of the free addresses are reserved.
+     * <p>
+     * The associate reservation page is allocated as needed. If there is no
+     * assocaited reservation page, then none of the free addresses are
+     * reserved. 
+     */
     private static final class AddressPage
     implements Page
     {
@@ -624,6 +668,21 @@ public class Pack
 
         private long reservations;
         
+        /**
+         * Construct an uninitialized address page that is then initialized by
+         * calling the {@link #create create} or {@link #load load} methods. The
+         * default constructor creates an empty address page that must be
+         * initialized before use.
+         * <p>
+         * All of the page classes have default constructors. This constructor
+         * is called by clients of the <code>Pager</code> when requesting pages
+         * or creating new pages. An uninitialized page of the expected Java
+         * class of page is given to the <code>Pager</code>. If the page does
+         * not exist, the newly created page is used, if not is ignored and
+         * garbage collected.
+         *
+         * @see com.agtrz.pack.Pack.Pager#getPage
+         */
         public AddressPage()
         {
             this.lock = new ReentrantLock();
@@ -659,6 +718,7 @@ public class Pack
 
         public int getRemainingCount()
         {
+            // FIXME ! HERE ! HERE ! Is where I left off.
             throw new UnsupportedOperationException();
         }
 
@@ -780,24 +840,6 @@ public class Pack
             }
         }
 
-        public long allocate()
-        {
-            synchronized (position)
-            {
-                ByteBuffer bytes = position.getByteBuffer();
-                int addresses = bytes.capacity() / ADDRESS_SIZE;
-                for (int i = 0; i < addresses; i++)
-                {
-                    if (bytes.getLong(i * ADDRESS_SIZE) > 0L)
-                    {
-                        bytes.putLong(i * ADDRESS_SIZE, -1L);
-                        return position.getValue() + i * ADDRESS_SIZE;
-                    }
-                }
-            }
-            throw new IllegalStateException();
-        }
-
         public void set(long address, long value, DirtyPageMap dirtyPages)
         {
             // Out here to hold onto reference until it is added to dirty pages.
@@ -814,6 +856,7 @@ public class Pack
                     reservationPage.remove(getPosition().getValue(), address, dirtyPages);
                     if (reservationPage.getReservedCount() == 0)
                     {
+                        // FIXME Free reservation page.
                         reservations = 0L;
                         bytes.putLong(CHECKSUM_SIZE, 0L);
                     }
@@ -851,6 +894,14 @@ public class Pack
             return false;
         }
 
+        /**
+         * Relocate a page from one position to another writing it out
+         * immediately. This method does not use a dirty page map, the page
+         * is written immediately.
+         * 
+         * @param to
+         *            The position where the page will be relocated.
+         */
         public void relocate(long to)
         {
             Position position = getPosition();
@@ -1892,7 +1943,7 @@ public class Pack
 
         public final BySizeTable pagesBySize;
 
-        private final SortedMap<Long, AddressPage> mapOfPointerPages;
+//        private final SortedMap<Long, AddressPage> mapOfPointerPages;
 
         private final SortedSet<Long> setOfFreeUserPages;
 
@@ -1949,7 +2000,7 @@ public class Pack
             }
             this.checksum = new Adler32();
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
-            this.mapOfPointerPages = new TreeMap<Long, AddressPage>();
+//            this.mapOfPointerPages = new TreeMap<Long, AddressPage>();
             this.pagesBySize = new BySizeTable(pageSize, alignment);
             this.mapOfStaticPages = mapOfStaticPages;
             this.setOfFreeUserPages = new TreeSet<Long>();
@@ -2008,21 +2059,6 @@ public class Pack
         {
             // FIXME Not initializing very well at all. Does this method
             // also perform recovery?
-//            long wilderness;
-//            try
-//            {
-//                wilderness = fileChannel.size();
-//            }
-//            catch (IOException e)
-//            {
-//                throw new Danger("io.size", e);
-//            }
-//
-//            if (wilderness % pageSize != 0)
-//            {
-//                throw new IllegalStateException();
-//            }
-
             long firstPointerPage = getFirstPointer();
             firstPointerPage -= firstPointerPage % pageSize;
             long firstUserPage = getDataBoundary().getPosition();
@@ -2049,12 +2085,11 @@ public class Pack
                 {
                     if (bytes.getLong(offset) == 0L)
                     {   
-                        AddressPage addressPage = (AddressPage) getPage(firstPointerPage, new AddressPage());
-                        mapOfPointerPages.put(firstPointerPage, addressPage);
+                        setOfAddressPages.add(position);
                         break;
                     }
                 }
-                firstPointerPage += pageSize;
+                position += pageSize;
             }
         }
 
@@ -2097,38 +2132,6 @@ public class Pack
             {
                 mapOfPagesByPosition.remove(pageReference.getPosition());
             }
-        }
-
-        public synchronized long reserve(AddressPage addressPage, DirtyPageMap pages)
-        {
-            long address = addressPage.reserve(pages);
-            if (address == 0L)
-            {
-                mapOfPointerPages.remove(addressPage.getPosition().getValue());
-            }
-            return address;
-        }
-
-        public synchronized AddressPage getAddressPage(long position, DirtyPageMap dirtyPages)
-        {
-            AddressPage addressPage = null;
-            if (mapOfPointerPages.size() == 0)
-            {
-//                Journal journal = new Journal(this, null, null, new DirtyPageMap(this, 16));
-//                long firstDataPage = 0L;
-//                DataPage fromDataPage = (DataPage) getPage(firstDataPage, new DataPage());
-//                DataPage toDataPage = newDataPage(dirtyPages);
-//                journal.relocate(fromDataPage, toDataPage);
-            }
-            if (position != 0L)
-            {
-                addressPage = (AddressPage) getPage(position, new AddressPage());
-            }
-            if (addressPage == null)
-            {
-                addressPage = mapOfPointerPages.get(mapOfPointerPages.firstKey());
-            }
-            return addressPage;
         }
 
         private long fromWilderness()
@@ -2250,7 +2253,7 @@ public class Pack
             synchronized (setOfAddressPages)
             {
                 long position = 0L;
-                if (setOfReturningAddressPages.size() == 0)
+                if (setOfAddressPages.size() == 0 && setOfReturningAddressPages.size() == 0)
                 {
                     final PageRecorder pageRecorder = new PageRecorder();
                     final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
@@ -3715,6 +3718,9 @@ public class Pack
                     for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
                     {
                         // FIXME This has not run yet.
+                        // FIXME By not holding onto the data page, the garbage
+                        // collector can reap the raw page and we lose our
+                        // mirroed flag.
                         DataPage dataPage = pager.getPage(entry.getValue().getValue(pager), new DataPage());
                         dataPage.mirror(pager, journal, dirtyPages);
                     }
@@ -3876,7 +3882,11 @@ public class Pack
             while (head != null)
             {
                 RelocatablePage page = pager.getPage(head.getMove().getFrom(), new RelocatablePage());
+                
+                // FIXME Okay, where is there the write occurs.
+                
                 page.relocate(head.getMove().getTo());
+                
                 // TODO Curious about this. Will this get out of sync? Do I have
                 // things locked down enough?
                 
@@ -3890,13 +3900,15 @@ public class Pack
                 // locked down.
                 pager.relocate(head);
                 
+                // FIXME Didn't this get recorded in a dirty page map?
+                
                 head.getLock().unlock();
                 
                 head = head.getNext();
             }  
         }
 
-        private Set<Long> tryMove(CommitMoveRecorder commit)
+        private void tryMove(CommitMoveRecorder commit)
         {
             SortedSet<Long> setOfInUse = new TreeSet<Long>();
             SortedSet<Long> setOfGathered = new TreeSet<Long>();
@@ -3939,30 +3951,37 @@ public class Pack
                 tryMove(head);
             }
 
-            // Set the new data pages. Setting them means you are assigning a
-            // blank data page to them. This ensures that they will be
-            // initialized to blank data pages. However, we do know that the
-            // pages will get written at some point in the commit, so this is
-            // probably unnescessary.
-
-            // FIXME Wait? Did we get our journal yet? These moves might not
-            // actually be committed yet! This is destroying data. Interim data,
-            // but data none the less. Wait, no. The pages have been moved.
-            // Moves are not part of the commit. FIXME This is not necessary.
-
-            // Probably need to set page, simply to clear out the existing
-            // contents? Or does asking for a type that is not interim change
-            // matters? If the interim page is a data page, then the pager
-            // returns the existing data page if it is in memory.
-
-            // This probably does need to be done, but after the switch.
+            // At this point we have guarded these pages in this way. No one
+            // else is able to move pages at all because we hold the move lock.
+            // We waited for everyone else to complete committing, allocating,
+            // writing, etc. by locking the move list exclusively. No one is
+            // going to be interested in the pages we've removed from the list
+            // of free interim pages.
             
+            // For the pages we've moved, we've locked them. We've moved them in
+            // the pager and have copied them to their new place on disk. The
+            // copy may not have been forced yet, but that is not necessary
+            // since no one is in the midst of a commit.
+            
+            // Now we set the pages, not load them, creating a new blank and
+            // empty data page. This does not need to be forced, since the pages
+            // that we are initializing are interim pages that are now
+            // unreferenced, they will be cleaned up.
+            
+            // TODO The data to interim page boundary may be determined by
+            // scanning through the data pages. If that is the case, then we
+            // need to write pages out in page order, so that means a sorted set
+            // or map in dirty page map.
+            
+            // Synapse: Why are creating the pages here when they are temporary?
+            // Can't we wait until we really need them? No. You would need to
+            // keep the fact that they are uninitialized around somehow, and
+            // write that into the journal. Just get it over with.
+
             for (long gathered: setOfGathered)
             {
                 pager.setPage(gathered, new DataPage(), dirtyPages);
             }
-            
-            return setOfGathered;
         }
 
         public ByteBuffer read(long address)
