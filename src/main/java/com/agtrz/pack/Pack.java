@@ -575,9 +575,11 @@ public class Pack
          * Create a raw page at the specified position associated with the
          * specified pager. The byte buffer is not loaded until the {@link
          * #getByteBuffer getByteBuffer} method is called.
-         *
-         * @param pager The pager that manages this raw page.
-         * @param position The position of the page.
+         * 
+         * @param pager
+         *            The pager that manages this raw page.
+         * @param position
+         *            The position of the page.
          */
         public RawPage(Pager pager, long position)
         {
@@ -797,16 +799,17 @@ public class Pack
     }
 
     /**
-     * Interprets a page at a position as an array of addresses that reference
-     * specific positions in the data region of the file. A user address
-     * references a position in an address page that contains a long value
-     * indicating the position of the user data in the data region of the file.
+     * Interprets a {@link RawPage} as a position as an array of addresses that
+     * reference specific positions in the data region of the file. A user
+     * address references a position in an address page that contains a long
+     * value indicating the position of the user data in the data region of the
+     * file.
      * <p>
-     * The address itself is a long value indicating the actual position of
-     * the user data file position long value in the address page.  
-     * It is an indirection. To find the position of a user data block, we read
-     * the long value at the position indicated by the address to find the
-     * position of the user block, then we read the user block.
+     * The address itself is a long value indicating the actual position of the
+     * user data file position long value in the address page. It is an
+     * indirection. To find the position of a user data block, we read the long
+     * value at the position indicated by the address to find the position of
+     * the user block, then we read the user block.
      * <p>
      * Unused addresses are indicated by a zero data position value. If an
      * address is in use, there will be a non-zero position value in the slot.
@@ -815,19 +818,19 @@ public class Pack
      * the address of the new data block until we are playing back a flushed
      * journal. Thus, during the mutation phase of a mutation, we need to
      * reserve a free address. Reservations are tracked in an interim
-     * reservation page defined by {@link Pack.ReservationPage}. The reservation
-     * page says which of the free addresses are reserved.
+     * reservation page defined by {@link Pack.ReservationPage}. The
+     * reservation page says which of the free addresses are reserved.
      * <p>
      * The associate reservation page is allocated as needed. If there is no
      * associated reservation page, then none of the free addresses are
-     * reserved. 
+     * reserved.
      */
     private static final class AddressPage
     implements Page
     {
-        private final Lock lock;
-
-        private RawPage position;
+        private RawPage rawPage;
+        
+        private int freeCount;
 
         private long reservations;
         
@@ -848,52 +851,76 @@ public class Pack
          */
         public AddressPage()
         {
-            this.lock = new ReentrantLock();
         }
 
-        public void load(RawPage position)
+        public void load(RawPage rawPage)
         {
-            position.setPage(this);
-            this.position = position;
-            
-            ByteBuffer bytes = position.getByteBuffer();
+            ByteBuffer bytes = rawPage.getByteBuffer();
 
             bytes.clear();
             
+            bytes.position(getHeaderOffset(rawPage));
+ 
             bytes.getLong();
             reservations = bytes.getLong();
-        }
-
-        public void create(RawPage position, DirtyPageMap pages)
-        {
-            ByteBuffer bytes = position.getByteBuffer();
-
-            int capacity = bytes.capacity() / ADDRESS_SIZE;
-            for (int i = 0; i < capacity; i++)
+            
+            while (bytes.remaining() > Long.SIZE / Byte.SIZE)
             {
-                bytes.putLong(i * ADDRESS_SIZE, 0L);
+                if (bytes.getLong() == 0L)
+                {
+                    freeCount++;
+                }
             }
 
-            pages.add(position);
-
-            this.position = position;
+            rawPage.setPage(this);
+            this.rawPage = rawPage;
         }
 
-        public int getRemainingCount()
+        public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
-            // FIXME ! HERE ! HERE ! Is where I left off.
-            throw new UnsupportedOperationException();
+            ByteBuffer bytes = rawPage.getByteBuffer();
+
+            bytes.clear();
+            
+            bytes.putLong(0L);
+            bytes.putLong(0L);
+            
+            while (bytes.remaining() > Long.SIZE / Byte.SIZE)
+            {
+                bytes.putLong(0L);
+                freeCount++;
+            }
+ 
+            dirtyPages.add(rawPage);
+
+            this.rawPage = rawPage;
+            rawPage.setPage(this);
         }
 
-        // FIXME I'm almost certian I don't need this.
-        public Lock getLock()
+        public int getFreeCount()
         {
-            return lock;
+            if (reservations == 0L)
+            {
+                return freeCount;
+            }
+            ReservationPage reservationPage = rawPage.getPager().getPage(reservations, new ReservationPage());
+            return freeCount - reservationPage.getReservedCount();
         }
 
         public RawPage getRawPage()
         {
-            return position;
+            return rawPage;
+        }
+        
+        private static int getHeaderOffset(RawPage rawPage)
+        {
+            int offset = 0;
+            long addressStart = rawPage.getPager().getFirstPointer();
+            if (rawPage.getPosition() < addressStart)
+            {
+                offset = (int) (addressStart % rawPage.getPager().getPageSize());
+            }
+            return offset;
         }
 
         /**
@@ -903,15 +930,9 @@ public class Pack
          *
          * @return The start offset for iterating through the addresses.
          */
-        private int getStartOffset()
+        private int getFirstAddressOffset()
         {
-            int offset = 0;
-            long firstPointer = position.getPager().getFirstPointer();
-            if (position.getPosition() < firstPointer)
-            {
-                offset = (int) firstPointer;
-            }
-            return offset + ADDRESS_PAGE_HEADER_SIZE;
+            return getHeaderOffset(getRawPage()) + ADDRESS_PAGE_HEADER_SIZE;
         }
         
         public boolean isInterim()
@@ -926,10 +947,10 @@ public class Pack
          */
         public long dereference(long address)
         {
-            synchronized (position)
+            synchronized (rawPage)
             {
-                int offset = (int) (address - position.getPosition());
-                long actual = position.getByteBuffer().getLong(offset);
+                int offset = (int) (address - rawPage.getPosition());
+                long actual = rawPage.getByteBuffer().getLong(offset);
 
                 assert actual != 0L; 
 
@@ -939,7 +960,7 @@ public class Pack
 
         private ReservationPage getReservationPage(DirtyPageMap dirtyPages)
         {
-            Pager pager = position.getPager();
+            Pager pager = getRawPage().getPager();
             ReservationPage page = null;
             if (reservations == 0L)
             {
@@ -962,7 +983,7 @@ public class Pack
 
         /**
          * Reserve an available address from the address page. Reserving an
-         * address requires marking it as reserved on an assocated page
+         * address requires marking it as reserved on an associated page
          * reservation page. The parallel page is necessary because we cannot
          * change the zero state of the address until the page is committed.
          * <p>
@@ -970,7 +991,8 @@ public class Pack
          * released after the dirty page map flushes the reservation page to
          * disk.
          * 
-         * @param dirtyPages The dirty page map.
+         * @param dirtyPages
+         *            The dirty page map.
          * @return An reserved address or 0 if none are available.
          */
         public long reserve(DirtyPageMap dirtyPages)
@@ -984,13 +1006,13 @@ public class Pack
 
                 // Get the page buffer.
                 
-                ByteBuffer bytes = position.getByteBuffer();
+                ByteBuffer bytes = rawPage.getByteBuffer();
 
                 // Iterate the page buffer looking for a zeroed address that has
                 // not been reserved, reserving it and returning it if found.
                 
                 long position = getRawPage().getPosition();
-                for (int i = getStartOffset(); i < bytes.capacity(); i += ADDRESS_SIZE)
+                for (int i = getFirstAddressOffset(); i < bytes.capacity(); i += ADDRESS_SIZE)
                 {
                     if (bytes.getLong(i) == 0L && reserver.reserve(position, position + i, dirtyPages))
                     {
@@ -1011,8 +1033,8 @@ public class Pack
             
             synchronized (getRawPage())
             {
-                bytes = position.getByteBuffer();
-                bytes.putLong((int) (address - position.getPosition()), value);
+                bytes = rawPage.getByteBuffer();
+                bytes.putLong((int) (address - rawPage.getPosition()), value);
                 
                 if (reservations != 0L)
                 {
@@ -1034,23 +1056,23 @@ public class Pack
     private static class RelocatablePage
     implements Page
     {
-        private RawPage position;
+        private RawPage rawPage;
         
-        public void create(RawPage position, DirtyPageMap dirtyPages)
+        public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
-            this.position = position;
-            position.setPage(this);
+            this.rawPage = rawPage;
+            rawPage.setPage(this);
         }
 
-        public void load(RawPage position)
+        public void load(RawPage rawPage)
         {
-            this.position = position;
-            position.setPage(this);
+            this.rawPage = rawPage;
+            rawPage.setPage(this);
         }
 
         public RawPage getRawPage()
         {
-            return position;
+            return rawPage;
         }
 
         public boolean isInterim()
@@ -1068,9 +1090,10 @@ public class Pack
          */
         public void relocate(long to)
         {
-            RawPage position = getRawPage();
-            ByteBuffer bytes = position.getByteBuffer();
-            FileChannel fileChannel = position.getPager().getFileChannel();
+            // FIXME Not enough locking?
+            RawPage rawPage = getRawPage();
+            ByteBuffer bytes = rawPage.getByteBuffer();
+            FileChannel fileChannel = rawPage.getPager().getFileChannel();
             bytes.clear();
             try
             {
@@ -1080,7 +1103,7 @@ public class Pack
             {
                 e.printStackTrace();
             }
-            position.setPosition(to);
+            rawPage.setPosition(to);
         }
     }
 
@@ -1164,21 +1187,21 @@ public class Pack
             mirrored = false;
         }
         
-        public void create(RawPage position, DirtyPageMap dirtyPages)
+        public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
-            super.create(position, dirtyPages);
+            super.create(rawPage, dirtyPages);
             
             this.count = 0;
-            this.remaining = position.getPager().getPageSize() - DATA_PAGE_HEADER_SIZE;
+            this.remaining = rawPage.getPager().getPageSize() - DATA_PAGE_HEADER_SIZE;
             
-            dirtyPages.add(position);
+            dirtyPages.add(rawPage);
         }
 
-        public void load(RawPage position)
+        public void load(RawPage rawPage)
         {    
-            super.load(position);
+            super.load(rawPage);
 
-            ByteBuffer bytes = position.getByteBuffer();
+            ByteBuffer bytes = rawPage.getByteBuffer();
             this.count = bytes.getInt();
             this.remaining = getRemaining(count, bytes);
         }
@@ -1379,6 +1402,7 @@ public class Pack
                 }
             }
 
+            // FIXME Byte buffer can get reclaimed.
             dirtyPages.add(getRawPage());
 
             return position;
@@ -2175,6 +2199,7 @@ public class Pack
             this.setOfReturningAddressPages = new HashSet<Long>();
         }
         
+        // FIXME Me misnomer. It should be getAddressStart.
         public long getFirstPointer()
         {
             return FILE_HEADER_SIZE + (setOfJournalHeaders.getCapacity() * POSITION_SIZE);
@@ -2456,7 +2481,7 @@ public class Pack
                     setOfAddressPages.remove(position);
                 }
                 AddressPage addressPage = getPage(position, new AddressPage());
-                if (addressPage.getRemainingCount() > 1)
+                if (addressPage.getFreeCount() > 1)
                 {
                     setOfReturningAddressPages.add(position);
                 }
@@ -2466,7 +2491,7 @@ public class Pack
         
         public void returnAddressPage(AddressPage addressPage)
         {
-            if (addressPage.getRemainingCount() != 0)
+            if (addressPage.getFreeCount() != 0)
             {
                 long position = addressPage.getRawPage().getPosition();
                 synchronized (setOfAddressPages)
@@ -2549,23 +2574,23 @@ public class Pack
             // from the front of the interim page space, if we want to rewind
             // the interim page space and shrink the file more frequently.
 
-            long value = popFreeInterimPage();
+            long position = popFreeInterimPage();
 
             // If we do not have a free interim page available, we will obtain
             // create one out of the wilderness.
 
-            if (value == 0L)
+            if (position == 0L)
             {
-                value = fromWilderness();
+                position = fromWilderness();
             }
 
-            RawPage position = new RawPage(this, value);
+            RawPage rawPage = new RawPage(this, position);
 
-            page.create(position, dirtyPages);
+            page.create(rawPage, dirtyPages);
 
             synchronized (mapOfPagesByPosition)
             {
-                addPageByPosition(position);
+                addPageByPosition(rawPage);
             }
 
             return page;
@@ -3670,15 +3695,7 @@ public class Pack
             addressPage = pager.getAddressPage(lastPointerPage);
             try
             {
-                addressPage.getLock().lock();
-                try
-                {
-                    address = addressPage.reserve(dirtyPages);
-                }
-                finally
-                {
-                    addressPage.getLock().unlock();
-                }
+                address = addressPage.reserve(dirtyPages);
             }
             finally
             {
