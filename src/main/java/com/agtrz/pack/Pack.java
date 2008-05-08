@@ -37,8 +37,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
-import javax.print.attribute.SetOfIntegerSyntax;
-
 public class Pack
 {
     private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
@@ -465,6 +463,624 @@ public class Pack
             // Read the first address page.
             
             // Work through address pages until we reach a data page.
+        }
+    }
+
+    private final static class Pager
+    {
+        private final Checksum checksum;
+
+        private final FileChannel fileChannel;
+        
+        private final int pageSize;
+
+        private final Map<Long, PageReference> mapOfPagesByPosition;
+        
+        /**
+         * A read/write lock that coordinates rewind of area boundaries and the
+         * wilderness. 
+         */
+        private final ReadWriteLock compactLock;
+        
+        /**
+         * A read/write lock that protects the end of the move list.
+         */
+        private final ReadWriteLock moveListLock;
+        
+        /**
+         * A lock to ensure that only one mutator at a time is moving pages in
+         * the interim page area.
+         */
+        private final Lock expandLock;
+
+        private final ReferenceQueue<RawPage> queue;
+
+        public final File file;
+
+        public final Map<URI, Long> mapOfStaticPages;
+
+        private final int alignment;
+
+        public final BySizeTable pagesBySize;
+
+        private final SortedSet<Long> setOfFreeUserPages;
+
+        /**
+         * A sorted set of of free interim pages sorted in descending order so
+         * that we can quickly obtain the last free interim page within interim
+         * page space.
+         * <p>
+         * This set of free interim pages guards against overwrites by a simple
+         * method. If the position is in the set of free interim pages, then it
+         * is free, if not it is not free. System pages must be allocated while
+         * the move lock is locked for reading, or locked for writing in the
+         * case of removing free pages from the start of the interim page area
+         * when the user area expands.
+         * <p>
+         * Question: Can't an interim page allocated from the set of free pages
+         * be moved while we are first writing to it?
+         * <p>
+         * Answer: No, because the moving mutator will have to add the moves to
+         * the move list before it can move the pages. Adding to move list
+         * requires an exclusive lock on the move list.
+         * <p>
+         * Remember: Only one mutator can move pages in the interim area at a
+         * time.
+         */
+        private final SortedSet<Long> setOfFreeInterimPages;
+
+        private final Boundary dataBoundary;
+        
+        private final Boundary interimBoundary;
+            
+        private final MoveList listOfMoves;
+        
+        private final PositionSet setOfJournalHeaders;
+        
+        private final SortedSet<Long> setOfAddressPages;
+        
+        private final Set<Long> setOfReturningAddressPages;
+        
+        public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, long dataBoundary)
+        {
+            this.file = file;
+            this.fileChannel = fileChannel;
+            this.alignment = alignment;
+            this.pageSize = pageSize;
+            this.dataBoundary = new Boundary(pageSize, dataBoundary);
+            try
+            {
+                this.interimBoundary = new Boundary(pageSize, fileChannel.size());
+            }
+            catch (IOException e)
+            {
+                throw new Danger("io.size", e);
+            }
+            this.checksum = new Adler32();
+            this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
+            this.pagesBySize = new BySizeTable(pageSize, alignment);
+            this.mapOfStaticPages = mapOfStaticPages;
+            this.setOfFreeUserPages = new TreeSet<Long>();
+            this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
+            this.queue = new ReferenceQueue<RawPage>();
+            this.moveListLock = new ReentrantReadWriteLock();
+            this.compactLock = new ReentrantReadWriteLock();
+            this.expandLock = new ReentrantLock();
+            this.listOfMoves = new MoveList();
+            this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, internalJournalCount);
+            this.setOfAddressPages = new TreeSet<Long>();
+            this.setOfReturningAddressPages = new HashSet<Long>();
+        }
+        
+        public long getFirstPointer()
+        {
+            return FILE_HEADER_SIZE + (setOfJournalHeaders.getCapacity() * POSITION_SIZE);
+        }
+        
+        public Lock getExpandLock()
+        {
+            return expandLock;
+        }
+        
+        public PositionSet getJournalHeaderSet()
+        {
+            return setOfJournalHeaders;
+        }
+        
+        public ReadWriteLock getCompactLock()
+        {
+            return compactLock;
+        }
+        
+        public ReadWriteLock getMoveListLock()
+        {
+            return moveListLock;
+        }
+        
+        public Boundary getDataBoundary()
+        {
+            return dataBoundary;
+        }
+        
+        public Boundary getInterimBoundary()
+        {
+            return interimBoundary;
+        }
+        
+        public MoveList getMoveList()
+        {
+            return listOfMoves;
+        }
+        
+        public void initialize()
+        {
+            // FIXME Not initializing very well at all. Does this method
+            // also perform recovery?
+            long firstPointerPage = getFirstPointer();
+            firstPointerPage -= firstPointerPage % pageSize;
+            long firstUserPage = getDataBoundary().getPosition();
+
+            ByteBuffer bytes = ByteBuffer.allocate(pageSize);
+            long position = firstPointerPage;
+            while (position < firstUserPage)
+            {
+                try
+                {
+                    fileChannel.read(bytes);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger("io.read", e);
+                }
+                bytes.flip();
+                int offset = 0;
+                if (firstPointerPage < getFirstPointer())
+                {
+                    offset = (int) getFirstPointer() / POSITION_SIZE;
+                }
+                while (offset < bytes.capacity() / POSITION_SIZE)
+                {
+                    if (bytes.getLong(offset) == 0L)
+                    {   
+                        setOfAddressPages.add(position);
+                        break;
+                    }
+                }
+                position += pageSize;
+            }
+        }
+
+        public int getAlignment()
+        {
+            return alignment;
+        }
+
+        public FileChannel getFileChannel()
+        {
+            return fileChannel;
+        }
+
+        public int getPageSize()
+        {
+            return pageSize;
+        }
+
+        public void newUserDataPages(Set<Long> setOfPages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
+        {
+            synchronized (setOfFreeUserPages)
+            {
+                while (setOfFreeUserPages.size() != 0 && setOfPages.size() != 0)
+                {
+                    Iterator<Long> pages = setOfPages.iterator();
+                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
+                    long position = freeUserPages.next();
+                    setOfDataPages.add(position);
+                    mapOfPages.put(pages.next(), new MovablePosition(moveNode, position));
+                    pages.remove();
+                    freeUserPages.remove();
+                }
+            }
+        }
+
+        public synchronized void collect()
+        {
+            PageReference pageReference = null;
+            while ((pageReference = (PageReference) queue.poll()) != null)
+            {
+                mapOfPagesByPosition.remove(pageReference.getPosition());
+            }
+        }
+
+        private long fromWilderness()
+        {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
+
+            bytes.getLong(); // Checksum.
+            bytes.putInt(-1); // Is system page.
+
+            bytes.clear();
+
+            checksum(checksum, bytes);
+
+            long position;
+
+            synchronized (fileChannel)
+            {
+                try
+                {
+                    position = fileChannel.size();
+                }
+                catch (IOException e)
+                {
+                    throw new Danger("io.size", e);
+                }
+
+                try
+                {
+                    fileChannel.write(bytes, position);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger("io.write", e);
+                }
+
+                try
+                {
+                    if (fileChannel.size() % 1024 != 0)
+                    {
+                        throw new Danger("io.position");
+                    }
+                }
+                catch (IOException e)
+                {
+                    throw new Danger("io.size", e);
+                }
+            }
+
+            return position;
+        }
+
+        private RawPage getPageByPosition(long position)
+        {
+            RawPage page = null;
+            Long boxPosition = new Long(position);
+            PageReference chunkReference = (PageReference) mapOfPagesByPosition.get(boxPosition);
+            if (chunkReference != null)
+            {
+                page = (RawPage) chunkReference.get();
+            }
+            return page;
+        }
+
+        private RawPage removePageByPosition(long position)
+        {
+            PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
+            RawPage p = null;
+            if (existing != null)
+            {
+                p = existing.get();
+                existing.enqueue();
+                collect();
+            }
+            return p;
+        }
+
+        private void addPageByPosition(RawPage page)
+        {
+            PageReference intended = new PageReference(page, queue);
+            PageReference existing = (PageReference) mapOfPagesByPosition.get(intended.getPosition());
+            if (existing != null)
+            {
+                existing.enqueue();
+                collect();
+            }
+            mapOfPagesByPosition.put(intended.getPosition(), intended);
+        }
+        
+        @SuppressWarnings("unchecked")
+        public <P extends Page> P setPage(long value, P page, DirtyPageMap dirtyPages)
+        {
+            value = (long) Math.floor(value - (value % pageSize));
+            RawPage position = new RawPage(this, value);
+            page.create(position, dirtyPages);
+
+            synchronized (mapOfPagesByPosition)
+            {
+                assert getPageByPosition(value) == null;
+                addPageByPosition(position);
+            }
+
+            return (P) position.getPage();
+        }
+        
+        public AddressPage getAddressPage(long lastSelected)
+        {
+            for (;;)
+            {
+                AddressPage addressPage = tryGetAddressPage(lastSelected);
+                if (addressPage != null)
+                {
+                    return addressPage;
+                }
+            }
+        }
+        
+        public AddressPage tryGetAddressPage(long lastSelected)
+        {
+            synchronized (setOfAddressPages)
+            {
+                long position = 0L;
+                if (setOfAddressPages.size() == 0 && setOfReturningAddressPages.size() == 0)
+                {
+                    final PageRecorder pageRecorder = new PageRecorder();
+                    final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
+                    Mutator mutator = listOfMoves.mutate(new Returnable<Mutator>()
+                    {
+                        public Mutator run()
+                        {
+                            MoveNode moveNode = new MoveNode(new Move(0, 0));
+                            DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
+                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
+                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                        }
+                    });
+                    position = mutator.newAddressPage();
+                    // FIXME Here is something that hasn't been dealt with yet.
+                    mutator.commit();
+                }
+                else
+                {
+                    if (setOfAddressPages.contains(lastSelected))
+                    {
+                        position = lastSelected;
+                    }
+                    else if (setOfAddressPages.size() != 0)
+                    {
+                        position = setOfAddressPages.first();
+                    }
+                    else
+                    {
+                        try
+                        {
+                            setOfAddressPages.wait();
+                        }
+                        catch (InterruptedException e)
+                        {
+                        }
+                        return null;
+                    }
+                    setOfAddressPages.remove(position);
+                }
+                AddressPage addressPage = getPage(position, new AddressPage());
+                if (addressPage.getFreeCount() > 1)
+                {
+                    setOfReturningAddressPages.add(position);
+                }
+                return addressPage;
+            }
+        }
+        
+        public void returnAddressPage(AddressPage addressPage)
+        {
+            if (addressPage.getFreeCount() != 0)
+            {
+                long position = addressPage.getRawPage().getPosition();
+                synchronized (setOfAddressPages)
+                {
+                    setOfReturningAddressPages.remove(position);
+                    setOfAddressPages.add(position);
+                    setOfAddressPages.notifyAll();
+                }
+            }
+        }
+
+        // FIXME Rename everything in this method.
+        // FIXME Document this method.
+        @SuppressWarnings("unchecked")
+        public <P extends Page> P getPage(long value, P page)
+        {
+            RawPage position = null;
+            synchronized (mapOfPagesByPosition)
+            {
+                value = (long) Math.floor(value - (value % pageSize));
+                position = getPageByPosition(value);
+                if (position == null)
+                {
+                    position = new RawPage(this, value);
+                    page.load(position);
+                    addPageByPosition(position);
+                }
+            }
+            // FIXME Am I down grading when looking for RelocatablePage?
+            // FIXME Shouldn't this be assignable from?
+            // FIXME Assert that if not assignable one way, it is assignable the other way.
+            synchronized (position)
+            {
+                if (!position.getPage().getClass().equals(page.getClass()))
+                {
+                    page.load(position);
+                }
+            }
+            return (P) position.getPage();
+        }
+
+        private long popFreeInterimPage()
+        {
+            long position = 0L;
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.size() > 0)
+                {
+                    position = setOfFreeInterimPages.last();
+                    setOfFreeInterimPages.remove(position);
+                }
+            }
+            return position;
+        }
+
+        /**
+         * Allocate a new interim position that is initialized by the
+         * specified page strategy.
+         * <p>
+         * This method can only be called from within one of the
+         * <code>MoveList.mutate</code> methods. A page obtained from the set of
+         * free interim pages will not be moved while the move list is locked
+         * shared. 
+         * 
+         * @param <T>
+         *            The page strategy for the position.
+         * @param page
+         *            An instance of the page strategy that will initialize
+         *            the page at the position.
+         * @param dirtyPages
+         *            A map of dirty pages.
+         * @return A new interim page.
+         */
+        public <T extends Page> T newSystemPage(T page, DirtyPageMap dirtyPages)
+        {
+            // FIXME Rename newInterimPage.
+
+            // We pull from the end of the interim space to take pressure of of
+            // the durable pages, which are more than likely multiply in number
+            // and move interim pages out of the way. We could change the order
+            // of the interim page set, so that we choose free interim pages
+            // from the front of the interim page space, if we want to rewind
+            // the interim page space and shrink the file more frequently.
+
+            long position = popFreeInterimPage();
+
+            // If we do not have a free interim page available, we will obtain
+            // create one out of the wilderness.
+
+            if (position == 0L)
+            {
+                position = fromWilderness();
+            }
+
+            RawPage rawPage = new RawPage(this, position);
+
+            page.create(rawPage, dirtyPages);
+
+            synchronized (mapOfPagesByPosition)
+            {
+                addPageByPosition(rawPage);
+            }
+
+            return page;
+        }
+
+        public long getPosition(long address)
+        {
+            return (long) Math.floor(address / pageSize);
+        }
+        
+        /**
+         * Return an interim page for use as a move destination.
+         * <p>
+         * Question: How do we ensure that free interim pages do not slip into
+         * the user data page section? That is, how do we ensure that we're
+         * not moving an interium page to a spot that also needs to move?
+         * <p>
+         * Simple. We gather all the pages that need to move first. Then we
+         * assign blank pages only to the pages that are in use and need to
+         * move. See <code>tryMove</code> for more discussion.
+         * 
+         * @return A blank position in the interim area that for use as the
+         *         target of a move.
+         */
+        public long newBlankInterimPage()
+        {
+            long position = popFreeInterimPage();
+            if (position == 0L)
+            {
+                position = fromWilderness();
+            }
+            return position;
+        }
+        
+        /**
+         * Remove the interim page from the set of free interim pages if the
+         * page is in the set of free interim pages. Returns true if the page
+         * was in the set of free interim pages.
+         * <p>
+         * This method can only be called while holding the expand lock in the
+         * pager class.
+         *
+         * @param position The position of the iterim free page.
+         */
+        public boolean removeInterimPageIfFree(long position)
+        {
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.contains(position))
+                {
+                    setOfFreeInterimPages.remove(position);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public boolean removeDataPageIfFree(long position)
+        {
+            synchronized (setOfFreeUserPages)
+            {
+                if (setOfFreeUserPages.contains(position))
+                {
+                    setOfFreeUserPages.remove(position);
+                    return true;
+                }
+            }
+            return false;
+        }
+        public void relocate(MoveLatch head)
+        {
+            synchronized (mapOfPagesByPosition)
+            {
+                RawPage position = removePageByPosition(head.getMove().getFrom());
+                if (position != null)
+                {
+                    assert head.getMove().getTo() == position.getPosition();
+                    addPageByPosition(position);
+                }
+            }
+        }
+        
+        public long adjust(MoveNode moveNode, long position, int skip)
+        {
+            int offset = (int) (position % pageSize);
+            position = position - offset;
+            while (moveNode.getNext() != null)
+            {
+                moveNode = moveNode.getNext();
+                Move move = moveNode.getMove();
+                if (move.getFrom() == position)
+                {
+                    if (skip == 0)
+                    {
+                        position = move.getTo();
+                    }
+                    else
+                    {
+                        skip--;
+                    }
+                }
+            }
+            return position + offset;
+        }
+
+        public long adjust(List<Move> listOfMoves, long position)
+        {
+            int offset = (int) (position % pageSize);
+            position = position - offset;
+            for (Move move: listOfMoves)
+            {
+                if (move.getFrom() == position)
+                {
+                    position = move.getTo();
+                }
+            }
+            return position + offset;
         }
     }
 
@@ -2246,629 +2862,6 @@ public class Pack
         public int compare(T left, T right)
         {
             return right.compareTo(left);
-        }
-    }
-
-    // FIXME Move to top of file beneath opener.
-    private final static class Pager
-    {
-        private final Checksum checksum;
-
-        private final FileChannel fileChannel;
-        
-        private final int pageSize;
-
-        private final Map<Long, PageReference> mapOfPagesByPosition;
-        
-        /**
-         * A read/write lock that coordinates rewind of area boundaries and the
-         * wilderness. 
-         */
-        private final ReadWriteLock compactLock;
-        
-        /**
-         * A read/write lock that protects the end of the move list.
-         */
-        private final ReadWriteLock moveListLock;
-        
-        /**
-         * A lock to ensure that only one mutator at a time is moving pages in
-         * the interim page area.
-         */
-        private final Lock expandLock;
-
-        private final ReferenceQueue<RawPage> queue;
-
-        public final File file;
-
-        public final Map<URI, Long> mapOfStaticPages;
-
-        private final int alignment;
-
-        public final BySizeTable pagesBySize;
-
-//        private final SortedMap<Long, AddressPage> mapOfPointerPages;
-
-        private final SortedSet<Long> setOfFreeUserPages;
-
-        /**
-         * A sorted set of of free interim pages sorted in descending order so
-         * that we can quickly obtain the last free interim page within interim
-         * page space.
-         * <p>
-         * This set of free interim pages guards against overwrites by a simple
-         * method. If the position is in the set of free interim pages, then it
-         * is free, if not it is not free. System pages must be allocated while
-         * the move lock is locked for reading, or locked for writing in the
-         * case of removing free pages from the start of the interim page area
-         * when the user area expands.
-         * <p>
-         * Question: Can't an interim page allocated from the set of free pages
-         * be moved while we are first writing to it?
-         * <p>
-         * Answer: No, because the moving mutator will have to add the moves to
-         * the move list before it can move the pages. Adding to move list
-         * requires an exclusive lock on the move list.
-         * <p>
-         * Remember: Only one mutator can move pages in the interim area at a
-         * time.
-         */
-        private final SortedSet<Long> setOfFreeInterimPages;
-
-        private final Boundary dataBoundary;
-        
-        private final Boundary interimBoundary;
-            
-        private final MoveList listOfMoves;
-        
-        private final PositionSet setOfJournalHeaders;
-        
-        private final SortedSet<Long> setOfAddressPages;
-        
-        private final Set<Long> setOfReturningAddressPages;
-        
-        public Pager(File file, FileChannel fileChannel, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, long dataBoundary)
-        {
-            this.file = file;
-            this.fileChannel = fileChannel;
-            this.alignment = alignment;
-            this.pageSize = pageSize;
-            this.dataBoundary = new Boundary(pageSize, dataBoundary);
-            try
-            {
-                this.interimBoundary = new Boundary(pageSize, fileChannel.size());
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.size", e);
-            }
-            this.checksum = new Adler32();
-            this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
-//            this.mapOfPointerPages = new TreeMap<Long, AddressPage>();
-            this.pagesBySize = new BySizeTable(pageSize, alignment);
-            this.mapOfStaticPages = mapOfStaticPages;
-            this.setOfFreeUserPages = new TreeSet<Long>();
-            this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
-            this.queue = new ReferenceQueue<RawPage>();
-            this.moveListLock = new ReentrantReadWriteLock();
-            this.compactLock = new ReentrantReadWriteLock();
-            this.expandLock = new ReentrantLock();
-            this.listOfMoves = new MoveList();
-            this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, internalJournalCount);
-            this.setOfAddressPages = new TreeSet<Long>();
-            this.setOfReturningAddressPages = new HashSet<Long>();
-        }
-        
-        // FIXME Me misnomer. It should be getAddressStart.
-        public long getFirstPointer()
-        {
-            return FILE_HEADER_SIZE + (setOfJournalHeaders.getCapacity() * POSITION_SIZE);
-        }
-        
-        public Lock getExpandLock()
-        {
-            return expandLock;
-        }
-        
-        public PositionSet getJournalHeaderSet()
-        {
-            return setOfJournalHeaders;
-        }
-        
-        public ReadWriteLock getCompactLock()
-        {
-            return compactLock;
-        }
-        
-        public ReadWriteLock getMoveListLock()
-        {
-            return moveListLock;
-        }
-        
-        public Boundary getDataBoundary()
-        {
-            return dataBoundary;
-        }
-        
-        public Boundary getInterimBoundary()
-        {
-            return interimBoundary;
-        }
-        
-        public MoveList getMoveList()
-        {
-            return listOfMoves;
-        }
-        
-        public void initialize()
-        {
-            // FIXME Not initializing very well at all. Does this method
-            // also perform recovery?
-            long firstPointerPage = getFirstPointer();
-            firstPointerPage -= firstPointerPage % pageSize;
-            long firstUserPage = getDataBoundary().getPosition();
-
-            ByteBuffer bytes = ByteBuffer.allocate(pageSize);
-            long position = firstPointerPage;
-            while (position < firstUserPage)
-            {
-                try
-                {
-                    fileChannel.read(bytes);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.read", e);
-                }
-                bytes.flip();
-                int offset = 0;
-                if (firstPointerPage < getFirstPointer())
-                {
-                    offset = (int) getFirstPointer() / POSITION_SIZE;
-                }
-                while (offset < bytes.capacity() / POSITION_SIZE)
-                {
-                    if (bytes.getLong(offset) == 0L)
-                    {   
-                        setOfAddressPages.add(position);
-                        break;
-                    }
-                }
-                position += pageSize;
-            }
-        }
-
-        public int getAlignment()
-        {
-            return alignment;
-        }
-
-        public FileChannel getFileChannel()
-        {
-            return fileChannel;
-        }
-
-        public int getPageSize()
-        {
-            return pageSize;
-        }
-
-        public void newUserDataPages(Set<Long> setOfPages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
-        {
-            synchronized (setOfFreeUserPages)
-            {
-                while (setOfFreeUserPages.size() != 0 && setOfPages.size() != 0)
-                {
-                    Iterator<Long> pages = setOfPages.iterator();
-                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
-                    long position = freeUserPages.next();
-                    setOfDataPages.add(position);
-                    mapOfPages.put(pages.next(), new MovablePosition(moveNode, position));
-                    pages.remove();
-                    freeUserPages.remove();
-                }
-            }
-        }
-
-        public synchronized void collect()
-        {
-            PageReference pageReference = null;
-            while ((pageReference = (PageReference) queue.poll()) != null)
-            {
-                mapOfPagesByPosition.remove(pageReference.getPosition());
-            }
-        }
-
-        private long fromWilderness()
-        {
-            ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
-
-            bytes.getLong(); // Checksum.
-            bytes.putInt(-1); // Is system page.
-
-            bytes.clear();
-
-            checksum(checksum, bytes);
-
-            long position;
-
-            synchronized (fileChannel)
-            {
-                try
-                {
-                    position = fileChannel.size();
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.size", e);
-                }
-
-                try
-                {
-                    fileChannel.write(bytes, position);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.write", e);
-                }
-
-                try
-                {
-                    if (fileChannel.size() % 1024 != 0)
-                    {
-                        throw new Danger("io.position");
-                    }
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.size", e);
-                }
-            }
-
-            return position;
-        }
-
-        private RawPage getPageByPosition(long position)
-        {
-            RawPage page = null;
-            Long boxPosition = new Long(position);
-            PageReference chunkReference = (PageReference) mapOfPagesByPosition.get(boxPosition);
-            if (chunkReference != null)
-            {
-                page = (RawPage) chunkReference.get();
-            }
-            return page;
-        }
-
-        private RawPage removePageByPosition(long position)
-        {
-            PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
-            RawPage p = null;
-            if (existing != null)
-            {
-                p = existing.get();
-                existing.enqueue();
-                collect();
-            }
-            return p;
-        }
-
-        private void addPageByPosition(RawPage page)
-        {
-            PageReference intended = new PageReference(page, queue);
-            PageReference existing = (PageReference) mapOfPagesByPosition.get(intended.getPosition());
-            if (existing != null)
-            {
-                existing.enqueue();
-                collect();
-            }
-            mapOfPagesByPosition.put(intended.getPosition(), intended);
-        }
-        
-        @SuppressWarnings("unchecked")
-        public <P extends Page> P setPage(long value, P page, DirtyPageMap dirtyPages)
-        {
-            value = (long) Math.floor(value - (value % pageSize));
-            RawPage position = new RawPage(this, value);
-            page.create(position, dirtyPages);
-
-            synchronized (mapOfPagesByPosition)
-            {
-                assert getPageByPosition(value) == null;
-                addPageByPosition(position);
-            }
-
-            return (P) position.getPage();
-        }
-        
-        public AddressPage getAddressPage(long lastSelected)
-        {
-            for (;;)
-            {
-                AddressPage addressPage = tryGetAddressPage(lastSelected);
-                if (addressPage != null)
-                {
-                    return addressPage;
-                }
-            }
-        }
-        
-        public AddressPage tryGetAddressPage(long lastSelected)
-        {
-            synchronized (setOfAddressPages)
-            {
-                long position = 0L;
-                if (setOfAddressPages.size() == 0 && setOfReturningAddressPages.size() == 0)
-                {
-                    final PageRecorder pageRecorder = new PageRecorder();
-                    final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
-                    Mutator mutator = listOfMoves.mutate(new Returnable<Mutator>()
-                    {
-                        public Mutator run()
-                        {
-                            MoveNode moveNode = new MoveNode(new Move(0, 0));
-                            DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
-                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
-                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
-                        }
-                    });
-                    position = mutator.newAddressPage();
-                    // FIXME Here is something that hasn't been dealt with yet.
-                    mutator.commit();
-                }
-                else
-                {
-                    if (setOfAddressPages.contains(lastSelected))
-                    {
-                        position = lastSelected;
-                    }
-                    else if (setOfAddressPages.size() != 0)
-                    {
-                        position = setOfAddressPages.first();
-                    }
-                    else
-                    {
-                        try
-                        {
-                            setOfAddressPages.wait();
-                        }
-                        catch (InterruptedException e)
-                        {
-                        }
-                        return null;
-                    }
-                    setOfAddressPages.remove(position);
-                }
-                AddressPage addressPage = getPage(position, new AddressPage());
-                if (addressPage.getFreeCount() > 1)
-                {
-                    setOfReturningAddressPages.add(position);
-                }
-                return addressPage;
-            }
-        }
-        
-        public void returnAddressPage(AddressPage addressPage)
-        {
-            if (addressPage.getFreeCount() != 0)
-            {
-                long position = addressPage.getRawPage().getPosition();
-                synchronized (setOfAddressPages)
-                {
-                    setOfReturningAddressPages.remove(position);
-                    setOfAddressPages.add(position);
-                    setOfAddressPages.notifyAll();
-                }
-            }
-        }
-
-        // FIXME Rename everything in this method.
-        // FIXME Document this method.
-        @SuppressWarnings("unchecked")
-        public <P extends Page> P getPage(long value, P page)
-        {
-            RawPage position = null;
-            synchronized (mapOfPagesByPosition)
-            {
-                value = (long) Math.floor(value - (value % pageSize));
-                position = getPageByPosition(value);
-                if (position == null)
-                {
-                    position = new RawPage(this, value);
-                    page.load(position);
-                    addPageByPosition(position);
-                }
-            }
-            // FIXME Am I down grading when looking for RelocatablePage?
-            // FIXME Shouldn't this be assignable from?
-            // FIXME Assert that if not assignable one way, it is assignable the other way.
-            synchronized (position)
-            {
-                if (!position.getPage().getClass().equals(page.getClass()))
-                {
-                    page.load(position);
-                }
-            }
-            return (P) position.getPage();
-        }
-
-        private long popFreeInterimPage()
-        {
-            long position = 0L;
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.size() > 0)
-                {
-                    position = setOfFreeInterimPages.last();
-                    setOfFreeInterimPages.remove(position);
-                }
-            }
-            return position;
-        }
-
-        /**
-         * Allocate a new interim position that is initialized by the
-         * specified page strategy.
-         * <p>
-         * This method can only be called from within one of the
-         * <code>MoveList.mutate</code> methods. A page obtained from the set of
-         * free interim pages will not be moved while the move list is locked
-         * shared. 
-         * 
-         * @param <T>
-         *            The page strategy for the position.
-         * @param page
-         *            An instance of the page strategy that will initialize
-         *            the page at the position.
-         * @param dirtyPages
-         *            A map of dirty pages.
-         * @return A new interim page.
-         */
-        public <T extends Page> T newSystemPage(T page, DirtyPageMap dirtyPages)
-        {
-            // FIXME Rename newInterimPage.
-
-            // We pull from the end of the interim space to take pressure of of
-            // the durable pages, which are more than likely multiply in number
-            // and move interim pages out of the way. We could change the order
-            // of the interim page set, so that we choose free interim pages
-            // from the front of the interim page space, if we want to rewind
-            // the interim page space and shrink the file more frequently.
-
-            long position = popFreeInterimPage();
-
-            // If we do not have a free interim page available, we will obtain
-            // create one out of the wilderness.
-
-            if (position == 0L)
-            {
-                position = fromWilderness();
-            }
-
-            RawPage rawPage = new RawPage(this, position);
-
-            page.create(rawPage, dirtyPages);
-
-            synchronized (mapOfPagesByPosition)
-            {
-                addPageByPosition(rawPage);
-            }
-
-            return page;
-        }
-
-        public long getPosition(long address)
-        {
-            return (long) Math.floor(address / pageSize);
-        }
-        
-        /**
-         * Return an interim page for use as a move destination.
-         * <p>
-         * Question: How do we ensure that free interim pages do not slip into
-         * the user data page section? That is, how do we ensure that we're
-         * not moving an interium page to a spot that also needs to move?
-         * <p>
-         * Simple. We gather all the pages that need to move first. Then we
-         * assign blank pages only to the pages that are in use and need to
-         * move. See <code>tryMove</code> for more discussion.
-         * 
-         * @return A blank position in the interim area that for use as the
-         *         target of a move.
-         */
-        public long newBlankInterimPage()
-        {
-            long position = popFreeInterimPage();
-            if (position == 0L)
-            {
-                position = fromWilderness();
-            }
-            return position;
-        }
-        
-        /**
-         * Remove the interim page from the set of free interim pages if the
-         * page is in the set of free interim pages. Returns true if the page
-         * was in the set of free interim pages.
-         * <p>
-         * This method can only be called while holding the expand lock in the
-         * pager class.
-         *
-         * @param position The position of the iterim free page.
-         */
-        public boolean removeInterimPageIfFree(long position)
-        {
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.contains(position))
-                {
-                    setOfFreeInterimPages.remove(position);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        public boolean removeDataPageIfFree(long position)
-        {
-            synchronized (setOfFreeUserPages)
-            {
-                if (setOfFreeUserPages.contains(position))
-                {
-                    setOfFreeUserPages.remove(position);
-                    return true;
-                }
-            }
-            return false;
-        }
-        public void relocate(MoveLatch head)
-        {
-            synchronized (mapOfPagesByPosition)
-            {
-                RawPage position = removePageByPosition(head.getMove().getFrom());
-                if (position != null)
-                {
-                    assert head.getMove().getTo() == position.getPosition();
-                    addPageByPosition(position);
-                }
-            }
-        }
-        
-        public long adjust(MoveNode moveNode, long position, int skip)
-        {
-            int offset = (int) (position % pageSize);
-            position = position - offset;
-            while (moveNode.getNext() != null)
-            {
-                moveNode = moveNode.getNext();
-                Move move = moveNode.getMove();
-                if (move.getFrom() == position)
-                {
-                    if (skip == 0)
-                    {
-                        position = move.getTo();
-                    }
-                    else
-                    {
-                        skip--;
-                    }
-                }
-            }
-            return position + offset;
-        }
-
-        public long adjust(List<Move> listOfMoves, long position)
-        {
-            int offset = (int) (position % pageSize);
-            position = position - offset;
-            for (Move move: listOfMoves)
-            {
-                if (move.getFrom() == position)
-                {
-                    position = move.getTo();
-                }
-            }
-            return position + offset;
         }
     }
 
