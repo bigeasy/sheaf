@@ -5,6 +5,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -35,11 +37,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
+import javax.print.attribute.SetOfIntegerSyntax;
+
 public class Pack
 {
     private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
     
-//    private final static int SOFT_SHUTDOWN = 0xAAAAAAAA;
+    private final static int SOFT_SHUTDOWN = 0xAAAAAAAA;
 
     private final static int HARD_SHUTDOWN = 0x55555555;
     
@@ -366,11 +370,101 @@ public class Pack
         }
     }
     
+    /**
+     * Opens pack files and performs recovery.
+     */
     public final static class Opener
     {
+//        private final Set<Long> setOfBadAddresses;
+        
+        public Opener()
+        {
+//            this.setOfBadAddresses = new HashSet<Long>();
+        }
+
         public Pack open(File file)
         {
-            return null;
+            // Open the file channel.
+
+            FileChannel fileChannel = newFileChannel(file);
+
+            // Read the header and obtain the basic file properties.
+
+            ByteBuffer header = ByteBuffer.allocateDirect(FILE_HEADER_SIZE);
+       
+            try
+            {
+                fileChannel.read(header, 0L);
+            }
+            catch (IOException e)
+            {
+                throw new Danger("io.write", e);
+            }
+     
+            long signature = header.getLong();
+            if (signature != SIGNATURE)
+            {
+                throw new Danger("corrupt");
+            }
+            
+            int shutdown = header.getInt();
+            if (!(shutdown == HARD_SHUTDOWN || shutdown == SOFT_SHUTDOWN))
+            {
+                throw new Danger("corrupt");
+            }
+            int pageSize = header.getInt();
+            int alignment = header.getInt();
+            int internalJournalCount = header.getInt(); 
+            long staticPagesAddress = header.getLong();
+            long dataBoundary = header.getLong();
+
+            Map<URI, Long> mapOfStaticPages = new HashMap<URI, Long>();
+
+            Pager pager = new Pager(file, fileChannel, pageSize, alignment, mapOfStaticPages, internalJournalCount, dataBoundary);
+
+            pager.initialize();
+            
+            Pack pack = new Pack(pager);
+            
+            Mutator mutator = pack.mutate();
+            
+            ByteBuffer bytes = mutator.read(staticPagesAddress);
+            
+            ObjectInputStream in;
+            try
+            {
+                in = new ObjectInputStream(new ByteBufferInputStream(bytes, false));
+                mapOfStaticPages = getStaticPages(in);
+            }
+            catch (IOException e)
+            {
+                e.printStackTrace();
+            }
+            catch (ClassNotFoundException e)
+            {
+                e.printStackTrace();
+            }
+            
+            mutator.commit();
+
+            pager = new Pager(file, fileChannel, pageSize, alignment, mapOfStaticPages, internalJournalCount, dataBoundary);
+            
+            return new Pack(pager);
+        }
+        
+        @SuppressWarnings("unchecked")
+        public Map<URI, Long> getStaticPages(ObjectInputStream in) throws IOException, ClassNotFoundException
+        {
+            return (Map<URI, Long>) in.readObject();
+        }
+        
+        public void recovery()
+        {
+//            Pager pager = null;
+
+            // Read the first address page.
+            
+            // Work through address pages until we reach a data page.
         }
     }
 
@@ -570,6 +664,9 @@ public class Pack
          * gathers dirty buffers and writes them out in a batch.
          */
         private Reference<ByteBuffer> byteBufferReference;
+        
+        
+        private SortedMap<Long, Long> setOfRegions;
 
         /**
          * Create a raw page at the specified position associated with the
@@ -585,6 +682,7 @@ public class Pack
         {
             this.pager = pager;
             this.position = position;
+            this.setOfRegions = new TreeMap<Long, Long>();
         }
 
         /**
@@ -706,6 +804,66 @@ public class Pack
 
             return bytes;
         }
+        
+        public void invalidate(int offset, int length)
+        {
+            long start = getPosition() + offset;
+            long end = start + length;
+            invalidate(start, end);
+        }
+        
+        private void invalidate(long start, long end)
+        {
+            INVALIDATE: for(;;)
+            {
+                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
+                while (entries.hasNext())
+                {
+                    Map.Entry<Long, Long> entry = entries.next();
+                    if (start < entry.getKey() && end >= entry.getKey())
+                    {
+                        entries.remove();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (end == entry.getKey() - 1)
+                    {
+                        entries.remove();
+                        end = entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getKey() <= start && start <= entry.getValue())
+                    {
+                        entries.remove();
+                        start = entry.getKey();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getValue() == start - 1)
+                    {
+                        entries.remove();
+                        start = entry.getKey();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getValue() < start)
+                    {
+                        break;
+                    }
+                }
+                break;
+            }
+            setOfRegions.put(start, end);
+        }
+        
+        public Iterator<Map.Entry<Long, Long>> getInvalidRegions()
+        {
+            return setOfRegions.entrySet().iterator();
+        }
+        
+        public void validate()
+        {
+            setOfRegions.clear();
+        }
     }
 
     /**
@@ -794,7 +952,7 @@ public class Pack
          * @see Pack.Pager#getPage
          */
         public void load(RawPage rawPage);
-
+        
         public boolean isInterim();
     }
 
@@ -808,8 +966,9 @@ public class Pack
      * The address itself is a long value indicating the actual position of the
      * user data file position long value in the address page. It is an
      * indirection. To find the position of a user data block, we read the long
-     * value at the position indicated by the address to find the position of
-     * the user block, then we read the user block.
+     * value at the position indicated by the address to find the page that
+     * contains the user block. We then scan the data page for the block that
+     * contains the address in its address back-reference.
      * <p>
      * Unused addresses are indicated by a zero data position value. If an
      * address is in use, there will be a non-zero position value in the slot.
@@ -2090,6 +2249,7 @@ public class Pack
         }
     }
 
+    // FIXME Move to top of file beneath opener.
     private final static class Pager
     {
         private final Checksum checksum;
@@ -2452,10 +2612,9 @@ public class Pack
                             return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
                         }
                     });
-                    long address = mutator.newAddressPage();
+                    position = mutator.newAddressPage();
+                    // FIXME Here is something that hasn't been dealt with yet.
                     mutator.commit();
-                    setOfAddressPages.add(address);
-                    return tryGetAddressPage(lastSelected);
                 }
                 else
                 {
@@ -2504,6 +2663,7 @@ public class Pack
         }
 
         // FIXME Rename everything in this method.
+        // FIXME Document this method.
         @SuppressWarnings("unchecked")
         public <P extends Page> P getPage(long value, P page)
         {
@@ -2519,8 +2679,9 @@ public class Pack
                     addPageByPosition(position);
                 }
             }
-            // FIXME Am I downgrading when looking for RelocatablePage?
+            // FIXME Am I down grading when looking for RelocatablePage?
             // FIXME Shouldn't this be assignable from?
+            // FIXME Assert that if not assignable one way, it is assignable the other way.
             synchronized (position)
             {
                 if (!position.getPage().getClass().equals(page.getClass()))
@@ -4286,6 +4447,42 @@ public class Pack
         // {
         // return allocate(mutator.temporary(getSize(withCount)), withCount);
         // }
+    }
+    
+    public static class ByteBufferInputStream
+    extends InputStream
+    {
+        private final ByteBuffer bytes;
+
+        public ByteBufferInputStream(ByteBuffer bytes, boolean withCount)
+        {
+            if (withCount)
+            {
+                bytes = bytes.slice();
+                bytes.limit(Integer.SIZE / Byte.SIZE + bytes.getInt());
+            }
+            this.bytes = bytes;
+        }
+
+        public int read() throws IOException
+        {
+            if (!bytes.hasRemaining())
+            {
+                return -1;
+            }
+            return bytes.get() & 0xff;
+        }
+
+        public int read(byte[] b, int off, int len) throws IOException
+        {
+            len = Math.min(len, bytes.remaining());
+            if (len == 0)
+            {
+                return -1;
+            }
+            bytes.get(b, off, len);
+            return len;
+        }
     }
 }
 
