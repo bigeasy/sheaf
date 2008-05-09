@@ -455,14 +455,68 @@ public class Pack
         {
             return (Map<URI, Long>) in.readObject();
         }
-        
-        public void recovery()
-        {
-//            Pager pager = null;
 
-            // Read the first address page.
-            
-            // Work through address pages until we reach a data page.
+        // FIXME Not yet called anywhere.
+        public void recovery(Pager pager)
+        {
+            Recovery recovery = new Recovery();
+            long position = 0L;
+            while (recovery.getRegion() != INTERIM_REGION)
+            {
+                pager.recover(recovery, position);
+                position += pager.getPageSize();
+            }
+        }
+    }
+    
+    
+    private final static short ADDRESS_REGION = 1;
+    
+    private final static short DATA_REGION = 2;
+    
+    private final static short INTERIM_REGION = 3;
+    
+    private final static class Recovery
+    {
+        private final Checksum checksum;
+        
+        private short region;
+        
+        private int blockCount;
+        
+        public Recovery()
+        {
+            this.region = ADDRESS_REGION;
+            this.checksum = new Adler32();
+        }
+        
+        public short getRegion()
+        {
+            return region;
+        }
+        
+        public void setRegion(short region)
+        {
+            this.region = region;
+        }
+        
+        public int getBlockCount()
+        {
+            return blockCount;
+        }
+        
+        public void incBlockCount()
+        {
+            blockCount++;
+        }
+        
+        public Checksum getChecksum()
+        {
+            return checksum;
+        }
+
+        public void badAddressChecksum(long position)
+        {
         }
     }
 
@@ -572,6 +626,7 @@ public class Pack
             this.setOfReturningAddressPages = new HashSet<Long>();
         }
         
+        // FIXME Me misnomer. It should be getAddressStart.
         public long getFirstPointer()
         {
             return FILE_HEADER_SIZE + (setOfJournalHeaders.getCapacity() * POSITION_SIZE);
@@ -663,6 +718,49 @@ public class Pack
         public int getPageSize()
         {
             return pageSize;
+        }
+
+        public void recover(Recovery recovery, long position)
+        {
+            RawPage rawPage = new RawPage(this, position);
+            Page page = null;
+            FileChannel fileChannel = getFileChannel();
+            if (position < getFirstPointer())
+            {
+                if (position == getFirstPointer() / getPageSize() * getPageSize())
+                {
+                    page = new AddressPage();
+                }
+            }
+            else
+            {
+                ByteBuffer peek = rawPage.getByteBuffer();
+                peek.clear();
+                try
+                {
+                    fileChannel.read(peek);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger("io.read", e);
+                }
+                if (peek.getInt(CHECKSUM_SIZE) < 0)
+                {
+                    page = new DataPage();
+                }
+                else if (recovery.getBlockCount() == 0)
+                {
+                    page = new AddressPage();
+                }
+                else
+                {
+                    recovery.setRegion(INTERIM_REGION);
+                }
+            }
+            if (page != null)
+            {
+                page.recover(rawPage, recovery);
+            }
         }
 
         public void newUserDataPages(Set<Long> setOfPages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
@@ -1569,6 +1667,8 @@ public class Pack
          */
         public void load(RawPage rawPage);
         
+        public void recover(RawPage rawPage, Recovery recovery);
+        
         public boolean isInterim();
     }
 
@@ -1670,6 +1770,26 @@ public class Pack
 
             this.rawPage = rawPage;
             rawPage.setPage(this);
+        }
+        
+        public void recover(RawPage rawPage, Recovery recovery)
+        {
+            Checksum checksum = recovery.getChecksum();
+            ByteBuffer bytes = rawPage.getByteBuffer();
+            bytes.clear();
+            bytes.position(ADDRESS_PAGE_HEADER_SIZE);
+            while (bytes.remaining() >= Long.SIZE / Byte.SIZE)
+            {
+                checksum.update(bytes.get());
+            }
+            if (bytes.getLong(0) == checksum.getValue())
+            {
+                // FIXME Long recovery, visit each address.
+            }
+            else
+            {
+                recovery.badAddressChecksum(rawPage.getPosition());
+            }
         }
 
         public int getFreeCount()
@@ -1844,6 +1964,11 @@ public class Pack
             this.rawPage = rawPage;
             rawPage.setPage(this);
         }
+        
+        public void recover(RawPage rawPage, Recovery recovery)
+        {
+            this.rawPage = rawPage;
+        }
 
         public RawPage getRawPage()
         {
@@ -1979,6 +2104,42 @@ public class Pack
             ByteBuffer bytes = rawPage.getByteBuffer();
             this.count = bytes.getInt();
             this.remaining = getRemaining(count, bytes);
+        }
+        
+        @Override
+        public void recover(RawPage rawPage, Recovery recovery)
+        {
+            super.recover(rawPage, recovery);
+            
+            ByteBuffer bytes = rawPage.getByteBuffer();
+            
+            bytes.clear();
+            bytes.position(CHECKSUM_SIZE);
+            
+            count = bytes.getInt();
+            boolean interim = count < 0;
+            count = Math.abs(count);
+            
+            // FIXME This is where I left off.
+            int block = 0;
+            while (block < count)
+            {
+                int size = getSize(bytes);
+                if (size > 0)
+                {
+                    block++;
+                }
+//                if (bytes.getLong(bytes.position()) == address)
+//                {
+//                    bytes.position(bytes.position() - COUNT_SIZE + ADDRESS_SIZE);
+//                }
+                bytes.position(bytes.position() + Math.abs(size));
+            }
+            
+            if (recovery.getRegion() == DATA_REGION && !interim)
+            {
+                
+            }
         }
 
         private static int getRemaining(int count, ByteBuffer bytes)
