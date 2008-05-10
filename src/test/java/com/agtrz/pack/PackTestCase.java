@@ -2,6 +2,7 @@
 package com.agtrz.pack;
 
 import static junit.framework.Assert.assertEquals;
+import static junit.framework.Assert.fail;
 
 import java.io.File;
 import java.io.IOException;
@@ -52,6 +53,36 @@ public class PackTestCase
                 throw e;
             }
         }
+    }
+
+    @Test(expected=java.lang.AssertionError.class) public void regionalLowerRange()
+    {
+        final ByteBuffer expected = ByteBuffer.allocateDirect(64);
+
+        Pack.Regional regional = new Pack.Regional(0L)
+        {
+            @Override
+            public ByteBuffer getByteBuffer()
+            {
+                return expected;
+            }
+        };
+        regional.invalidate(-1, 10);
+    }
+
+    @Test(expected=java.lang.AssertionError.class) public void regionalUpperRange()
+    {
+        final ByteBuffer expected = ByteBuffer.allocateDirect(64);
+
+        Pack.Regional regional = new Pack.Regional(0L)
+        {
+            @Override
+            public ByteBuffer getByteBuffer()
+            {
+                return expected;
+            }
+        };
+        regional.invalidate(0, 65);
     }
 
     @Test public void regional() throws IOException
@@ -198,6 +229,64 @@ public class PackTestCase
         new Pack.Opener().open(file).close();
     }
     
+    @Test public void fileNotFoundOpen()
+    {
+        File file = new File("/not/very/likely/harpsicord");
+        try
+        {
+            new Pack.Opener().open(file);
+        }
+        catch (Pack.Danger e)
+        {
+            assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
+            return;
+        }
+        fail("Expected exception not thrown."); 
+    }
+    
+    @Test public void fileNotFoundCreate()
+    {
+        File file = new File("/not/very/likely/harpsicord");
+        try
+        {
+            new Pack.Creator().create(file);
+        }
+        catch (Pack.Danger e)
+        {
+            assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
+            return;
+        }
+        fail("Expected exception not thrown."); 
+    }
+    
+    @Test public void badSignature() throws IOException
+    {
+        Pack.Disk disk = new Pack.Disk();
+        File file = newFile();
+        
+        new Pack.Creator().create(file).close();
+        
+        ByteBuffer bytes = ByteBuffer.allocateDirect(1);
+        bytes.put((byte) 0);
+        bytes.flip();
+
+        FileChannel fileChannel = disk.open(file);
+        fileChannel.write(bytes, 0L);
+        fileChannel.close();
+
+        try
+        {
+            new Pack.Opener().open(file);
+        }
+        catch (Pack.Danger e)
+        {
+            assertEquals(Pack.ERROR_SIGNATURE, e.getCode());
+            return;
+        }
+
+        fail("Expected exception not thrown.");
+    }
+
     // 17% 10%
 
     @Ignore @Test public void write()
@@ -213,6 +302,7 @@ public class PackTestCase
         }
         mutator.write(address, bytes);
     }
+
     @Ignore @Test public void recover()
     {
         Pack.Creator newPack = new Pack.Creator();

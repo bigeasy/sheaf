@@ -4769,7 +4769,7 @@ public class Pack
          * @param setOfInUse
          *            A set of the interim pages that need to be moved to a
          *            new interim pages as opposed to pages that were free.
-         * @param setOfGahtered
+         * @param setOfGathered
          *            A set of the newly created data positions.
          */
         private void gatherPages(Set<Long> setOfPages,
