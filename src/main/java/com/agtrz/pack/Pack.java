@@ -109,6 +109,13 @@ public class Pack
     
     private final static int COUNT_MASK = 0xA0000000;
 
+    private final static short ADDRESS_REGION = 1;
+    
+//    private final static short DATA_REGION = 2;
+    
+    private final static short INTERIM_REGION = 3;
+    
+
     private final Pager pager;
     
     /**
@@ -812,12 +819,6 @@ public class Pack
         }
     }
 
-    private final static short ADDRESS_REGION = 1;
-    
-//    private final static short DATA_REGION = 2;
-    
-    private final static short INTERIM_REGION = 3;
-    
     private final static class Recovery
     {
         private final Map<Long, Long> mapOfBadAddresses;
