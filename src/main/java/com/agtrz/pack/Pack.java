@@ -6,14 +6,13 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -39,6 +38,28 @@ import java.util.zip.Checksum;
 
 public class Pack
 {
+    public final static int ERROR_FILE_NOT_FOUND = 400;
+    
+    public final static int ERROR_IO_WRITE = 401;
+
+    public final static int ERROR_IO_READ = 402;
+
+    public final static int ERROR_IO_SIZE = 403;
+
+    public final static int ERROR_IO_TRUNCATE = 404;
+
+    public final static int ERROR_IO_FORCE = 405;
+
+    public final static int ERROR_IO_CLOSE = 406;
+
+    public final static int ERROR_IO_STATIC_PAGES = 407;
+    
+    public final static int ERROR_SIGNATURE = 501;
+
+    public final static int ERROR_SHUTDOWN = 502;
+
+    public final static int ERROR_FILE_SIZE = 503;
+
     private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
     
     private final static int SOFT_SHUTDOWN = 0xAAAAAAAA;
@@ -55,7 +76,7 @@ public class Pack
 
     private final static int ADDRESS_SIZE = 8;
 
-    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 4 + ADDRESS_SIZE * 3;
+    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 5 + ADDRESS_SIZE * 4;
 
     private final static int DATA_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
 
@@ -130,43 +151,7 @@ public class Pack
      */
     public void close()
     {
-        pager.getCompactLock().writeLock().lock();
-        try
-        {
-            try
-            {
-                pager.getFileChannel().close();
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.close", e);
-            }
-        }
-        finally
-        {
-            pager.getCompactLock().writeLock().unlock();
-        }
-    }
-
-    /**
-     * Create a new file channel from the specified file.
-     * 
-     * @param file The file to read and write.
-     * @return A file channel that reads and writes the specified file.
-     */
-    private static FileChannel newFileChannel(File file)
-    {
-        RandomAccessFile raf;
-        try
-        {
-            raf = new RandomAccessFile(file, "rw");
-        }
-        catch (FileNotFoundException e)
-        {
-            throw new Danger("file.not.found", e);
-        }
-
-        return raf.getChannel();
+        pager.close();
     }
 
     private static void checksum(Checksum checksum, ByteBuffer bytes)
@@ -183,15 +168,238 @@ public class Pack
     extends RuntimeException
     {
         private static final long serialVersionUID = 20070821L;
+        
+        private final int code;
 
-        public Danger(String message)
+        public Danger(int code)
         {
-            super(message);
+            super(Integer.toString(code));
+            this.code = code;
         }
 
-        public Danger(String message, Throwable cause)
+        public Danger(int code, Throwable cause)
         {
-            super(message, cause);
+            super(Integer.toString(code), cause);
+            this.code = code;
+        }
+        
+        public int getCode()
+        {
+            return code;
+        }
+    }
+    
+    static abstract class Regional
+    {
+        private long position;
+        
+        final SortedMap<Long, Long> setOfRegions;
+        
+        public Regional(long position)
+        {
+            this.position = position;
+            this.setOfRegions = new TreeMap<Long, Long>();
+        }
+        
+        public abstract ByteBuffer getByteBuffer();
+
+        /**
+         * Get the page size boundary aligned position of the page in file.
+         * 
+         * @return The position of the page.
+         */
+        public synchronized long getPosition()
+        {
+            return position;
+        }
+
+        /**
+         * Set the page size boundary aligned position of the page in file.
+         * 
+         * @param position The position of the page.
+         */
+        public synchronized void setPosition(long position)
+        {
+            this.position = position;
+        }
+
+        public void invalidate(int offset, int length)
+        {
+            long start = getPosition() + offset;
+            long end = start + length;
+            invalidate(start, end);
+        }
+        
+        private void invalidate(long start, long end)
+        {
+            assert start >= getPosition();
+            assert end <= getPosition() + getByteBuffer().capacity();
+            
+            INVALIDATE: for(;;)
+            {
+                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
+                while (entries.hasNext())
+                {
+                    Map.Entry<Long, Long> entry = entries.next();
+                    if (start < entry.getKey() && end >= entry.getKey())
+                    {
+                        entries.remove();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getKey() <= start && start <= entry.getValue())
+                    {
+                        entries.remove();
+                        start = entry.getKey();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getValue() < start)
+                    {
+                        break;
+                    }
+                }
+                break;
+            }
+            setOfRegions.put(start, end);
+        }
+        
+        public void write(Disk disk, FileChannel fileChannel) throws IOException
+        {
+            ByteBuffer bytes = getByteBuffer();
+            for(Map.Entry<Long, Long> entry: setOfRegions.entrySet())
+            {
+                int offset = (int) (entry.getKey() - getPosition());
+                int length = (int) (entry.getValue() - entry.getKey());
+
+                bytes.clear();
+                
+                bytes.position(offset);
+                bytes.limit(offset + length);
+                
+                disk.write(fileChannel, bytes, entry.getKey());
+            }
+            setOfRegions.clear();
+        }
+    }
+     
+    private final static class Header extends Regional
+    {
+        private final ByteBuffer bytes;
+        
+        public Header(ByteBuffer bytes)
+        {
+            super(0L);
+            this.bytes = bytes;
+        }
+        
+        public ByteBuffer getByteBuffer()
+        {
+            return bytes;
+        }
+        
+        public long getStaticPagesStart()
+        {
+            return FILE_HEADER_SIZE + getInternalJournalCount() * POSITION_SIZE;
+        }
+
+        public long getSignature()
+        {
+            return bytes.getLong(0);
+        }
+        
+        public void setSignature(long signature)
+        {
+            bytes.putLong(0, signature);
+            invalidate(0, CHECKSUM_SIZE);
+        }
+        
+        public int getShutdown()
+        {
+            return bytes.getInt(CHECKSUM_SIZE);
+        }
+        
+        public void setShutdown(int shutdown)
+        {
+            bytes.putInt(CHECKSUM_SIZE, shutdown);
+            invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+        }
+        
+        public int getPageSize()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE);
+        }
+        
+        public void setPageSize(int pageSize)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE, pageSize);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE, COUNT_SIZE);
+        }
+        
+        public int getAlignment()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 2);
+        }
+        
+        public void setAlignment(int alignment)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 2, alignment);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 2, COUNT_SIZE);
+        }
+        
+        public int getInternalJournalCount()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 3);
+        }
+        
+        public void setInternalJournalCount(int internalJournalCount)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 3, internalJournalCount);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 3, COUNT_SIZE);
+        }
+        
+        public int getStaticPageSize()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 4);
+        }
+        
+        public void setStaticPageSize(int staticPageSize)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 4, staticPageSize);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 4, COUNT_SIZE);
+        }
+        
+        public long getFirstAddressPageStart()
+        {
+            return bytes.getLong(CHECKSUM_SIZE + COUNT_SIZE * 5);
+        }
+        
+        public void setFirstAddressPageStart(long firstAddressPageStart)
+        {
+            bytes.putLong(CHECKSUM_SIZE + COUNT_SIZE * 5, firstAddressPageStart);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+
+        public long getDataBoundary()
+        {
+            return bytes.getLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5);
+        }
+        
+        public void setDataBoundary(long dataBoundary)
+        {
+            bytes.putLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, dataBoundary);
+            invalidate(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+        
+        public long getOpenBoundary()
+        {
+            return bytes.getLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5);
+        }
+        
+        public void setOpenBoundary(long openBoundary)
+        {
+            bytes.putLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, openBoundary);
+            invalidate(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, ADDRESS_SIZE);
         }
     }
 
@@ -205,7 +413,7 @@ public class Pack
 
         private int internalJournalCount;
         
-        private WriteListener writeListener;
+        private Disk disk;
 
         public Creator()
         {
@@ -213,7 +421,7 @@ public class Pack
             this.pageSize = 8 * 1024;
             this.alignment = 64;
             this.internalJournalCount = 64;
-            this.writeListener = new NullWriteListener();
+            this.disk = new Disk();
         }
 
         public void setInternalJournalCount(int internalJournalCount)
@@ -231,14 +439,51 @@ public class Pack
             this.alignment = alignment;
         }
         
-        public void setWriteListener(WriteListener writeListener)
+        public void setDisk(Disk disk)
         {
-            this.writeListener = writeListener;
+            this.disk = disk;
         }
 
         public void addStaticPage(URI uri, int blockSize)
         {
-            mapOfStaticPageSizes.put(uri, new Integer(blockSize));
+            mapOfStaticPageSizes.put(uri, blockSize);
+        }
+        
+        private int getStaticPagesMapSize()
+        {
+            int size = COUNT_SIZE;
+            for (Map.Entry<URI, Integer> entry: mapOfStaticPageSizes.entrySet())
+            {
+                size += COUNT_SIZE + ADDRESS_SIZE;
+                size += entry.getValue().toString().length();
+            }
+            return size;
+        }
+
+        private long getEndOfHeader()
+        {
+            return FILE_HEADER_SIZE + getStaticPagesMapSize() + internalJournalCount * POSITION_SIZE; 
+        }
+        
+        private long getFirstAddressPageStart()
+        {
+            long endOfHeader = getEndOfHeader();
+            long remaining = pageSize - endOfHeader % pageSize;
+            if (remaining < ADDRESS_PAGE_HEADER_SIZE + ADDRESS_SIZE)
+            {
+                return  (endOfHeader + pageSize - 1) / pageSize * pageSize;
+            }
+            return endOfHeader;
+        }
+        
+        private long getFirstAddressPage()
+        {
+            return getFirstAddressPageStart() / pageSize * pageSize;
+        }
+
+        private long getDataBoundary()
+        {
+            return (getFirstAddressPageStart() + pageSize - 1) / pageSize * pageSize;
         }
 
         /**
@@ -246,42 +491,49 @@ public class Pack
          */
         public Pack create(File file)
         {
-            FileChannel fileChannel = newFileChannel(file);
-
-            // Allocate a working buffer that will hold the header, the size
-            // is rounded up to the nearest page alignment.
-
-            int fullHeaderSize = FILE_HEADER_SIZE + internalJournalCount * POSITION_SIZE;
-            if (fullHeaderSize % pageSize != 0)
-            {
-                fullHeaderSize += pageSize - fullHeaderSize % pageSize;
-            }
-            ByteBuffer header = ByteBuffer.allocateDirect(fullHeaderSize);
-
-            // Initialize the header and write it to the file.
-
-            int pointerPageCount = 1;
-
-            long firstPointer = FILE_HEADER_SIZE + (internalJournalCount * POSITION_SIZE);
-            long dataBoundary = (firstPointer + pageSize - 1) / pageSize * pageSize;
-
-            header.putLong(SIGNATURE);
-            header.putInt(HARD_SHUTDOWN);
-            header.putInt(pageSize);
-            header.putInt(alignment);
-            header.putInt(internalJournalCount);
-            header.putLong(0L);
-            header.putLong(dataBoundary);
-
-            header.clear();
-
+            // Open the file.
+            
+            FileChannel fileChannel;
             try
             {
-                fileChannel.write(header, 0L);
+                fileChannel = disk.open(file);
+            }
+            catch (FileNotFoundException e)
+            {
+                throw new Danger(ERROR_FILE_NOT_FOUND, e);
+            }
+            
+            ByteBuffer fullSize = ByteBuffer.allocateDirect((int) (getFirstAddressPage() + pageSize));
+            try
+            {
+                disk.write(fileChannel, fullSize, 0L);
             }
             catch (IOException e)
             {
-                throw new Danger("io.write", e);
+                throw new Danger(ERROR_IO_WRITE, e);
+            }
+            
+            // Initialize the header.
+            
+            Header header = new Header(ByteBuffer.allocateDirect(FILE_HEADER_SIZE));
+            
+            header.setSignature(SIGNATURE);
+            header.setShutdown(HARD_SHUTDOWN);
+            header.setPageSize(pageSize);
+            header.setAlignment(alignment);
+            header.setInternalJournalCount(internalJournalCount);
+            header.setStaticPageSize(getStaticPagesMapSize());
+            header.setFirstAddressPageStart(getFirstAddressPageStart());
+            header.setDataBoundary(getDataBoundary());
+            header.setOpenBoundary(0L);
+
+            try
+            {
+                header.write(disk, fileChannel);
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_WRITE, e);
             }
 
             // Create a buffer of journal file positions. Initialize each page
@@ -294,13 +546,15 @@ public class Pack
                 journals.putLong(0L);
             }
 
+            journals.flip();
+
             try
             {
                 fileChannel.write(journals, FILE_HEADER_SIZE);
             }
             catch (IOException e)
             {
-                throw new Danger("io.write", e);
+                throw new Danger(ERROR_IO_WRITE, e);
             }
 
             // To create the map of static pages, we're going to allocate a
@@ -308,71 +562,54 @@ public class Pack
             // This local pack will have a bogus, empty map of static pages.
             // We create a subsequent pack to return to the user.
 
-            Map<URI, Long>mapOfStaticPages = new HashMap<URI, Long>();
+            Map<URI, Long> mapOfStaticPages = new HashMap<URI, Long>();
 
-            Pager pager = new Pager(file, fileChannel, writeListener, pageSize, alignment, mapOfStaticPages, internalJournalCount, pointerPageCount);
-
-            pager.initialize();
+            SortedSet<Long> setOfAddressPages = new TreeSet<Long>();
+            setOfAddressPages.add(getFirstAddressPage());
+            Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getDataBoundary());
 
             Pack pack = new Pack(pager);
 
-            Mutator mutator = pack.mutate();
-
-            for (Map.Entry<URI, Integer> entry: mapOfStaticPageSizes.entrySet())
+            ByteBuffer statics = ByteBuffer.allocateDirect(getStaticPagesMapSize());
+            
+            statics.putInt(mapOfStaticPages.size());
+            
+            if (mapOfStaticPageSizes.size() != 0)
             {
-                URI uri = entry.getKey();
-                int size = entry.getValue();
-                long address = mutator.allocate(size);
-                mapOfStaticPages.put(uri, address);
+                Mutator mutator = pack.mutate();
+                for (Map.Entry<URI, Integer> entry: mapOfStaticPageSizes.entrySet())
+                {
+                    String uri = entry.getKey().toString();
+                    int size = entry.getValue();
+                    long address = mutator.allocate(size);
+                    statics.putInt(uri.length());
+                    for (int i = 0; i < uri.length(); i++)
+                    {
+                        statics.putChar(uri.charAt(i));
+                    }
+                    statics.putLong(address);
+                }
+                mutator.commit();
             }
-
-            AllocOutputStream alloc = new AllocOutputStream(mutator);
+            
+            statics.flip();
+            
             try
             {
-                ObjectOutputStream out = new ObjectOutputStream(alloc);
-                out.writeObject(mapOfStaticPages);
-                out.close();
+                disk.write(fileChannel, statics, header.getStaticPagesStart());
             }
             catch (IOException e)
             {
-                throw new Danger("io.static.pages", e);
+                throw new Danger(ERROR_IO_WRITE, e);
             }
-
-            long staticPages = alloc.allocate(false);
-
-            mutator.commit();
 
             pack.close();
-
-            // Write the address of the map of static pages to the file
-            // header.
-
-            fileChannel = newFileChannel(file);
-
-            header.clear();
-
-            header.putLong(SIGNATURE);
-            header.putInt(HARD_SHUTDOWN);
-            header.putInt(pageSize);
-            header.putInt(alignment);
-            header.putInt(internalJournalCount);
-            header.putLong(staticPages);
-            header.putLong(dataBoundary);
-
-            header.flip();
-
-            try
-            {
-                fileChannel.write(header, 0L);
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.write", e);
-            }
-
-            // Return a new pack.
-
-            return new Pack(new Pager(file, fileChannel, writeListener, pageSize, alignment, mapOfStaticPages, internalJournalCount, pointerPageCount));
+            
+            Opener opener = new Opener();
+            
+            opener.setDisk(disk);
+            
+            return opener.open(file);
         }
     }
     
@@ -381,89 +618,187 @@ public class Pack
      */
     public final static class Opener
     {
-        private WriteListener writeListener;
+        private Disk disk;
         
         public Opener()
         {
-            this.writeListener = new NullWriteListener();
+            this.disk = new Disk();
+        }
+        
+        public void setDisk(Disk disk)
+        {
+            this.disk = disk;
+        }
+        
+        private boolean badAddress(Header header, long address)
+        {
+            return address < header.getFirstAddressPageStart() + ADDRESS_PAGE_HEADER_SIZE
+                || address > header.getDataBoundary();
+        }
+
+        private Map<URI, Long> readStaticPages(Header header, FileChannel fileChannel) 
+        {
+            Map<URI, Long> mapOfStaticPages = new TreeMap<URI, Long>();
+            ByteBuffer bytes = ByteBuffer.allocateDirect(header.getStaticPageSize());
+            try
+            {
+                disk.read(fileChannel, bytes, header.getStaticPagesStart());
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_READ, e);
+            }
+            bytes.flip();
+            int count = bytes.getInt();
+            for (int i = 0; i < count; i++)
+            {
+                StringBuilder uri = new StringBuilder();
+                int length = bytes.getInt();
+                for (int j = 0; j < length; j++)
+                {
+                    uri.append(bytes.getChar());
+                }
+                long address = bytes.getLong();
+                if (badAddress(header, address))
+                {
+                    throw new Danger(ERROR_IO_STATIC_PAGES);
+                }
+                try
+                {
+                    mapOfStaticPages.put(new URI(uri.toString()), address);
+                }
+                catch (URISyntaxException e)
+                {
+                    throw new Danger(ERROR_IO_STATIC_PAGES, e);
+                }
+            }
+            return mapOfStaticPages;
+        }    
+
+
+        private Header readHeader(FileChannel fileChannel)
+        {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(FILE_HEADER_SIZE);
+            try
+            {
+                disk.read(fileChannel, bytes, 0L);
+            }
+            catch (IOException e)
+            {
+               throw new Danger(ERROR_IO_READ, e);
+            }
+            return new Header(bytes);
         }
 
         public Pack open(File file)
         {
             // Open the file channel.
 
-            FileChannel fileChannel = newFileChannel(file);
+            FileChannel fileChannel;
+            try
+            {
+                fileChannel = disk.open(file);
+            }
+            catch (FileNotFoundException e)
+            {
+                throw new Danger(ERROR_FILE_NOT_FOUND, e);
+            }
 
             // Read the header and obtain the basic file properties.
 
-            ByteBuffer header = ByteBuffer.allocateDirect(FILE_HEADER_SIZE);
+            Header header = readHeader(fileChannel);
        
-            try
+            if (header.getSignature() != SIGNATURE)
             {
-                fileChannel.read(header, 0L);
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.write", e);
-            }
-     
-            long signature = header.getLong();
-            if (signature != SIGNATURE)
-            {
-                throw new Danger("corrupt");
+                throw new Danger(ERROR_SIGNATURE);
             }
             
-            int shutdown = header.getInt();
+            int shutdown = header.getShutdown();
             if (!(shutdown == HARD_SHUTDOWN || shutdown == SOFT_SHUTDOWN))
             {
-                throw new Danger("corrupt");
+                throw new Danger(ERROR_SHUTDOWN);
             }
-            int pageSize = header.getInt();
-            int alignment = header.getInt();
-            int internalJournalCount = header.getInt(); 
-            long staticPagesAddress = header.getLong();
-            long dataBoundary = header.getLong();
+            
+            if (shutdown == HARD_SHUTDOWN)
+            {
+                throw new UnsupportedOperationException();
+            }
 
-            Map<URI, Long> mapOfStaticPages = new HashMap<URI, Long>();
+            Map<URI, Long> mapOfStaticPages = readStaticPages(header, fileChannel);
 
-            Pager pager = new Pager(file, fileChannel, writeListener, pageSize, alignment, mapOfStaticPages, internalJournalCount, dataBoundary);
-
-            pager.initialize();
-            
-            Pack pack = new Pack(pager);
-            
-            Mutator mutator = pack.mutate();
-            
-            ByteBuffer bytes = mutator.read(staticPagesAddress);
-            
-            ObjectInputStream in;
+            int reopenSize = 0;
             try
             {
-                in = new ObjectInputStream(new ByteBufferInputStream(bytes, false));
-                mapOfStaticPages = getStaticPages(in);
+                reopenSize = (int) (disk.size(fileChannel) - header.getOpenBoundary());
             }
             catch (IOException e)
             {
-                e.printStackTrace();
+                throw new Danger(ERROR_IO_SIZE, e);
             }
-            catch (ClassNotFoundException e)
+            
+            ByteBuffer reopen = ByteBuffer.allocateDirect(reopenSize);
+            try
             {
-                e.printStackTrace();
+                disk.read(fileChannel, reopen, header.getOpenBoundary());
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_READ, e);
+            }
+            reopen.flip();
+            
+            SortedSet<Long> setOfAddressPages = new TreeSet<Long>();
+            
+            int addressPageCount = reopen.getInt();
+            for (int i = 0; i < addressPageCount; i++)
+            {
+                setOfAddressPages.add(reopen.getLong());
             }
             
-            mutator.commit();
-
-            pager = new Pager(file, fileChannel, writeListener, pageSize, alignment, mapOfStaticPages, internalJournalCount, dataBoundary);
+            Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getOpenBoundary());
             
-            return new Pack(pager);
-        }
-        
-        @SuppressWarnings("unchecked")
-        public Map<URI, Long> getStaticPages(ObjectInputStream in) throws IOException, ClassNotFoundException
-        {
-            return (Map<URI, Long>) in.readObject();
-        }
+            int blockPageCount = reopen.getInt();
+            for (int i = 0; i < blockPageCount; i++)
+            {
+                long position = reopen.getLong();
+                DataPage blockPage = pager.getPage(position, new DataPage());
+                pager.returnUserPage(blockPage);
+            }
+            
+            try
+            {
+                disk.truncate(fileChannel, header.getOpenBoundary());
+            }
+            catch (IOException e)
+            {
+                new Danger(ERROR_IO_TRUNCATE, e);
+            }
+            
+            header.setShutdown(HARD_SHUTDOWN);
+            header.setOpenBoundary(0L);
 
+            try
+            {
+                header.write(disk, fileChannel);
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_WRITE, e);
+            }
+            
+            try
+            {
+                disk.force(fileChannel);
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_FORCE, e);
+            }
+
+
+            return new Pack(pager);
+       }
+        
         // FIXME Not yet called anywhere.
         public void recovery(Pager pager)
         {
@@ -476,19 +811,16 @@ public class Pack
             }
         }
     }
-    
-    
+
     private final static short ADDRESS_REGION = 1;
     
-    private final static short DATA_REGION = 2;
+//    private final static short DATA_REGION = 2;
     
     private final static short INTERIM_REGION = 3;
     
     private final static class Recovery
     {
         private final Map<Long, Long> mapOfBadAddresses;
-        
-        private final Map<Long, List<Long>> mapOfBadAddressPages;
         
         private final Set<Long> setOfCorruptDataPages;
         
@@ -507,7 +839,6 @@ public class Pack
             this.region = ADDRESS_REGION;
             this.checksum = new Adler32();
             this.mapOfBadAddresses = new HashMap<Long, Long>();
-            this.mapOfBadAddressPages = new HashMap<Long, List<Long>>();
             this.setOfBadAddressChecksums = new HashSet<Long>();
             this.setOfBadDataChecksums = new HashSet<Long>();
             this.setOfCorruptDataPages = new HashSet<Long>();
@@ -553,6 +884,11 @@ public class Pack
             setOfBadDataChecksums.add(position);
         }
         
+        public void badAddress(long address, long position)
+        {
+            mapOfBadAddresses.put(address, position);
+        }
+        
         public long getFileSize()
         {
             return 0L;
@@ -591,11 +927,12 @@ public class Pack
                 
                 try
                 {
-                    rawPage.getPager().getFileChannel().read(peek);
+                    Pager pager = rawPage.getPager();
+                    pager.getDisk().read(pager.getFileChannel(), peek, position + CHECKSUM_SIZE);
                 }
                 catch (IOException e)
                 {
-                    throw new Danger("io.read", e);
+                    throw new Danger(ERROR_IO_READ, e);
                 }
 
                 if (peek.getInt(CHECKSUM_SIZE) < 0)
@@ -615,6 +952,143 @@ public class Pack
             return medic.recover(rawPage, recovery);
         }
     }
+    
+    /**
+     * Wrapper around calls to <code>FileChannel</code> methods that allows
+     * for simulating IO failures in testing. The <code>Disk</code> is
+     * stateless. Methods take a <code>FileChannel</code> as a parameter. The
+     * default implementation forwards the calls directly to the
+     * <code>FileChannel</code>.
+     * <p>
+     * This class is generally useful to testing. Users are encouraged to
+     * subclass <code>Disk</code> to throw <code>IOException</code>
+     * exceptions for their own unit tests. For example, subclass of disk can
+     * inspect writes for a particular file position and fail after a certain
+     * amount of writes.
+     * <p>
+     * The <code>Disk</code> class is set using the
+     * {@link Pack.Creator#setDisk Pack.Creator.setDisk} or
+     * {@link Pack.Opener#setDisk} methods. Because it is stateless it can be
+     * used for multiple <code>Pack</code> instances. However the only
+     * intended use case for a subclass of <code>Disk</code> to generate I/O
+     * failures. These subclasses are not expected to be stateless.
+     */
+    public static class Disk
+    {
+        /**
+         * Create an instance of <code>Disk</code>.
+         */
+        public Disk()
+        {
+        }
+
+        public void objectIO() throws IOException
+        {
+        }
+
+        /**
+         * Open a file and create a <code>FileChannel</code>.
+         * 
+         * @param file
+         *            The file to open.
+         * @return A <code>FileChannel</code> open on the specified file.
+         * @throws FileNotFoundException
+         *             If the file exists but is a directory rather than a
+         *             regular file, or cannot be opened or created for any
+         *             other reason.
+         */
+        public FileChannel open(File file) throws FileNotFoundException
+        {
+            return new RandomAccessFile(file, "rw").getChannel();
+        }
+
+        /**
+         * Writes a sequence of bytes to the file channel from the given buffer,
+         * starting at the given file position.
+         * 
+         * @param fileChannel
+         *            The file channel to which to write.
+         * @param src
+         *            The buffer from which bytes are transferred.
+         * @param position
+         *            The file position at which the transfer is to begin, must
+         *            be non-negative.
+         * @return The number of bytes written, possibly zero.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public int write(FileChannel fileChannel, ByteBuffer src, long position) throws IOException
+        {
+            return fileChannel.write(src, position);
+        }
+
+        /**
+         * Reads a sequence of bytes from the file channel into the given
+         * buffer, starting at the given file position.
+         * 
+         * @param fileChannel
+         *            The file channel to which to write.
+         * @param dst
+         *            The buffer into which bytes are transferred.
+         * @param position
+         *            The file position at which the transfer is to begin, must
+         *            be non-negative.
+         * @return The number of bytes read, possibly zero, or -1 if the given
+         *         position is greater than or equal to the file's current size.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public int read(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
+        {
+            return fileChannel.read(dst, position);
+        }
+
+        /**
+         * Returns the current size of the file channel's file.
+         * 
+         * @param fileChannel
+         *            The file channel to size.
+         * @return The current size of this channel's file, measured in bytes.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public long size(FileChannel fileChannel) throws IOException
+        {
+            return fileChannel.size();
+        }
+        
+        public FileChannel truncate(FileChannel fileChannel, long size) throws IOException
+        {
+            return fileChannel.truncate(size);
+        }
+
+        /**
+         * Forces any updates to the file channel's file to be written to the
+         * storage device that contains it.
+         * 
+         * @param fileChannel
+         *            The file channel to flush.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public void force(FileChannel fileChannel) throws IOException
+        {
+            fileChannel.force(true);
+        }
+
+        /**
+         * Closes the file channel.
+         * 
+         * @param fileChannel
+         *            The file channel to close.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public void close(FileChannel fileChannel) throws IOException
+        {
+            fileChannel.close();
+        }
+    }
  
     private final static class Pager
     {
@@ -622,9 +1096,11 @@ public class Pack
 
         private final FileChannel fileChannel;
 
-        private final WriteListener writeListener;
+        private final Disk disk;
 
         private final int pageSize;
+        
+        private final Header header;
 
         private final Map<Long, PageReference> mapOfPagesByPosition;
         
@@ -693,22 +1169,16 @@ public class Pack
         
         private final Set<Long> setOfReturningAddressPages;
         
-        public Pager(File file, FileChannel fileChannel, WriteListener writeListener, int pageSize, int alignment, Map<URI, Long> mapOfStaticPages, int internalJournalCount, long dataBoundary)
+        public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long interimBoundary)
         {
             this.file = file;
             this.fileChannel = fileChannel;
-            this.writeListener = writeListener;
-            this.alignment = alignment;
-            this.pageSize = pageSize;
-            this.dataBoundary = new Boundary(pageSize, dataBoundary);
-            try
-            {
-                this.interimBoundary = new Boundary(pageSize, fileChannel.size());
-            }
-            catch (IOException e)
-            {
-                throw new Danger("io.size", e);
-            }
+            this.disk = disk;
+            this.header = header;
+            this.alignment = header.getAlignment();
+            this.pageSize = header.getPageSize();
+            this.dataBoundary = new Boundary(pageSize, header.getDataBoundary());
+            this.interimBoundary = new Boundary(pageSize, interimBoundary);
             this.checksum = new Adler32();
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
             this.pagesBySize = new BySizeTable(pageSize, alignment);
@@ -720,8 +1190,8 @@ public class Pack
             this.compactLock = new ReentrantReadWriteLock();
             this.expandLock = new ReentrantLock();
             this.listOfMoves = new MoveList();
-            this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, internalJournalCount);
-            this.setOfAddressPages = new TreeSet<Long>();
+            this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, header.getInternalJournalCount());
+            this.setOfAddressPages = setOfAddressPages;
             this.setOfReturningAddressPages = new HashSet<Long>();
         }
         
@@ -766,57 +1236,19 @@ public class Pack
             return listOfMoves;
         }
         
-        public WriteListener getWriteListener()
-        {
-            return writeListener;
-        }
-        
-        public void initialize()
-        {
-            // FIXME Not initializing very well at all. Does this method
-            // also perform recovery?
-            long firstPointerPage = getFirstPointer();
-            firstPointerPage -= firstPointerPage % pageSize;
-            long firstUserPage = getDataBoundary().getPosition();
-
-            ByteBuffer bytes = ByteBuffer.allocate(pageSize);
-            long position = firstPointerPage;
-            while (position < firstUserPage)
-            {
-                try
-                {
-                    fileChannel.read(bytes);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.read", e);
-                }
-                bytes.flip();
-                int offset = 0;
-                if (firstPointerPage < getFirstPointer())
-                {
-                    offset = (int) getFirstPointer() / POSITION_SIZE;
-                }
-                while (offset < bytes.capacity() / POSITION_SIZE)
-                {
-                    if (bytes.getLong(offset) == 0L)
-                    {   
-                        setOfAddressPages.add(position);
-                        break;
-                    }
-                }
-                position += pageSize;
-            }
-        }
-
         public int getAlignment()
         {
             return alignment;
         }
-
+        
         public FileChannel getFileChannel()
         {
             return fileChannel;
+        }
+
+        public Disk getDisk()
+        {
+            return disk;
         }
 
         public int getPageSize()
@@ -858,6 +1290,70 @@ public class Pack
                 }
             }
         }
+        
+        public void close()
+        {
+            getCompactLock().writeLock().lock();
+            try
+            {
+                int size = 0;
+                
+                size += COUNT_SIZE + setOfAddressPages.size() * POSITION_SIZE;
+                size += COUNT_SIZE + (setOfFreeUserPages.size() + pagesBySize.getSize()) * POSITION_SIZE;
+                
+                ByteBuffer reopen = ByteBuffer.allocateDirect(size);
+                
+                reopen.putInt(setOfAddressPages.size());
+                for (long position: setOfAddressPages)
+                {
+                    reopen.putLong(position);
+                }
+               
+                reopen.putInt(setOfFreeUserPages.size() + pagesBySize.getSize());
+                for (long position: setOfFreeUserPages)
+                {
+                    reopen.putLong(position);
+                }
+                
+                reopen.flip();
+                
+                try
+                {
+                    disk.write(fileChannel, reopen, getInterimBoundary().getPosition());
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_WRITE, e);
+                }
+                
+                try
+                {
+                    disk.truncate(fileChannel, getInterimBoundary().getPosition() + reopen.capacity());
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_TRUNCATE, e);
+                }
+                
+                header.setDataBoundary(dataBoundary.getPosition());
+                header.setOpenBoundary(getInterimBoundary().getPosition());
+
+                header.setShutdown(SOFT_SHUTDOWN);
+                try
+                {
+                    header.write(disk, fileChannel);
+                    disk.close(fileChannel);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_CLOSE, e);
+                }
+            }
+            finally
+            {
+                getCompactLock().writeLock().unlock();
+            }
+        }
 
         public synchronized void collect()
         {
@@ -881,36 +1377,36 @@ public class Pack
 
             long position;
 
-            synchronized (fileChannel)
+            synchronized (disk)
             {
                 try
                 {
-                    position = fileChannel.size();
+                    position = disk.size(fileChannel);
                 }
                 catch (IOException e)
                 {
-                    throw new Danger("io.size", e);
+                    throw new Danger(ERROR_IO_SIZE, e);
                 }
 
                 try
                 {
-                    fileChannel.write(bytes, position);
+                    disk.write(fileChannel, bytes, position);
                 }
                 catch (IOException e)
                 {
-                    throw new Danger("io.write", e);
+                    throw new Danger(ERROR_IO_WRITE, e);
                 }
 
                 try
                 {
-                    if (fileChannel.size() % 1024 != 0)
+                    if (disk.size(fileChannel) % 1024 != 0)
                     {
-                        throw new Danger("io.position");
+                        throw new Danger(ERROR_FILE_SIZE);
                     }
                 }
                 catch (IOException e)
                 {
-                    throw new Danger("io.size", e);
+                    throw new Danger(ERROR_IO_SIZE, e);
                 }
             }
 
@@ -1034,6 +1530,23 @@ public class Pack
                     setOfReturningAddressPages.add(position);
                 }
                 return addressPage;
+            }
+        }
+        
+        public void returnUserPage(DataPage blockPage)
+        {
+            // FIXME Is it not the case that the block changes can mutated
+            // by virtue of a deallocation operation?
+            if (blockPage.getCount() == 0)
+            {
+                synchronized (setOfFreeUserPages)
+                {
+                    setOfFreeUserPages.add(blockPage.getRawPage().getPosition());
+                }
+            }
+            else if (blockPage.getRemaining() > getAlignment())
+            {
+                pagesBySize.add(blockPage);
             }
         }
         
@@ -1294,7 +1807,7 @@ public class Pack
      * See {@link Pack.DataPage} for more details on the separate soft
      * references.
      */
-    private static final class RawPage
+    private static final class RawPage extends Regional
     {
         /**
          * The pager that manages this raw page.
@@ -1321,9 +1834,6 @@ public class Pack
          * gathers dirty buffers and writes them out in a batch.
          */
         private Reference<ByteBuffer> byteBufferReference;
-        
-        
-        private SortedMap<Long, Long> setOfRegions;
 
         /**
          * Create a raw page at the specified position associated with the
@@ -1337,9 +1847,8 @@ public class Pack
          */
         public RawPage(Pager pager, long position)
         {
+            super(position);
             this.pager = pager;
-            this.position = position;
-            this.setOfRegions = new TreeMap<Long, Long>();
         }
 
         /**
@@ -1375,28 +1884,6 @@ public class Pack
         }
 
         /**
-         * Get the page size boundary aligned position of the page in file.
-         * 
-         * @return The position of the page.
-         */
-        public synchronized long getPosition()
-        {
-            return position;
-        }
-
-        /**
-         * Set the page size boundary aligned position of the page in file.
-         * 
-         * @param position The position of the page.
-         */
-        public synchronized void setPosition(long position)
-        {
-            assert position % pager.getPageSize() == 0L;
-            
-            this.position = position;
-        }
-
-        /**
          * Load the byte buffer from the file channel of the pager.
          */
         private ByteBuffer load()
@@ -1410,11 +1897,11 @@ public class Pack
             ByteBuffer bytes = ByteBuffer.allocateDirect(bufferSize);
             try
             {
-                pager.getFileChannel().read(bytes, position);
+                pager.getDisk().read(pager.getFileChannel(), bytes, position);
             }
             catch (IOException e)
             {
-                throw new Danger("io.page.load", e);
+                throw new Danger(ERROR_IO_READ, e);
             }
             bytes.clear();
 
@@ -1460,66 +1947,6 @@ public class Pack
             }
 
             return bytes;
-        }
-        
-        public void invalidate(int offset, int length)
-        {
-            long start = getPosition() + offset;
-            long end = start + length;
-            invalidate(start, end);
-        }
-        
-        private void invalidate(long start, long end)
-        {
-            INVALIDATE: for(;;)
-            {
-                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
-                while (entries.hasNext())
-                {
-                    Map.Entry<Long, Long> entry = entries.next();
-                    if (start < entry.getKey() && end >= entry.getKey())
-                    {
-                        entries.remove();
-                        end = end > entry.getValue() ? end : entry.getValue();
-                        continue INVALIDATE;
-                    }
-                    else if (end == entry.getKey() - 1)
-                    {
-                        entries.remove();
-                        end = entry.getValue();
-                        continue INVALIDATE;
-                    }
-                    else if (entry.getKey() <= start && start <= entry.getValue())
-                    {
-                        entries.remove();
-                        start = entry.getKey();
-                        end = end > entry.getValue() ? end : entry.getValue();
-                        continue INVALIDATE;
-                    }
-                    else if (entry.getValue() == start - 1)
-                    {
-                        entries.remove();
-                        start = entry.getKey();
-                        continue INVALIDATE;
-                    }
-                    else if (entry.getValue() < start)
-                    {
-                        break;
-                    }
-                }
-                break;
-            }
-            setOfRegions.put(start, end);
-        }
-        
-        public Iterator<Map.Entry<Long, Long>> getInvalidRegions()
-        {
-            return setOfRegions.entrySet().iterator();
-        }
-        
-        public void validate()
-        {
-            setOfRegions.clear();
         }
     }
 
@@ -1978,12 +2405,11 @@ public class Pack
         {
             // FIXME Not enough locking?
             RawPage rawPage = getRawPage();
+            Pager pager = rawPage.getPager();
             ByteBuffer bytes = rawPage.getByteBuffer();
-            FileChannel fileChannel = rawPage.getPager().getFileChannel();
-            bytes.clear();
             try
             {
-                fileChannel.write(bytes, to);
+                pager.getDisk().write(pager.getFileChannel(), bytes, to);
             }
             catch (IOException e)
             {
@@ -2052,6 +2478,8 @@ public class Pack
      * You cannot deadlock by mirroring, because only one mutator at a time
      * will ever vacuum a data page, because only one mutator at a time can
      * use a data page for block allocation.
+     * <p>
+     * FIXME RENAME BlockPage
      */
     private static final class DataPage
     extends RelocatablePage implements Medic
@@ -3185,18 +3613,6 @@ public class Pack
         }
     }
 
-    public interface WriteListener
-    {
-        public void write(boolean commit, FileChannel fileChannel, long position, ByteBuffer bytes) throws IOException;
-    }
-    
-    private final static class NullWriteListener implements WriteListener
-    {
-        public void write(boolean commit, FileChannel fileChannel, long position, ByteBuffer bytes)
-        {
-        }
-    }
-
     public final static class DirtyPageMap
     {
         private final Pager pager;
@@ -3207,8 +3623,6 @@ public class Pack
 
         private final int capacity;
         
-        private boolean commit; 
-
         public DirtyPageMap(Pager pager, int capacity)
         {
             this.pager = pager;
@@ -3217,11 +3631,6 @@ public class Pack
             this.capacity = capacity;
         }
         
-        public void commit()
-        {
-            commit = true;
-        }
-
         public void add(RawPage page)
         {
             // FIXME Make calls to flush explicit.
@@ -3236,7 +3645,7 @@ public class Pack
         public void flush(Pointer pointer)
         {
             flush();
-            FileChannel fileChannel = pager.getFileChannel();
+
             synchronized (pointer.getMutex())
             {
                 ByteBuffer bytes = pointer.getByteBuffer();
@@ -3244,27 +3653,17 @@ public class Pack
                 
                 try
                 {
-                    pager.getWriteListener().write(commit, fileChannel, pointer.getPosition(), bytes);
+                    pager.getDisk().write(pager.getFileChannel(), bytes, pointer.getPosition());
                 }
                 catch (IOException e)
                 {
-                    throw new Danger("io.write.listener", e);
-                }
-                
-                try
-                {
-                    fileChannel.write(bytes, pointer.getPosition());
-                }
-                catch (IOException e)
-                {
-                    throw new Danger("io.write", e);
+                    throw new Danger(ERROR_IO_WRITE, e);
                 }
             }
         }
 
         public void flush()
         {
-            FileChannel fileChannel = pager.getFileChannel();
             for (RawPage position: mapOfPages.values())
             {
                 synchronized (position)
@@ -3274,20 +3673,11 @@ public class Pack
 
                     try
                     {
-                        pager.getWriteListener().write(commit, fileChannel, position.getPosition(), bytes);
+                        pager.getDisk().write(pager.getFileChannel(), bytes, position.getPosition());
                     }
                     catch (IOException e)
                     {
-                        throw new Danger("io.write.listener", e);
-                    }
-                
-                    try
-                    {
-                        fileChannel.write(bytes, position.getPosition());
-                    }
-                    catch (IOException e)
-                    {
-                        throw new Danger("io.write", e);
+                        throw new Danger(ERROR_IO_WRITE, e);
                     }
                 }
             }
@@ -3298,22 +3688,23 @@ public class Pack
         public void commit(ByteBuffer journal, long position)
         {
             flush();
+            Disk disk = pager.getDisk();
             FileChannel fileChannel = pager.getFileChannel();
             try
             {
-                fileChannel.write(journal, position);
+                disk.write(fileChannel, journal, position);
             }
             catch (IOException e)
             {
-                throw new Danger("io.write", e);
+                throw new Danger(ERROR_IO_WRITE, e);
             }
             try
             {
-                fileChannel.force(true);
+                disk.force(fileChannel);
             }
             catch (IOException e)
             {
-                throw new Danger("io.force", e);
+                throw new Danger(ERROR_IO_FORCE, e);
             }
         }
     }
@@ -3382,7 +3773,6 @@ public class Pack
                     }
                     catch (InterruptedException e)
                     {
-                        throw new Danger("interrupted", e);
                     }
                 }
                 else
