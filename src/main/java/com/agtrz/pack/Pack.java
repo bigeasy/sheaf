@@ -1267,148 +1267,6 @@ public class Pack
         }
     }
 
-    private static final class ShiftMove extends Operation
-    {
-        @Override
-        public void commit(Player player)
-        {
-            player.getMoveList().removeFirst();
-        }
-
-        @Override
-        public int length()
-        {
-            return FLAG_SIZE;
-        }
-        
-        @Override
-        public void write(ByteBuffer bytes)
-        {
-            bytes.putShort(SHIFT_MOVE);
-        }
-        
-        @Override
-        public void read(ByteBuffer bytes)
-        {
-        }
-    }
-    
-    private static final class Move
-    {
-        private final long from;
-        
-        private final long to;
-        
-        public Move(long from, long to)
-        {
-            assert from != to || from == 0;
-            assert (from == 0 && to == 0) || !(from == 0 || to == 0);
-
-            this.from = from;
-            this.to = to;
-        }
-        
-        public long getFrom()
-        {
-            return from;
-        }
-        
-        public long getTo()
-        {
-            return to;
-        }
-    }
-
-    private static final class MoveLatch
-    {
-        private Move move;
-
-        private Lock lock;
-        
-        private MoveLatch next;
-
-        public MoveLatch(Move move, MoveLatch next)
-        {
-            Lock lock = new ReentrantLock();
-            lock.lock();
-            
-            this.move = move;
-            this.lock = lock;
-            this.next = next;
-        }
-
-        public Lock getLock()
-        {
-            return lock;
-        }
-
-        public Move getMove()
-        {
-            return move;
-        }
-        
-        public MoveLatch getNext()
-        {
-            return next;
-        }
-
-        public void extend(MoveLatch next)
-        {
-            assert this.next == null;
-
-            this.next = next;
-        }
-
-        public MoveLatch getLast()
-        {
-            MoveLatch iterator = this;
-            while (iterator.next == null)
-            {
-                iterator = iterator.next;
-            }
-            return iterator;
-        }
-    }
-    
-    private static final class MoveNode
-    {
-        private final Move move;
-        
-        private MoveNode next;
-        
-        public MoveNode(Move move)
-        {
-            this.move = move;
-        }
-        
-        public Move getMove()
-        {
-            return move;
-        }
-        
-        public MoveNode getNext()
-        {
-            return next;
-        }
-        
-        public MoveNode getLast()
-        {
-            MoveNode iterator = this;
-            while (iterator.next == null)
-            {
-                iterator = iterator.next;
-            }
-            return iterator;
-        }
-        
-        public MoveNode extend(Move move)
-        {
-            assert next == null;
-            
-            return next = new MoveNode(move);
-        }
-    }
-
     /**
      * A representation of the basic page attributes of position and byte buffer
      * associated with an application of the raw page implemented by {@link
@@ -2880,6 +2738,148 @@ public class Pack
                 }
                 assert bytes.get(offset) == 0;
             }
+        }
+    }
+
+    private static final class ShiftMove extends Operation
+    {
+        @Override
+        public void commit(Player player)
+        {
+            player.getMoveList().removeFirst();
+        }
+
+        @Override
+        public int length()
+        {
+            return FLAG_SIZE;
+        }
+        
+        @Override
+        public void write(ByteBuffer bytes)
+        {
+            bytes.putShort(SHIFT_MOVE);
+        }
+        
+        @Override
+        public void read(ByteBuffer bytes)
+        {
+        }
+    }
+    
+    private static final class Move
+    {
+        private final long from;
+        
+        private final long to;
+        
+        public Move(long from, long to)
+        {
+            assert from != to || from == 0;
+            assert (from == 0 && to == 0) || !(from == 0 || to == 0);
+
+            this.from = from;
+            this.to = to;
+        }
+        
+        public long getFrom()
+        {
+            return from;
+        }
+        
+        public long getTo()
+        {
+            return to;
+        }
+    }
+
+    private static final class MoveLatch
+    {
+        private Move move;
+
+        private Lock lock;
+        
+        private MoveLatch next;
+
+        public MoveLatch(Move move, MoveLatch next)
+        {
+            Lock lock = new ReentrantLock();
+            lock.lock();
+            
+            this.move = move;
+            this.lock = lock;
+            this.next = next;
+        }
+
+        public Lock getLock()
+        {
+            return lock;
+        }
+
+        public Move getMove()
+        {
+            return move;
+        }
+        
+        public MoveLatch getNext()
+        {
+            return next;
+        }
+
+        public void extend(MoveLatch next)
+        {
+            assert this.next == null;
+
+            this.next = next;
+        }
+
+        public MoveLatch getLast()
+        {
+            MoveLatch iterator = this;
+            while (iterator.next == null)
+            {
+                iterator = iterator.next;
+            }
+            return iterator;
+        }
+    }
+    
+    private static final class MoveNode
+    {
+        private final Move move;
+        
+        private MoveNode next;
+        
+        public MoveNode(Move move)
+        {
+            this.move = move;
+        }
+        
+        public Move getMove()
+        {
+            return move;
+        }
+        
+        public MoveNode getNext()
+        {
+            return next;
+        }
+        
+        public MoveNode getLast()
+        {
+            MoveNode iterator = this;
+            while (iterator.next == null)
+            {
+                iterator = iterator.next;
+            }
+            return iterator;
+        }
+        
+        public MoveNode extend(Move move)
+        {
+            assert next == null;
+            
+            return next = new MoveNode(move);
         }
     }
 
