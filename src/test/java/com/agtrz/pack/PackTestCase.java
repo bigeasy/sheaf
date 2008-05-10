@@ -187,7 +187,7 @@ public class PackTestCase
         new Pack.Opener().open(file).close();
     }
 
-    @Ignore @Test public void allocate()
+    @Test public void allocate()
     {
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
