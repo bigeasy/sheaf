@@ -3855,18 +3855,20 @@ public class Pack
                 || mapOfPages.containsKey(position);
         }
         
-            /** Record a move
-             * <p>
-        You wanted to know why you're ignoring the data page
-            move and not ignoring some of the mapped moves. It's because
-            when you were moving you were only using interim pages as keys
-            and not inspecting them. You were making no note of whether or not
-            they were going to be moved, so you've stored their pre-move value. Even
-            if they are pages that this mutator has moved, we know nothing of it.
-            However we did store the moved value of the data page, we had to.
-            We had to store the moved value of the data page. That is a move
-            that we need to observe if we've moved one our iterim pages, but
-            ignore if it's a data page. It is the place where our moving started. */
+        /**
+         * Record a move
+         * <p>
+         * You wanted to know why you're ignoring the data page move and not
+         * ignoring some of the mapped moves. It's because when you were moving
+         * you were only using interim pages as keys and not inspecting them.
+         * You were making no note of whether or not they were going to be
+         * moved, so you've stored their pre-move value. Even if they are pages
+         * that this mutator has moved, we know nothing of it. However we did
+         * store the moved value of the data page, we had to. We had to store
+         * the moved value of the data page. That is a move that we need to
+         * observe if we've moved one our iterim pages, but ignore if it's a
+         * data page. It is the place where our moving started.
+         */
         public void record(Move move)
         {
             boolean moved = pageRecorder.contains(move.getFrom());
@@ -4896,32 +4898,51 @@ public class Pack
             }
         }
         
+        /**
+         * Iterate the linked list of moves and move latches moving the pages
+         * and then releasing the latches.
+         *
+         * @param head The head a linked list of move latches.
+         */
         private void tryMove(MoveLatch head)
         {
+            // Iterate through the linked list moving pages and releasing
+            // latches.
+
             while (head != null)
             {
+                // Get a relocatable page.
+
                 RelocatablePage page = pager.getPage(head.getMove().getFrom(), new RelocatablePage());
                 
-                // FIXME Okay, where is there the write occurs.
+                // Please note that relocate simply moves the entire page with
+                // an unforced write. There is minimal benefit to the dirty page
+                // map since we are writing out the whole page anyway, and
+                // because were only going to do a little writing after this, so
+                // the chances of caching the dirty page are slim.
                 
                 page.relocate(head.getMove().getTo());
                 
-                // TODO Curious about this. Will this get out of sync? Do I have
-                // things locked down enough?
-                
                 // Anyone referencing the page is going to be waiting for the
-                // move to complete. 
+                // move to complete, because of the move list. This goes for all
+                // readers and writers who might need to dereference an interim
+                // page. The mutators holding the interim pages will wait
+                // regardless of whether or not they intend to manipulate the
+                // pages. Note that read only mutator reading only from the
+                // user region will not wait, since it will not have interim
+                // pages.
+
+                // Therefore, we can relocate these interim pages confident that
+                // no one is currently attempting to dereference them.
                 
-                // Need to look at each method in mutator and assure myself that
-                // no one else is reading the pager's page map. The
-                // synchronization of the page map is needed between mutators
-                // for ordinary tasks. Here, though, everyone else should be all
-                // locked down.
                 pager.relocate(head);
-                
-                // FIXME Didn't this get recorded in a dirty page map?
+
+                // Now we can let anyone who is waiting on this interim page
+                // through.
                 
                 head.getLock().unlock();
+                
+                // Onto the next page.
                 
                 head = head.getNext();
             }  
@@ -4941,24 +4962,34 @@ public class Pack
                         setOfInUse,
                         setOfGathered);
 
-            // For the set of pages in use, add the page to the move list.
+            if (setOfInUse.size() != 0)
+            {
+                // For the set of pages in use, add the page to the move list.
 
-            MoveLatch head = null;
-            MoveLatch move = null;
-            Iterator<Long> inUse = setOfInUse.iterator();
-            if (inUse.hasNext())
-            {
-                long from = inUse.next();
-                head = move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), null);
-            }
-            while (inUse.hasNext())
-            {
-                long from = inUse.next();
-                move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), move);
-            }
+                MoveLatch head = null;  // Head of the list.
+                MoveLatch move = null;  // End of the list for building list.
 
-            if (head != null)
-            {
+                Iterator<Long> inUse = setOfInUse.iterator();
+
+                // Start the linked list of moves and latches assigning the
+                // head.
+
+                if (inUse.hasNext())
+                {
+                    long from = inUse.next();
+                    head = move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), null);
+                }
+
+                // Append of the rest of the moves and latches to the list. 
+
+                while (inUse.hasNext())
+                {
+                    long from = inUse.next();
+                    move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), move);
+                }
+
+                // This will 
+
                 pager.getMoveList().add(move);
             
                 // At this point, no one else is moving because we have a
@@ -4988,9 +5019,17 @@ public class Pack
             // unreferenced, they will be cleaned up.
             
             // TODO The data to interim page boundary may be determined by
-            // scanning through the data pages. If that is the case, then we
-            // need to write pages out in page order, so that means a sorted set
-            // or map in dirty page map.
+            // scanning through the data pages. This will represent a rough
+            // area. Once we begin to see interim pages, we can still expect to
+            // see data pages. We need to scan all the way to the end of the
+            // file for data pages. Also, these new user pages will be empty
+            // and for the purpouses of recover can be ignored.
+
+            // Synapse: And if we crash now? What about these phantom new pages?
+            // If we crash now, there are no journals queued because we've
+            // blocked out all committers. The first journal to initialize will
+            // force the new file. Until then things are wavy, but it's only
+            // interim pages and empty user pages that are in play.
             
             // Synapse: Why are creating the pages here when they are temporary?
             // Can't we wait until we really need them? No. You would need to
