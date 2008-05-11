@@ -29,6 +29,7 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.Map.Entry;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -1431,8 +1432,6 @@ public class Pack
             this.setOfRegions = new TreeMap<Long, Long>();
         }
         
-        public abstract ByteBuffer getByteBuffer();
-
         /**
          * Get the page size boundary aligned position of the page in file.
          * 
@@ -1453,13 +1452,8 @@ public class Pack
             this.position = position;
         }
 
-        public void invalidate(int offset, int length)
-        {
-            long start = getPosition() + offset;
-            long end = start + length;
-            invalidate(start, end);
-        }
-        
+        public abstract ByteBuffer getByteBuffer();
+
         private void invalidate(long start, long end)
         {
             assert start >= getPosition();
@@ -1492,6 +1486,13 @@ public class Pack
                 break;
             }
             setOfRegions.put(start, end);
+        }
+
+        public void invalidate(int offset, int length)
+        {
+            long start = getPosition() + offset;
+            long end = start + length;
+            invalidate(start, end);
         }
         
         public void write(Disk disk, FileChannel fileChannel) throws IOException
