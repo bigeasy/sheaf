@@ -838,52 +838,6 @@ public class Pack
             return file;
         }
 
-        // FIXME Me misnomer. It should be getAddressStart.
-        public long getFirstAddressPageStart()
-        {
-            return header.getFirstAddressPageStart();
-        }
-        
-        public Lock getExpandLock()
-        {
-            return expandLock;
-        }
-        
-        public PositionSet getJournalHeaderSet()
-        {
-            return setOfJournalHeaders;
-        }
-        
-        public ReadWriteLock getCompactLock()
-        {
-            return compactLock;
-        }
-        
-        public ReadWriteLock getMoveListLock()
-        {
-            return moveListLock;
-        }
-        
-        public Boundary getDataBoundary()
-        {
-            return dataBoundary;
-        }
-        
-        public Boundary getInterimBoundary()
-        {
-            return interimBoundary;
-        }
-        
-        public MoveList getMoveList()
-        {
-            return listOfMoves;
-        }
-        
-        public int getAlignment()
-        {
-            return alignment;
-        }
-        
         public FileChannel getFileChannel()
         {
             return fileChannel;
@@ -898,107 +852,54 @@ public class Pack
         {
             return pageSize;
         }
+
+        public int getAlignment()
+        {
+            return alignment;
+        }
+
+        public PositionSet getJournalHeaderSet()
+        {
+            return setOfJournalHeaders;
+        }
+
+        // FIXME Me misnomer. It should be getAddressStart.
+        public long getFirstAddressPageStart()
+        {
+            return header.getFirstAddressPageStart();
+        }
+
+        public Boundary getDataBoundary()
+        {
+            return dataBoundary;
+        }
+
+        public Boundary getInterimBoundary()
+        {
+            return interimBoundary;
+        }
+
+        public MoveList getMoveList()
+        {
+            return listOfMoves;
+        }
+
+        public Lock getExpandLock()
+        {
+            return expandLock;
+        }
         
-        public boolean recover(Recovery recovery, long position, Medic medic)
+        public ReadWriteLock getCompactLock()
         {
-            RawPage rawPage = getPageByPosition(position);
-            if (rawPage == null)
-            {
-                rawPage = new RawPage(this, position);
-                Page page = medic.recover(rawPage, recovery);
-                if (page != null)
-                {
-                    rawPage.setPage(page);
-                    addPageByPosition(rawPage);
-                    return true;
-                }
-                return false;
-            }
-            return true;
-        }
-
-        public void newUserDataPages(Set<Long> setOfPages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
-        {
-            synchronized (setOfFreeUserPages)
-            {
-                while (setOfFreeUserPages.size() != 0 && setOfPages.size() != 0)
-                {
-                    Iterator<Long> pages = setOfPages.iterator();
-                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
-                    long position = freeUserPages.next();
-                    setOfDataPages.add(position);
-                    mapOfPages.put(pages.next(), new MovablePosition(moveNode, position));
-                    pages.remove();
-                    freeUserPages.remove();
-                }
-            }
+            return compactLock;
         }
         
-        public void close()
+        public ReadWriteLock getMoveListLock()
         {
-            getCompactLock().writeLock().lock();
-            try
-            {
-                int size = 0;
-                
-                size += COUNT_SIZE + setOfAddressPages.size() * POSITION_SIZE;
-                size += COUNT_SIZE + (setOfFreeUserPages.size() + pagesBySize.getSize()) * POSITION_SIZE;
-                
-                ByteBuffer reopen = ByteBuffer.allocateDirect(size);
-                
-                reopen.putInt(setOfAddressPages.size());
-                for (long position: setOfAddressPages)
-                {
-                    reopen.putLong(position);
-                }
-               
-                reopen.putInt(setOfFreeUserPages.size() + pagesBySize.getSize());
-                for (long position: setOfFreeUserPages)
-                {
-                    reopen.putLong(position);
-                }
-                
-                reopen.flip();
-                
-                try
-                {
-                    disk.write(fileChannel, reopen, getInterimBoundary().getPosition());
-                }
-                catch (IOException e)
-                {
-                    throw new Danger(ERROR_IO_WRITE, e);
-                }
-                
-                try
-                {
-                    disk.truncate(fileChannel, getInterimBoundary().getPosition() + reopen.capacity());
-                }
-                catch (IOException e)
-                {
-                    throw new Danger(ERROR_IO_TRUNCATE, e);
-                }
-                
-                header.setDataBoundary(dataBoundary.getPosition());
-                header.setOpenBoundary(getInterimBoundary().getPosition());
-
-                header.setShutdown(SOFT_SHUTDOWN);
-                try
-                {
-                    header.write(disk, fileChannel);
-                    disk.close(fileChannel);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger(ERROR_IO_CLOSE, e);
-                }
-            }
-            finally
-            {
-                getCompactLock().writeLock().unlock();
-            }
+            return moveListLock;
         }
-
-        public synchronized void collect()
+        
+        private synchronized void collect()
         {
             PageReference pageReference = null;
             while ((pageReference = (PageReference) queue.poll()) != null)
@@ -1054,29 +955,18 @@ public class Pack
             return position;
         }
 
-        private RawPage getPageByPosition(long position)
+        private long popFreeInterimPage()
         {
-            RawPage page = null;
-            Long boxPosition = new Long(position);
-            PageReference chunkReference = (PageReference) mapOfPagesByPosition.get(boxPosition);
-            if (chunkReference != null)
+            long position = 0L;
+            synchronized (setOfFreeInterimPages)
             {
-                page = (RawPage) chunkReference.get();
+                if (setOfFreeInterimPages.size() > 0)
+                {
+                    position = setOfFreeInterimPages.last();
+                    setOfFreeInterimPages.remove(position);
+                }
             }
-            return page;
-        }
-
-        private RawPage removePageByPosition(long position)
-        {
-            PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
-            RawPage p = null;
-            if (existing != null)
-            {
-                p = existing.get();
-                existing.enqueue();
-                collect();
-            }
-            return p;
+            return position;
         }
 
         private void addPageByPosition(RawPage page)
@@ -1091,6 +981,146 @@ public class Pack
             mapOfPagesByPosition.put(intended.getPosition(), intended);
         }
         
+        /**
+         * Allocate a new interim position that is initialized by the
+         * specified page strategy.
+         * <p>
+         * This method can only be called from within one of the
+         * <code>MoveList.mutate</code> methods. A page obtained from the set of
+         * free interim pages will not be moved while the move list is locked
+         * shared. 
+         * 
+         * @param <T>
+         *            The page strategy for the position.
+         * @param page
+         *            An instance of the page strategy that will initialize
+         *            the page at the position.
+         * @param dirtyPages
+         *            A map of dirty pages.
+         * @return A new interim page.
+         */
+        public <T extends Page> T newSystemPage(T page, DirtyPageMap dirtyPages)
+        {
+            // FIXME Rename newInterimPage.
+        
+            // We pull from the end of the interim space to take pressure of of
+            // the durable pages, which are more than likely multiply in number
+            // and move interim pages out of the way. We could change the order
+            // of the interim page set, so that we choose free interim pages
+            // from the front of the interim page space, if we want to rewind
+            // the interim page space and shrink the file more frequently.
+        
+            long position = popFreeInterimPage();
+        
+            // If we do not have a free interim page available, we will obtain
+            // create one out of the wilderness.
+        
+            if (position == 0L)
+            {
+                position = fromWilderness();
+            }
+        
+            RawPage rawPage = new RawPage(this, position);
+        
+            page.create(rawPage, dirtyPages);
+        
+            synchronized (mapOfPagesByPosition)
+            {
+                addPageByPosition(rawPage);
+            }
+        
+            return page;
+        }
+
+        /**
+         * Return an interim page for use as a move destination.
+         * <p>
+         * Question: How do we ensure that free interim pages do not slip into
+         * the user data page section? That is, how do we ensure that we're
+         * not moving an interium page to a spot that also needs to move?
+         * <p>
+         * Simple. We gather all the pages that need to move first. Then we
+         * assign blank pages only to the pages that are in use and need to
+         * move. See <code>tryMove</code> for more discussion.
+         * 
+         * @return A blank position in the interim area that for use as the
+         *         target of a move.
+         */
+        public long newBlankInterimPage()
+        {
+            long position = popFreeInterimPage();
+            if (position == 0L)
+            {
+                position = fromWilderness();
+            }
+            return position;
+        }
+
+        /**
+         * Remove the interim page from the set of free interim pages if the
+         * page is in the set of free interim pages. Returns true if the page
+         * was in the set of free interim pages.
+         * <p>
+         * This method can only be called while holding the expand lock in the
+         * pager class.
+         *
+         * @param position The position of the iterim free page.
+         */
+        public boolean removeInterimPageIfFree(long position)
+        {
+            synchronized (setOfFreeInterimPages)
+            {
+                if (setOfFreeInterimPages.contains(position))
+                {
+                    setOfFreeInterimPages.remove(position);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private RawPage getPageByPosition(long position)
+        {
+            RawPage page = null;
+            Long boxPosition = new Long(position);
+            PageReference chunkReference = (PageReference) mapOfPagesByPosition.get(boxPosition);
+            if (chunkReference != null)
+            {
+                page = (RawPage) chunkReference.get();
+            }
+            return page;
+        }
+
+        @SuppressWarnings("unchecked")
+        private <P extends Page> P castPage(Page page, P subtype)
+        {
+            return (P) page;
+        }
+
+        public <P extends Page> P getPage(long position, P page)
+        {
+            RawPage rawPage = null;
+            synchronized (mapOfPagesByPosition)
+            {
+                position = (long) Math.floor(position - (position % pageSize));
+                rawPage = getPageByPosition(position);
+                if (rawPage == null)
+                {
+                    rawPage = new RawPage(this, position);
+                    page.load(rawPage);
+                    addPageByPosition(rawPage);
+                }
+            }
+            synchronized (rawPage)
+            {
+                if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
+                {
+                    page.load(rawPage);
+                }
+            }
+            return castPage(rawPage.getPage(), page);
+        }
+
         public <P extends Page> P setPage(long position, P page, DirtyPageMap dirtyPages)
         {
             position = (long) Math.floor(position - (position % pageSize));
@@ -1106,19 +1136,7 @@ public class Pack
             return castPage(rawPage.getPage(), page);
         }
         
-        public AddressPage getAddressPage(long lastSelected)
-        {
-            for (;;)
-            {
-                AddressPage addressPage = tryGetAddressPage(lastSelected);
-                if (addressPage != null)
-                {
-                    return addressPage;
-                }
-            }
-        }
-        
-        public AddressPage tryGetAddressPage(long lastSelected)
+        private AddressPage tryGetAddressPage(long lastSelected)
         {
             synchronized (setOfAddressPages)
             {
@@ -1172,24 +1190,32 @@ public class Pack
                 return addressPage;
             }
         }
-        
-        public void returnUserPage(BlockPage blockPage)
+
+        public AddressPage getAddressPage(long lastSelected)
         {
-            // FIXME Is it not the case that the block changes can mutated
-            // by virtue of a deallocation operation?
-            if (blockPage.getCount() == 0)
+            for (;;)
             {
-                synchronized (setOfFreeUserPages)
+                AddressPage addressPage = tryGetAddressPage(lastSelected);
+                if (addressPage != null)
                 {
-                    setOfFreeUserPages.add(blockPage.getRawPage().getPosition());
+                    return addressPage;
                 }
-            }
-            else if (blockPage.getRemaining() > getAlignment())
-            {
-                pagesBySize.add(blockPage);
             }
         }
         
+        public void returnAddressPage(AddressPage addressPage)
+        {
+            long position = addressPage.getRawPage().getPosition();
+            synchronized (setOfAddressPages)
+            {
+                if (setOfReturningAddressPages.remove(position))
+                {
+                    setOfAddressPages.add(position);
+                    setOfAddressPages.notifyAll();
+                }
+            }
+        }
+
         public void addAddressPage(AddressPage addressPage)
         {
             // FIXME Convince yourself that this works. That you're not really
@@ -1208,165 +1234,39 @@ public class Pack
                 }
             }
         }
-        
-        public void returnAddressPage(AddressPage addressPage)
+
+        public void newUserDataPages(Set<Long> setOfPages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
         {
-            long position = addressPage.getRawPage().getPosition();
-            synchronized (setOfAddressPages)
+            synchronized (setOfFreeUserPages)
             {
-                if (setOfReturningAddressPages.remove(position))
+                while (setOfFreeUserPages.size() != 0 && setOfPages.size() != 0)
                 {
-                    setOfAddressPages.add(position);
-                    setOfAddressPages.notifyAll();
+                    Iterator<Long> pages = setOfPages.iterator();
+                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
+                    long position = freeUserPages.next();
+                    setOfDataPages.add(position);
+                    mapOfPages.put(pages.next(), new MovablePosition(moveNode, position));
+                    pages.remove();
+                    freeUserPages.remove();
                 }
             }
         }
 
-        public <P extends Page> P getPage(long position, P page)
+        public void returnUserPage(BlockPage blockPage)
         {
-            RawPage rawPage = null;
-            synchronized (mapOfPagesByPosition)
+            // FIXME Is it not the case that the block changes can mutated
+            // by virtue of a deallocation operation?
+            if (blockPage.getCount() == 0)
             {
-                position = (long) Math.floor(position - (position % pageSize));
-                rawPage = getPageByPosition(position);
-                if (rawPage == null)
+                synchronized (setOfFreeUserPages)
                 {
-                    rawPage = new RawPage(this, position);
-                    page.load(rawPage);
-                    addPageByPosition(rawPage);
+                    setOfFreeUserPages.add(blockPage.getRawPage().getPosition());
                 }
             }
-            synchronized (rawPage)
+            else if (blockPage.getRemaining() > getAlignment())
             {
-                if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
-                {
-                    page.load(rawPage);
-                }
+                pagesBySize.add(blockPage);
             }
-            return castPage(rawPage.getPage(), page);
-        }
-        
-        @SuppressWarnings("unchecked")
-        private <P extends Page> P castPage(Page page, P subtype)
-        {
-            return (P) page;
-        }
-
-        private long popFreeInterimPage()
-        {
-            long position = 0L;
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.size() > 0)
-                {
-                    position = setOfFreeInterimPages.last();
-                    setOfFreeInterimPages.remove(position);
-                }
-            }
-            return position;
-        }
-
-        /**
-         * Allocate a new interim position that is initialized by the
-         * specified page strategy.
-         * <p>
-         * This method can only be called from within one of the
-         * <code>MoveList.mutate</code> methods. A page obtained from the set of
-         * free interim pages will not be moved while the move list is locked
-         * shared. 
-         * 
-         * @param <T>
-         *            The page strategy for the position.
-         * @param page
-         *            An instance of the page strategy that will initialize
-         *            the page at the position.
-         * @param dirtyPages
-         *            A map of dirty pages.
-         * @return A new interim page.
-         */
-        public <T extends Page> T newSystemPage(T page, DirtyPageMap dirtyPages)
-        {
-            // FIXME Rename newInterimPage.
-
-            // We pull from the end of the interim space to take pressure of of
-            // the durable pages, which are more than likely multiply in number
-            // and move interim pages out of the way. We could change the order
-            // of the interim page set, so that we choose free interim pages
-            // from the front of the interim page space, if we want to rewind
-            // the interim page space and shrink the file more frequently.
-
-            long position = popFreeInterimPage();
-
-            // If we do not have a free interim page available, we will obtain
-            // create one out of the wilderness.
-
-            if (position == 0L)
-            {
-                position = fromWilderness();
-            }
-
-            RawPage rawPage = new RawPage(this, position);
-
-            page.create(rawPage, dirtyPages);
-
-            synchronized (mapOfPagesByPosition)
-            {
-                addPageByPosition(rawPage);
-            }
-
-            return page;
-        }
-
-        public long getPosition(long address)
-        {
-            return (long) Math.floor(address / pageSize);
-        }
-        
-        /**
-         * Return an interim page for use as a move destination.
-         * <p>
-         * Question: How do we ensure that free interim pages do not slip into
-         * the user data page section? That is, how do we ensure that we're
-         * not moving an interium page to a spot that also needs to move?
-         * <p>
-         * Simple. We gather all the pages that need to move first. Then we
-         * assign blank pages only to the pages that are in use and need to
-         * move. See <code>tryMove</code> for more discussion.
-         * 
-         * @return A blank position in the interim area that for use as the
-         *         target of a move.
-         */
-        public long newBlankInterimPage()
-        {
-            long position = popFreeInterimPage();
-            if (position == 0L)
-            {
-                position = fromWilderness();
-            }
-            return position;
-        }
-        
-        /**
-         * Remove the interim page from the set of free interim pages if the
-         * page is in the set of free interim pages. Returns true if the page
-         * was in the set of free interim pages.
-         * <p>
-         * This method can only be called while holding the expand lock in the
-         * pager class.
-         *
-         * @param position The position of the iterim free page.
-         */
-        public boolean removeInterimPageIfFree(long position)
-        {
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.contains(position))
-                {
-                    setOfFreeInterimPages.remove(position);
-                    return true;
-                }
-            }
-            return false;
         }
 
         public boolean removeUserPageIfFree(long position)
@@ -1381,6 +1281,19 @@ public class Pack
             }
             return false;
         }
+        private RawPage removePageByPosition(long position)
+        {
+            PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
+            RawPage p = null;
+            if (existing != null)
+            {
+                p = existing.get();
+                existing.enqueue();
+                collect();
+            }
+            return p;
+        }
+
         public void relocate(MoveLatch head)
         {
             synchronized (mapOfPagesByPosition)
@@ -1429,6 +1342,88 @@ public class Pack
                 }
             }
             return position + offset;
+        }
+
+        public boolean recover(Recovery recovery, long position, Medic medic)
+        {
+            RawPage rawPage = getPageByPosition(position);
+            if (rawPage == null)
+            {
+                rawPage = new RawPage(this, position);
+                Page page = medic.recover(rawPage, recovery);
+                if (page != null)
+                {
+                    rawPage.setPage(page);
+                    addPageByPosition(rawPage);
+                    return true;
+                }
+                return false;
+            }
+            return true;
+        }
+
+        public void close()
+        {
+            getCompactLock().writeLock().lock();
+            try
+            {
+                int size = 0;
+                
+                size += COUNT_SIZE + setOfAddressPages.size() * POSITION_SIZE;
+                size += COUNT_SIZE + (setOfFreeUserPages.size() + pagesBySize.getSize()) * POSITION_SIZE;
+                
+                ByteBuffer reopen = ByteBuffer.allocateDirect(size);
+                
+                reopen.putInt(setOfAddressPages.size());
+                for (long position: setOfAddressPages)
+                {
+                    reopen.putLong(position);
+                }
+               
+                reopen.putInt(setOfFreeUserPages.size() + pagesBySize.getSize());
+                for (long position: setOfFreeUserPages)
+                {
+                    reopen.putLong(position);
+                }
+                
+                reopen.flip();
+                
+                try
+                {
+                    disk.write(fileChannel, reopen, getInterimBoundary().getPosition());
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_WRITE, e);
+                }
+                
+                try
+                {
+                    disk.truncate(fileChannel, getInterimBoundary().getPosition() + reopen.capacity());
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_TRUNCATE, e);
+                }
+                
+                header.setDataBoundary(dataBoundary.getPosition());
+                header.setOpenBoundary(getInterimBoundary().getPosition());
+        
+                header.setShutdown(SOFT_SHUTDOWN);
+                try
+                {
+                    header.write(disk, fileChannel);
+                    disk.close(fileChannel);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_CLOSE, e);
+                }
+            }
+            finally
+            {
+                getCompactLock().writeLock().unlock();
+            }
         }
     }
 
