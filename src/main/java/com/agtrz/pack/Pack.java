@@ -718,7 +718,6 @@ public class Pack
                 throw new Danger(ERROR_IO_FORCE, e);
             }
 
-
             return new Pack(pager);
        }
         
@@ -1455,8 +1454,15 @@ public class Pack
 
         private void invalidate(long start, long end)
         {
-            assert start >= getPosition();
-            assert end <= getPosition() + getByteBuffer().capacity();
+            if (start < getPosition())
+            {
+                throw new IllegalStateException();
+            }
+            
+            if (end > getPosition() + getByteBuffer().capacity())
+            {
+                throw new IllegalStateException();
+            }
             
             INVALIDATE: for(;;)
             {
@@ -1675,11 +1681,6 @@ public class Pack
         private Page page;
 
         /**
-         * The page size boundary aligned position of the page in file.
-         */
-        private long position;
-
-        /**
          * A reclaimable reference to a byte buffer of the contents of the raw
          * page. The byte buffer is lazy loaded when needed and can be reclaimed
          * whenever there is no hard reference to the byte buffer. We keep a
@@ -1743,14 +1744,14 @@ public class Pack
         {
             int pageSize = pager.getPageSize();
             int bufferSize = pageSize;
-            if (position % pageSize != 0L)
+            if (getPosition() % pageSize != 0L)
             {
-                bufferSize = (int) (pageSize - position % pageSize);
+                bufferSize = (int) (pageSize - getPosition() % pageSize);
             }
             ByteBuffer bytes = ByteBuffer.allocateDirect(bufferSize);
             try
             {
-                pager.getDisk().read(pager.getFileChannel(), bytes, position);
+                pager.getDisk().read(pager.getFileChannel(), bytes, getPosition());
             }
             catch (IOException e)
             {
@@ -2156,12 +2157,14 @@ public class Pack
             }
         }
 
-        public void set(long address, long value, DirtyPageMap dirtyPages)
+        public void set(long address, long position, DirtyPageMap dirtyPages)
         {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = rawPage.getByteBuffer();
-                bytes.putLong((int) (address - rawPage.getPosition()), value);
+                int offset = (int) (address - rawPage.getPosition());
+                bytes.putLong(offset, position);
+                getRawPage().invalidate(offset, POSITION_SIZE);
                 dirtyPages.add(getRawPage());
             }
         }
@@ -2440,12 +2443,7 @@ public class Pack
 
         private long getAddress(ByteBuffer bytes)
         {
-            int size = bytes.getInt(bytes.position() + COUNT_SIZE);
-            if (Math.abs(size) > bytes.remaining())
-            {
-                throw new IllegalStateException();
-            }
-            return size;
+            return bytes.getLong(bytes.position() + COUNT_SIZE);
         }
         
         private void advance(ByteBuffer bytes, int size)
@@ -2453,7 +2451,19 @@ public class Pack
             bytes.position(bytes.position() + Math.abs(size));
         }
 
-        private boolean seekx(ByteBuffer bytes, long address)
+        /**
+         * Advance to the block associated with the address in this page. If
+         * found the position of the byte buffer will be at the start of the
+         * full block including the block header. If not found the block is
+         * after the last valid block.
+         * 
+         * @param bytes
+         *            The byte buffer of this block page.
+         * @param address
+         *            The address to seek.
+         * @return True if the address is found, false if not found.
+         */
+        private boolean seek(ByteBuffer bytes, long address)
         {
             bytes.clear();
             bytes.position(DATA_PAGE_HEADER_SIZE);
@@ -2474,12 +2484,12 @@ public class Pack
             return false;
         }
 
-        public ByteBuffer read(long address)
+        public void read(long address, ByteBuffer dst)
         {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seekx(bytes, address))
+                if (seek(bytes, address))
                 {
                     int offset = bytes.position();
                     int size = bytes.getInt();
@@ -2488,10 +2498,13 @@ public class Pack
                         throw new IllegalStateException();
                     }
                     bytes.limit(offset + Math.abs(size));
-                    return bytes.slice();
+                    dst.put(bytes);
+                }
+                else
+                {
+                    throw new IllegalStateException();
                 }
             }
-            throw new ArrayIndexOutOfBoundsException();
         }
 
         public boolean mirror(Pager pager, Journal journal, DirtyPageMap dirtyPages)
@@ -2588,6 +2601,7 @@ public class Pack
 
                     bytes.clear();
                     bytes.putInt(CHECKSUM_SIZE, interim ? count : -count);
+                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
 
                     dirtyPages.add(getRawPage());
                 }
@@ -2611,7 +2625,7 @@ public class Pack
                     }
                 }
                 ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seekx(bytes, address))
+                if (seek(bytes, address))
                 {
                     int offset = bytes.position();
                     int size = bytes.getInt();
@@ -2652,7 +2666,7 @@ public class Pack
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                if (seekx(bytes, address))
+                if (seek(bytes, address))
                 {
                     int offset = bytes.position();
 
@@ -2686,37 +2700,46 @@ public class Pack
                 AddressPage addressPage = getRawPage().getPager().getPage(address, new AddressPage());
                 synchronized (addressPage.getRawPage())
                 {
-                    ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                    if (seekx(bytes, address))
+                    ByteBuffer bytes = getRawPage().getByteBuffer();
+                    if (seek(bytes, address))
                     {
                         int size = getSize(bytes);
                         
-                        assert size == block.remaining() + BLOCK_HEADER_SIZE;
+                        if (size != block.remaining() + BLOCK_HEADER_SIZE)
+                        {
+                            throw new IllegalStateException();
+                        }
                         
-                        assert bytes.getLong() == address;
+                        if (bytes.getLong() != address)
+                        {
+                            throw new IllegalStateException();
+                        }
                         
                         bytes.put(block);
                     }
                     else
                     {
-                        assert block.remaining() + BLOCK_HEADER_SIZE < bytes.remaining();
+                        if (block.remaining() + BLOCK_HEADER_SIZE > bytes.remaining())
+                        {
+                            throw new IllegalStateException();
+                        }
                         
-                        int offset = bytes.position();
-
+                        getRawPage().invalidate(bytes.position(), block.remaining() + BLOCK_HEADER_SIZE);
+                        
                         bytes.putInt(block.remaining() + BLOCK_HEADER_SIZE);
                         bytes.putLong(address);
                         bytes.put(block);
                         
                         count++;
                         
-                        bytes.putInt(POSITION_SIZE, count);
+                        getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+                        bytes.putInt(POSITION_SIZE, interim ? count : -count);
                         
-                        addressPage.set(address, getRawPage().getPosition() + offset, dirtyPages);
+                        addressPage.set(address, getRawPage().getPosition(), dirtyPages);
                     }
+                    dirtyPages.add(getRawPage());
                 }
             }
-            // FIXME No hard reference to bytes.
-            dirtyPages.add(getRawPage());
         }
 
         public void commit(BlockPage dataPage, DirtyPageMap dirtyPages)
@@ -2725,20 +2748,22 @@ public class Pack
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                int i = 0;
-                while (i < count)
+                int block = 0;
+                while (block < count)
                 {
-                    int size = getSize(bytes);
+                    int offset = bytes.position();
+                    int size = bytes.getInt();
                     if (size > 0)
                     {
                         long address = bytes.getLong();
 
-                        bytes.limit(bytes.position() + (size - BLOCK_HEADER_SIZE));
+                        bytes.limit(offset + BLOCK_HEADER_SIZE);
                         dataPage.commit(address, bytes.slice(), dirtyPages);
 
                         bytes.limit(bytes.capacity());
                     }
-                    i++;
+                    bytes.position(bytes.position() + Math.abs(size));
+                    block++;
                 }
             }
         }
@@ -2748,7 +2773,7 @@ public class Pack
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                if (seekx(bytes, address))
+                if (seek(bytes, address))
                 {
                     return Math.abs(getSize(bytes));
                 }
@@ -3016,6 +3041,7 @@ public class Pack
         }
     }
 
+    // FIXME Probably needs to just represent a single pointer.
     final static class Pointer
     {
         private final ByteBuffer slice;
@@ -3955,6 +3981,11 @@ public class Pack
         {
             Operation operation = execute();
             
+            header.getByteBuffer().clear();
+            header.getByteBuffer().putLong(0, 0L);
+
+            dirtyPages.flush(header);
+
             pager.getJournalHeaderSet().free(header);
             
             assert operation instanceof Terminate;
@@ -4883,9 +4914,26 @@ public class Pack
             }
         }
 
-        public ByteBuffer read(long address)
+        public void read(final long address, final ByteBuffer bytes)
         {
-            return null;
+            listOfMoves.mutate(new Runnable()
+            {
+                public void run()
+                {
+                    BlockPage page = null;
+                    MovablePosition position = mapOfAddresses.get(address);
+                    if (position == null)
+                    {
+                        AddressPage addressPage = pager.getPage(address, new AddressPage());
+                        page = pager.getPage(addressPage.dereference(address), new BlockPage(false));
+                    }
+                    else
+                    {
+                        page = pager.getPage(position.getValue(pager), new BlockPage(true));
+                    }
+                    page.read(address, bytes);
+                }
+            });
         }
 
         public void write(final long address, final ByteBuffer bytes)
@@ -4924,10 +4972,13 @@ public class Pack
                     }
                     else
                     {
-                        writePage  = pager.getPage(position.getValue(pager), new BlockPage(true));
+                        writePage = pager.getPage(position.getValue(pager), new BlockPage(true));
                     }
 
-                    writePage.write(address, bytes, dirtyPages);
+                    if (!writePage.write(address, bytes, dirtyPages))
+                    {
+                        throw new IllegalStateException();
+                    }
                 }
             });
         }

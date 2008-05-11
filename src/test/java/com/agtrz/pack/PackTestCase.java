@@ -63,7 +63,7 @@ public class PackTestCase
         }
     }
 
-    @Test(expected=java.lang.AssertionError.class) public void regionalLowerRange()
+    @Test(expected=java.lang.IllegalStateException.class) public void regionalLowerRange()
     {
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
 
@@ -78,7 +78,7 @@ public class PackTestCase
         regional.invalidate(-1, 10);
     }
 
-    @Test(expected=java.lang.AssertionError.class) public void regionalUpperRange()
+    @Test(expected=java.lang.IllegalStateException.class) public void regionalUpperRange()
     {
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
 
@@ -313,7 +313,7 @@ public class PackTestCase
 
     // 17% 10%
 
-    @Ignore @Test public void write()
+    @Test public void write()
     {
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
@@ -325,6 +325,31 @@ public class PackTestCase
             bytes.put(i, (byte) i);
         }
         mutator.write(address, bytes);
+
+        bytes.clear();
+        mutator.read(address, bytes);
+        bytes.flip();
+        
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
+        
+        mutator.commit();
+        
+        mutator = pack.mutate();
+
+        bytes.clear();
+        mutator.read(address, bytes);
+        
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
+
+        mutator.commit();
+        
+        pack.close();
     }
 
     @Ignore @Test public void recover()
