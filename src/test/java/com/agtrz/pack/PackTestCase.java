@@ -577,6 +577,17 @@ public class PackTestCase
 
         pack.close();
     }
+    
+    @Test public void moveDataPage()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+
+        rewrite(pack, 8000);
+                
+        pack.close();
+    }
+
     @Ignore @Test public void recover()
     {
         Pack.Creator newPack = new Pack.Creator();

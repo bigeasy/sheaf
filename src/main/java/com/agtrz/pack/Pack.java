@@ -1,12 +1,9 @@
 /* Copyright Alan Gutierrez 2006 */
 package com.agtrz.pack;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
@@ -1372,7 +1369,7 @@ public class Pack
             return false;
         }
 
-        public boolean removeDataPageIfFree(long position)
+        public boolean removeUserPageIfFree(long position)
         {
             synchronized (setOfFreeUserPages)
             {
@@ -2168,13 +2165,12 @@ public class Pack
                         dirtyPages.add(getRawPage());
                         bytes.putLong(i, Long.MAX_VALUE);
                         getRawPage().invalidate(i, POSITION_SIZE);
+                        freeCount--;
                         return position + i;
                     }
                 }
 
-                // Not found.
-                
-                return 0L;
+                throw new IllegalStateException();
             }
         }
 
@@ -3828,6 +3824,8 @@ public class Pack
         
         private final SortedMap<Long, MovablePosition> mapOfPages;
         
+        private final SortedMap<Long, MovablePosition> mapOfAddressPages;
+        
         private final SortedMap<Long, MovablePosition> mapOfMovePages;
         
         private final MoveNode firstMoveNode;
@@ -3840,6 +3838,7 @@ public class Pack
             this.journal = journal;
             this.setOfDataPages = new HashSet<Long>();
             this.mapOfVacuums = new TreeMap<Long, MovablePosition>();
+            this.mapOfAddressPages = new TreeMap<Long, MovablePosition>();
             this.mapOfPages = new TreeMap<Long, MovablePosition>();
             this.mapOfMovePages = new TreeMap<Long, MovablePosition>();
             this.firstMoveNode = moveNode;
@@ -3851,10 +3850,23 @@ public class Pack
             return pageRecorder.contains(position)
                 || setOfDataPages.contains(position)
                 || setOfDataPages.contains(-position)
+                // FIXME Am I not checking this above?
                 || mapOfVacuums.containsKey(position)
                 || mapOfPages.containsKey(position);
         }
         
+            /** Record a move
+             * <p>
+        You wanted to know why you're ignoring the data page
+            move and not ignoring some of the mapped moves. It's because
+            when you were moving you were only using interim pages as keys
+            and not inspecting them. You were making no note of whether or not
+            they were going to be moved, so you've stored their pre-move value. Even
+            if they are pages that this mutator has moved, we know nothing of it.
+            However we did store the moved value of the data page, we had to.
+            We had to store the moved value of the data page. That is a move
+            that we need to observe if we've moved one our iterim pages, but
+            ignore if it's a data page. It is the place where our moving started. */
         public void record(Move move)
         {
             boolean moved = pageRecorder.contains(move.getFrom());
@@ -4593,7 +4605,7 @@ public class Pack
             }
         }
         
-        private void tryCommit(Set<Long> setOfAddressPages)
+        private void tryCommit(final Set<Long> setOfAddressPages)
         {
             final CommitMoveRecorder commit = new CommitMoveRecorder(pageRecorder, journal, moveRecorder.getMoveNode());
 
@@ -4606,46 +4618,46 @@ public class Pack
             
             final Set<Long> setOfDataPages = new HashSet<Long>(setOfAddressPages);
             
+            // The map to use to map data pages to new data pages.
+            final Map<Long, MovablePosition> mapOfDataPages = new TreeMap<Long, MovablePosition>();
+            
             // If the new address page is in the set of free data pages, the
-            // page does not have to be removed.
+            // page does not have to be moved.
             if (setOfDataPages.size() != 0)
             {
                 Iterator<Long> positions = setOfDataPages.iterator();
                 while (positions.hasNext())
                 {
                     long position = positions.next();
-                    if (pager.removeInterimPageIfFree(position))
+                    if (pager.removeUserPageIfFree(position))
                     {
                         positions.remove();
                     }
                 }
             }
             
-            if (setOfDataPages.size() != 0)
-            {
-                
-            }
-            
-            // FIXME Not all the pages in the by size map are allocations. Some
-            // of them are writes.
+            pageRecorder.getAllocationPageSet().addAll(setOfDataPages);
 
-            // First we mate the interim data pages with 
-            listOfMoves.mutate(new Runnable()
+            if (pageRecorder.getAllocationPageSet().size() != 0)
             {
-                public void run()
+                // First we mate the interim data pages with 
+                listOfMoves.mutate(new Runnable()
                 {
-                    // Consolidate pages by using existing, partially filled
-                    // pages to store our new block allocations.
-
-                    pager.pagesBySize.join(allocPagesBySize, commit.getDataPageSet(), commit.getVacuumMap(), moveRecorder.getMoveNode());
-                    pageRecorder.getAllocationPageSet().removeAll(commit.getVacuumMap().keySet());
-                    
-                    // Use free data pages to store the interim pages whose
-                    // blocks would not fit on an existing page.
-                    
-                    pager.newUserDataPages(pageRecorder.getAllocationPageSet(), commit.getDataPageSet(), commit.getPageMap(), moveRecorder.getMoveNode());
-                }
-            });
+                    public void run()
+                    {
+                        // Consolidate pages by using existing, partially filled
+                        // pages to store our new block allocations.
+    
+                        pager.pagesBySize.join(allocPagesBySize, commit.getDataPageSet(), commit.getVacuumMap(), moveRecorder.getMoveNode());
+                        pageRecorder.getAllocationPageSet().removeAll(commit.getVacuumMap().keySet());
+                        
+                        // Use free data pages to store the interim pages whose
+                        // blocks would not fit on an existing page.
+                        
+                        pager.newUserDataPages(pageRecorder.getAllocationPageSet(), commit.getDataPageSet(), commit.getPageMap(), moveRecorder.getMoveNode());
+                    }
+                });
+            }
 
 
             // If more pages are needed, then we need to extend the user area of
@@ -4734,14 +4746,24 @@ public class Pack
                         }
                     }
                     
-                    for (Map.Entry<Long, MovablePosition> entry: commit.getPageMap().entrySet())
+                    // Ugly double duty.
+                    if (setOfAddressPages.size() == 0)
                     {
-                        BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
-                        for (long address: page.getAddresses())
+                        // These are allocations to be copied to empty data pages.
+                        for (Map.Entry<Long, MovablePosition> entry: commit.getPageMap().entrySet())
                         {
-                            journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
+                            BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
+                            for (long address: page.getAddresses())
+                            {
+                                journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
+                            }
                         }
                     }
+                    else
+                    {
+                        // These data pages that are are supposed to be moved.
+                    }
+                   
                     
                     for (long position: commit.getPageRecorder().getWritePageSet())
                     {
@@ -5059,106 +5081,6 @@ public class Pack
                     journal.write(new Free(address));
                 }
             });
-        }
-    }
-
-    public static class AllocOutputStream
-    extends OutputStream
-    {
-        private final Mutator mutator;
-
-        private final ByteArrayOutputStream output;
-
-        public AllocOutputStream(Mutator mutator)
-        {
-            this.mutator = mutator;
-            this.output = new ByteArrayOutputStream();
-        }
-
-        public void write(int b)
-        {
-            output.write(b);
-        }
-
-        public void write(byte[] b, int off, int len)
-        {
-            output.write(b, off, len);
-        }
-
-        public void reset()
-        {
-            output.reset();
-        }
-
-        private int getSize(boolean withCount)
-        {
-            int size = output.size();
-            if (withCount)
-            {
-                size += 4;
-            }
-            return size;
-        }
-
-        private long allocate(long address, boolean withCount)
-        {
-            ByteBuffer bytes = ByteBuffer.allocate(getSize(withCount));
-            if (withCount)
-            {
-                bytes.putInt(output.size());
-            }
-            bytes.put(output.toByteArray());
-            bytes.flip();
-
-            mutator.write(address, bytes);
-
-            return address;
-        }
-
-        public long allocate(boolean withCount)
-        {
-            return allocate(mutator.allocate(getSize(withCount)), withCount);
-        }
-
-        // public Address temporary(boolean withCount)
-        // {
-        // return allocate(mutator.temporary(getSize(withCount)), withCount);
-        // }
-    }
-    
-    public static class ByteBufferInputStream
-    extends InputStream
-    {
-        private final ByteBuffer bytes;
-
-        public ByteBufferInputStream(ByteBuffer bytes, boolean withCount)
-        {
-            if (withCount)
-            {
-                bytes = bytes.slice();
-                bytes.limit(Integer.SIZE / Byte.SIZE + bytes.getInt());
-            }
-            this.bytes = bytes;
-        }
-
-        public int read() throws IOException
-        {
-            if (!bytes.hasRemaining())
-            {
-                return -1;
-            }
-            return bytes.get() & 0xff;
-        }
-
-        public int read(byte[] b, int off, int len) throws IOException
-        {
-            len = Math.min(len, bytes.remaining());
-            if (len == 0)
-            {
-                return -1;
-            }
-            bytes.get(b, off, len);
-            return len;
         }
     }
 }
