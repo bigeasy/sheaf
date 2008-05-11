@@ -32,6 +32,14 @@ public class PackTestCase
     {
         new Pack.Creator().create(newFile()).close();
     }
+    
+    @Test public void getFile()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        assertEquals(file, pack.getFile());
+        pack.close();
+    }
 
     private void assertBuffer(Pack.Disk disk, FileChannel fileChannel,
             final ByteBuffer expected, ByteBuffer actual) throws IOException

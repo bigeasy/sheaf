@@ -162,15 +162,10 @@ public class Pack
     {
         pager.close();
     }
-
-    private static void checksum(Checksum checksum, ByteBuffer bytes)
+    
+    public File getFile()
     {
-        checksum.reset();
-        for (int i = CHECKSUM_SIZE; i < bytes.capacity(); i++)
-        {
-            checksum.update(bytes.get(i));
-        }
-        bytes.putLong(0, checksum.getValue());
+        return pager.getFile();
     }
 
     public final static class Danger
@@ -224,10 +219,6 @@ public class Pack
          * Create an instance of <code>Disk</code>.
          */
         public Disk()
-        {
-        }
-
-        public void objectIO() throws IOException
         {
         }
 
@@ -746,43 +737,36 @@ public class Pack
 
     final static class Pager
     {
-        private final Checksum checksum;
+        private final File file;
 
         private final FileChannel fileChannel;
 
         private final Disk disk;
-
-        private final int pageSize;
         
         private final Header header;
 
+        public final Map<URI, Long> mapOfStaticPages;
+
+        private final int pageSize;
+
+        private final int alignment;
+        
+        private final PositionSet setOfJournalHeaders;
+
         private final Map<Long, PageReference> mapOfPagesByPosition;
-        
-        /**
-         * A read/write lock that coordinates rewind of area boundaries and the
-         * wilderness. 
-         */
-        private final ReadWriteLock compactLock;
-        
-        /**
-         * A read/write lock that protects the end of the move list.
-         */
-        private final ReadWriteLock moveListLock;
-        
-        /**
-         * A lock to ensure that only one mutator at a time is moving pages in
-         * the interim page area.
-         */
-        private final Lock expandLock;
 
         private final ReferenceQueue<RawPage> queue;
 
-        public final File file;
+        private final Boundary dataBoundary;
+        
+        private final Boundary interimBoundary;
+            
+        private final MoveList listOfMoves;
 
-        public final Map<URI, Long> mapOfStaticPages;
-
-        private final int alignment;
-
+        private final SortedSet<Long> setOfAddressPages;
+        
+        private final Set<Long> setOfReturningAddressPages;
+        
         public final BySizeTable pagesBySize;
 
         private final SortedSet<Long> setOfFreeUserPages;
@@ -810,18 +794,23 @@ public class Pack
          * time.
          */
         private final SortedSet<Long> setOfFreeInterimPages;
-
-        private final Boundary dataBoundary;
         
-        private final Boundary interimBoundary;
-            
-        private final MoveList listOfMoves;
+        /**
+         * A read/write lock that coordinates rewind of area boundaries and the
+         * wilderness. 
+         */
+        private final ReadWriteLock compactLock;
         
-        private final PositionSet setOfJournalHeaders;
+        /**
+         * A lock to ensure that only one mutator at a time is moving pages in
+         * the interim page area.
+         */
+        private final Lock expandLock;
         
-        private final SortedSet<Long> setOfAddressPages;
-        
-        private final Set<Long> setOfReturningAddressPages;
+        /**
+         * A read/write lock that protects the end of the move list.
+         */
+        private final ReadWriteLock moveListLock;
         
         public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long interimBoundary)
         {
@@ -833,7 +822,6 @@ public class Pack
             this.pageSize = header.getPageSize();
             this.dataBoundary = new Boundary(pageSize, header.getDataBoundary());
             this.interimBoundary = new Boundary(pageSize, interimBoundary);
-            this.checksum = new Adler32();
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
             this.pagesBySize = new BySizeTable(pageSize, alignment);
             this.mapOfStaticPages = mapOfStaticPages;
@@ -849,6 +837,11 @@ public class Pack
             this.setOfReturningAddressPages = new HashSet<Long>();
         }
         
+        public File getFile()
+        {
+            return file;
+        }
+
         // FIXME Me misnomer. It should be getAddressStart.
         public long getFirstAddressPageStart()
         {
@@ -1022,12 +1015,10 @@ public class Pack
         {
             ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
 
-            bytes.getLong(); // Checksum.
-            bytes.putInt(-1); // Is system page.
+            bytes.putLong(0L); // Checksum.
+            bytes.putInt(0); // Is system page.
 
             bytes.clear();
-
-            checksum(checksum, bytes);
 
             long position;
 
