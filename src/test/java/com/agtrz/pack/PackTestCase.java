@@ -287,6 +287,22 @@ public class PackTestCase
         fail("Expected exception not thrown.");
     }
 
+    @Test public void relocatable()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        mutator.allocate(64);
+        mutator.commit();
+        pack.close();
+        
+        pack = new Pack.Opener().open(file);
+        Pack.Pager pager = pack.pager;
+        Pack.Page page = pager.getPage(8192, new Pack.RelocatablePage());
+        page = pager.getPage(8192, new Pack.DataPage(false));
+        assertEquals(8192, page.getRawPage().getPosition());
+    }
+
     // 17% 10%
 
     @Ignore @Test public void write()

@@ -59,6 +59,8 @@ public class Pack
     public final static int ERROR_SHUTDOWN = 502;
 
     public final static int ERROR_FILE_SIZE = 503;
+    
+    public final static int ERROR_BLOCK_PAGE_CORRUPT = 601;
 
     private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
     
@@ -116,7 +118,7 @@ public class Pack
     private final static short INTERIM_REGION = 3;
     
 
-    private final Pager pager;
+    final Pager pager;
     
     /**
      * Create a new pack from the specified pager.
@@ -196,220 +198,143 @@ public class Pack
         }
     }
     
-    static abstract class Regional
+    /**
+     * Wrapper around calls to <code>FileChannel</code> methods that allows
+     * for simulating IO failures in testing. The <code>Disk</code> is
+     * stateless. Methods take a <code>FileChannel</code> as a parameter. The
+     * default implementation forwards the calls directly to the
+     * <code>FileChannel</code>.
+     * <p>
+     * This class is generally useful to testing. Users are encouraged to
+     * subclass <code>Disk</code> to throw <code>IOException</code>
+     * exceptions for their own unit tests. For example, subclass of disk can
+     * inspect writes for a particular file position and fail after a certain
+     * amount of writes.
+     * <p>
+     * The <code>Disk</code> class is set using the
+     * {@link Pack.Creator#setDisk Pack.Creator.setDisk} or
+     * {@link Pack.Opener#setDisk} methods. Because it is stateless it can be
+     * used for multiple <code>Pack</code> instances. However the only
+     * intended use case for a subclass of <code>Disk</code> to generate I/O
+     * failures. These subclasses are not expected to be stateless.
+     */
+    public static class Disk
     {
-        private long position;
-        
-        final SortedMap<Long, Long> setOfRegions;
-        
-        public Regional(long position)
+        /**
+         * Create an instance of <code>Disk</code>.
+         */
+        public Disk()
         {
-            this.position = position;
-            this.setOfRegions = new TreeMap<Long, Long>();
         }
-        
-        public abstract ByteBuffer getByteBuffer();
+
+        public void objectIO() throws IOException
+        {
+        }
 
         /**
-         * Get the page size boundary aligned position of the page in file.
+         * Open a file and create a <code>FileChannel</code>.
          * 
-         * @return The position of the page.
+         * @param file
+         *            The file to open.
+         * @return A <code>FileChannel</code> open on the specified file.
+         * @throws FileNotFoundException
+         *             If the file exists but is a directory rather than a
+         *             regular file, or cannot be opened or created for any
+         *             other reason.
          */
-        public synchronized long getPosition()
+        public FileChannel open(File file) throws FileNotFoundException
         {
-            return position;
+            return new RandomAccessFile(file, "rw").getChannel();
         }
 
         /**
-         * Set the page size boundary aligned position of the page in file.
+         * Writes a sequence of bytes to the file channel from the given buffer,
+         * starting at the given file position.
          * 
-         * @param position The position of the page.
+         * @param fileChannel
+         *            The file channel to which to write.
+         * @param src
+         *            The buffer from which bytes are transferred.
+         * @param position
+         *            The file position at which the transfer is to begin, must
+         *            be non-negative.
+         * @return The number of bytes written, possibly zero.
+         * @throws IOException
+         *             If an I/O error occurs.
          */
-        public synchronized void setPosition(long position)
+        public int write(FileChannel fileChannel, ByteBuffer src, long position) throws IOException
         {
-            this.position = position;
+            return fileChannel.write(src, position);
         }
 
-        public void invalidate(int offset, int length)
+        /**
+         * Reads a sequence of bytes from the file channel into the given
+         * buffer, starting at the given file position.
+         * 
+         * @param fileChannel
+         *            The file channel to which to write.
+         * @param dst
+         *            The buffer into which bytes are transferred.
+         * @param position
+         *            The file position at which the transfer is to begin, must
+         *            be non-negative.
+         * @return The number of bytes read, possibly zero, or -1 if the given
+         *         position is greater than or equal to the file's current size.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public int read(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
         {
-            long start = getPosition() + offset;
-            long end = start + length;
-            invalidate(start, end);
+            return fileChannel.read(dst, position);
         }
-        
-        private void invalidate(long start, long end)
-        {
-            assert start >= getPosition();
-            assert end <= getPosition() + getByteBuffer().capacity();
-            
-            INVALIDATE: for(;;)
-            {
-                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
-                while (entries.hasNext())
-                {
-                    Map.Entry<Long, Long> entry = entries.next();
-                    if (start < entry.getKey() && end >= entry.getKey())
-                    {
-                        entries.remove();
-                        end = end > entry.getValue() ? end : entry.getValue();
-                        continue INVALIDATE;
-                    }
-                    else if (entry.getKey() <= start && start <= entry.getValue())
-                    {
-                        entries.remove();
-                        start = entry.getKey();
-                        end = end > entry.getValue() ? end : entry.getValue();
-                        continue INVALIDATE;
-                    }
-                    else if (entry.getValue() < start)
-                    {
-                        break;
-                    }
-                }
-                break;
-            }
-            setOfRegions.put(start, end);
-        }
-        
-        public void write(Disk disk, FileChannel fileChannel) throws IOException
-        {
-            ByteBuffer bytes = getByteBuffer();
-            for(Map.Entry<Long, Long> entry: setOfRegions.entrySet())
-            {
-                int offset = (int) (entry.getKey() - getPosition());
-                int length = (int) (entry.getValue() - entry.getKey());
 
-                bytes.clear();
-                
-                bytes.position(offset);
-                bytes.limit(offset + length);
-                
-                disk.write(fileChannel, bytes, entry.getKey());
-            }
-            setOfRegions.clear();
+        /**
+         * Returns the current size of the file channel's file.
+         * 
+         * @param fileChannel
+         *            The file channel to size.
+         * @return The current size of this channel's file, measured in bytes.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public long size(FileChannel fileChannel) throws IOException
+        {
+            return fileChannel.size();
+        }
+        
+        public FileChannel truncate(FileChannel fileChannel, long size) throws IOException
+        {
+            return fileChannel.truncate(size);
+        }
+
+        /**
+         * Forces any updates to the file channel's file to be written to the
+         * storage device that contains it.
+         * 
+         * @param fileChannel
+         *            The file channel to flush.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public void force(FileChannel fileChannel) throws IOException
+        {
+            fileChannel.force(true);
+        }
+
+        /**
+         * Closes the file channel.
+         * 
+         * @param fileChannel
+         *            The file channel to close.
+         * @throws IOException
+         *             If an I/O error occurs.
+         */
+        public void close(FileChannel fileChannel) throws IOException
+        {
+            fileChannel.close();
         }
     }
-     
-    private final static class Header extends Regional
-    {
-        private final ByteBuffer bytes;
-        
-        public Header(ByteBuffer bytes)
-        {
-            super(0L);
-            this.bytes = bytes;
-        }
-        
-        public ByteBuffer getByteBuffer()
-        {
-            return bytes;
-        }
-        
-        public long getStaticPagesStart()
-        {
-            return FILE_HEADER_SIZE + getInternalJournalCount() * POSITION_SIZE;
-        }
-
-        public long getSignature()
-        {
-            return bytes.getLong(0);
-        }
-        
-        public void setSignature(long signature)
-        {
-            bytes.putLong(0, signature);
-            invalidate(0, CHECKSUM_SIZE);
-        }
-        
-        public int getShutdown()
-        {
-            return bytes.getInt(CHECKSUM_SIZE);
-        }
-        
-        public void setShutdown(int shutdown)
-        {
-            bytes.putInt(CHECKSUM_SIZE, shutdown);
-            invalidate(CHECKSUM_SIZE, COUNT_SIZE);
-        }
-        
-        public int getPageSize()
-        {
-            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE);
-        }
-        
-        public void setPageSize(int pageSize)
-        {
-            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE, pageSize);
-            invalidate(CHECKSUM_SIZE + COUNT_SIZE, COUNT_SIZE);
-        }
-        
-        public int getAlignment()
-        {
-            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 2);
-        }
-        
-        public void setAlignment(int alignment)
-        {
-            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 2, alignment);
-            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 2, COUNT_SIZE);
-        }
-        
-        public int getInternalJournalCount()
-        {
-            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 3);
-        }
-        
-        public void setInternalJournalCount(int internalJournalCount)
-        {
-            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 3, internalJournalCount);
-            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 3, COUNT_SIZE);
-        }
-        
-        public int getStaticPageSize()
-        {
-            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 4);
-        }
-        
-        public void setStaticPageSize(int staticPageSize)
-        {
-            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 4, staticPageSize);
-            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 4, COUNT_SIZE);
-        }
-        
-        public long getFirstAddressPageStart()
-        {
-            return bytes.getLong(CHECKSUM_SIZE + COUNT_SIZE * 5);
-        }
-        
-        public void setFirstAddressPageStart(long firstAddressPageStart)
-        {
-            bytes.putLong(CHECKSUM_SIZE + COUNT_SIZE * 5, firstAddressPageStart);
-            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 5, ADDRESS_SIZE);
-        }
-
-        public long getDataBoundary()
-        {
-            return bytes.getLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5);
-        }
-        
-        public void setDataBoundary(long dataBoundary)
-        {
-            bytes.putLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, dataBoundary);
-            invalidate(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, ADDRESS_SIZE);
-        }
-        
-        public long getOpenBoundary()
-        {
-            return bytes.getLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5);
-        }
-        
-        public void setOpenBoundary(long openBoundary)
-        {
-            bytes.putLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, openBoundary);
-            invalidate(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, ADDRESS_SIZE);
-        }
-    }
-
+ 
     public final static class Creator
     {
         private final Map<URI, Integer> mapOfStaticPageSizes;
@@ -819,279 +744,7 @@ public class Pack
         }
     }
 
-    private final static class Recovery
-    {
-        private final Map<Long, Long> mapOfBadAddresses;
-        
-        private final Set<Long> setOfCorruptDataPages;
-        
-        private final Set<Long> setOfBadDataChecksums;
-        
-        private final Set<Long> setOfBadAddressChecksums;
-
-        private final Checksum checksum;
-        
-        private short region;
-        
-        private int blockCount;
-        
-        public Recovery()
-        {
-            this.region = ADDRESS_REGION;
-            this.checksum = new Adler32();
-            this.mapOfBadAddresses = new HashMap<Long, Long>();
-            this.setOfBadAddressChecksums = new HashSet<Long>();
-            this.setOfBadDataChecksums = new HashSet<Long>();
-            this.setOfCorruptDataPages = new HashSet<Long>();
-        }
-        
-        public short getRegion()
-        {
-            return region;
-        }
-        
-        public void setRegion(short region)
-        {
-            this.region = region;
-        }
-        
-        public int getBlockCount()
-        {
-            return blockCount;
-        }
-        
-        public void incBlockCount()
-        {
-            blockCount++;
-        }
-        
-        public Checksum getChecksum()
-        {
-            return checksum;
-        }
-
-        public void badAddressChecksum(long position)
-        {
-            setOfBadAddressChecksums.add(position);
-        }
-        
-        public void corruptDataPage(long position)
-        {
-            setOfCorruptDataPages.add(position);
-        }
-
-        public void badDataChecksum(long position)
-        {
-            setOfBadDataChecksums.add(position);
-        }
-        
-        public void badAddress(long address, long position)
-        {
-            mapOfBadAddresses.put(address, position);
-        }
-        
-        public long getFileSize()
-        {
-            return 0L;
-        }
-    }
-
-    private interface Medic
-    {
-        public Page recover(RawPage rawPage, Recovery recovery);
-    }
-
-    private final static class NonInterimMedic implements Medic
-    {
-        public Page recover(RawPage rawPage, Recovery recovery)
-        {
-            Medic medic = null;
-            long position = rawPage.getPosition();
-            long first = rawPage.getPager().getFirstAddressPageStart();
-            if (position < first)
-            {
-                int pageSize = rawPage.getPager().getPageSize();
-                if (position == first / pageSize * pageSize)
-                {
-                    medic = new AddressPage();
-                }
-                else
-                {
-                    throw new IllegalStateException();
-                }
-            }
-            else
-            {
-                ByteBuffer peek = rawPage.getByteBuffer();
-                
-                peek.clear();
-                
-                try
-                {
-                    Pager pager = rawPage.getPager();
-                    pager.getDisk().read(pager.getFileChannel(), peek, position + CHECKSUM_SIZE);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger(ERROR_IO_READ, e);
-                }
-
-                if (peek.getInt(CHECKSUM_SIZE) < 0)
-                {
-                    medic = new DataPage(false);
-                }
-                else if (recovery.getBlockCount() == 0)
-                {
-                    medic = new AddressPage();
-                }
-                else
-                {
-                    recovery.setRegion(INTERIM_REGION);
-                    return null;
-                }
-            }
-            return medic.recover(rawPage, recovery);
-        }
-    }
-    
-    /**
-     * Wrapper around calls to <code>FileChannel</code> methods that allows
-     * for simulating IO failures in testing. The <code>Disk</code> is
-     * stateless. Methods take a <code>FileChannel</code> as a parameter. The
-     * default implementation forwards the calls directly to the
-     * <code>FileChannel</code>.
-     * <p>
-     * This class is generally useful to testing. Users are encouraged to
-     * subclass <code>Disk</code> to throw <code>IOException</code>
-     * exceptions for their own unit tests. For example, subclass of disk can
-     * inspect writes for a particular file position and fail after a certain
-     * amount of writes.
-     * <p>
-     * The <code>Disk</code> class is set using the
-     * {@link Pack.Creator#setDisk Pack.Creator.setDisk} or
-     * {@link Pack.Opener#setDisk} methods. Because it is stateless it can be
-     * used for multiple <code>Pack</code> instances. However the only
-     * intended use case for a subclass of <code>Disk</code> to generate I/O
-     * failures. These subclasses are not expected to be stateless.
-     */
-    public static class Disk
-    {
-        /**
-         * Create an instance of <code>Disk</code>.
-         */
-        public Disk()
-        {
-        }
-
-        public void objectIO() throws IOException
-        {
-        }
-
-        /**
-         * Open a file and create a <code>FileChannel</code>.
-         * 
-         * @param file
-         *            The file to open.
-         * @return A <code>FileChannel</code> open on the specified file.
-         * @throws FileNotFoundException
-         *             If the file exists but is a directory rather than a
-         *             regular file, or cannot be opened or created for any
-         *             other reason.
-         */
-        public FileChannel open(File file) throws FileNotFoundException
-        {
-            return new RandomAccessFile(file, "rw").getChannel();
-        }
-
-        /**
-         * Writes a sequence of bytes to the file channel from the given buffer,
-         * starting at the given file position.
-         * 
-         * @param fileChannel
-         *            The file channel to which to write.
-         * @param src
-         *            The buffer from which bytes are transferred.
-         * @param position
-         *            The file position at which the transfer is to begin, must
-         *            be non-negative.
-         * @return The number of bytes written, possibly zero.
-         * @throws IOException
-         *             If an I/O error occurs.
-         */
-        public int write(FileChannel fileChannel, ByteBuffer src, long position) throws IOException
-        {
-            return fileChannel.write(src, position);
-        }
-
-        /**
-         * Reads a sequence of bytes from the file channel into the given
-         * buffer, starting at the given file position.
-         * 
-         * @param fileChannel
-         *            The file channel to which to write.
-         * @param dst
-         *            The buffer into which bytes are transferred.
-         * @param position
-         *            The file position at which the transfer is to begin, must
-         *            be non-negative.
-         * @return The number of bytes read, possibly zero, or -1 if the given
-         *         position is greater than or equal to the file's current size.
-         * @throws IOException
-         *             If an I/O error occurs.
-         */
-        public int read(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
-        {
-            return fileChannel.read(dst, position);
-        }
-
-        /**
-         * Returns the current size of the file channel's file.
-         * 
-         * @param fileChannel
-         *            The file channel to size.
-         * @return The current size of this channel's file, measured in bytes.
-         * @throws IOException
-         *             If an I/O error occurs.
-         */
-        public long size(FileChannel fileChannel) throws IOException
-        {
-            return fileChannel.size();
-        }
-        
-        public FileChannel truncate(FileChannel fileChannel, long size) throws IOException
-        {
-            return fileChannel.truncate(size);
-        }
-
-        /**
-         * Forces any updates to the file channel's file to be written to the
-         * storage device that contains it.
-         * 
-         * @param fileChannel
-         *            The file channel to flush.
-         * @throws IOException
-         *             If an I/O error occurs.
-         */
-        public void force(FileChannel fileChannel) throws IOException
-        {
-            fileChannel.force(true);
-        }
-
-        /**
-         * Closes the file channel.
-         * 
-         * @param fileChannel
-         *            The file channel to close.
-         * @throws IOException
-         *             If an I/O error occurs.
-         */
-        public void close(FileChannel fileChannel) throws IOException
-        {
-            fileChannel.close();
-        }
-    }
- 
-    private final static class Pager
+    final static class Pager
     {
         private final Checksum checksum;
 
@@ -1565,34 +1218,28 @@ public class Pack
             }
         }
 
-        // FIXME Rename everything in this method.
-        // FIXME Document this method.
-        @SuppressWarnings("unchecked")
-        public <P extends Page> P getPage(long value, P page)
+        public <P extends Page> P getPage(long position, P page)
         {
-            RawPage position = null;
+            RawPage rawPage = null;
             synchronized (mapOfPagesByPosition)
             {
-                value = (long) Math.floor(value - (value % pageSize));
-                position = getPageByPosition(value);
-                if (position == null)
+                position = (long) Math.floor(position - (position % pageSize));
+                rawPage = getPageByPosition(position);
+                if (rawPage == null)
                 {
-                    position = new RawPage(this, value);
-                    page.load(position);
-                    addPageByPosition(position);
+                    rawPage = new RawPage(this, position);
+                    page.load(rawPage);
+                    addPageByPosition(rawPage);
                 }
             }
-            // FIXME Am I down grading when looking for RelocatablePage?
-            // FIXME Shouldn't this be assignable from?
-            // FIXME Assert that if not assignable one way, it is assignable the other way.
-            synchronized (position)
+            synchronized (rawPage)
             {
-                if (!position.getPage().getClass().equals(page.getClass()))
+                if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
                 {
-                    page.load(position);
+                    page.load(rawPage);
                 }
             }
-            return castPage(position.getPage(), page);
+            return castPage(rawPage.getPage(), page);
         }
         
         @SuppressWarnings("unchecked")
@@ -1781,6 +1428,220 @@ public class Pack
         }
     }
 
+    static abstract class Regional
+    {
+        private long position;
+        
+        final SortedMap<Long, Long> setOfRegions;
+        
+        public Regional(long position)
+        {
+            this.position = position;
+            this.setOfRegions = new TreeMap<Long, Long>();
+        }
+        
+        public abstract ByteBuffer getByteBuffer();
+
+        /**
+         * Get the page size boundary aligned position of the page in file.
+         * 
+         * @return The position of the page.
+         */
+        public synchronized long getPosition()
+        {
+            return position;
+        }
+
+        /**
+         * Set the page size boundary aligned position of the page in file.
+         * 
+         * @param position The position of the page.
+         */
+        public synchronized void setPosition(long position)
+        {
+            this.position = position;
+        }
+
+        public void invalidate(int offset, int length)
+        {
+            long start = getPosition() + offset;
+            long end = start + length;
+            invalidate(start, end);
+        }
+        
+        private void invalidate(long start, long end)
+        {
+            assert start >= getPosition();
+            assert end <= getPosition() + getByteBuffer().capacity();
+            
+            INVALIDATE: for(;;)
+            {
+                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
+                while (entries.hasNext())
+                {
+                    Map.Entry<Long, Long> entry = entries.next();
+                    if (start < entry.getKey() && end >= entry.getKey())
+                    {
+                        entries.remove();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getKey() <= start && start <= entry.getValue())
+                    {
+                        entries.remove();
+                        start = entry.getKey();
+                        end = end > entry.getValue() ? end : entry.getValue();
+                        continue INVALIDATE;
+                    }
+                    else if (entry.getValue() < start)
+                    {
+                        break;
+                    }
+                }
+                break;
+            }
+            setOfRegions.put(start, end);
+        }
+        
+        public void write(Disk disk, FileChannel fileChannel) throws IOException
+        {
+            ByteBuffer bytes = getByteBuffer();
+            for(Map.Entry<Long, Long> entry: setOfRegions.entrySet())
+            {
+                int offset = (int) (entry.getKey() - getPosition());
+                int length = (int) (entry.getValue() - entry.getKey());
+
+                bytes.clear();
+                
+                bytes.position(offset);
+                bytes.limit(offset + length);
+                
+                disk.write(fileChannel, bytes, entry.getKey());
+            }
+            setOfRegions.clear();
+        }
+    }
+     
+    final static class Header extends Regional
+    {
+        private final ByteBuffer bytes;
+        
+        public Header(ByteBuffer bytes)
+        {
+            super(0L);
+            this.bytes = bytes;
+        }
+        
+        public ByteBuffer getByteBuffer()
+        {
+            return bytes;
+        }
+        
+        public long getStaticPagesStart()
+        {
+            return FILE_HEADER_SIZE + getInternalJournalCount() * POSITION_SIZE;
+        }
+
+        public long getSignature()
+        {
+            return bytes.getLong(0);
+        }
+        
+        public void setSignature(long signature)
+        {
+            bytes.putLong(0, signature);
+            invalidate(0, CHECKSUM_SIZE);
+        }
+        
+        public int getShutdown()
+        {
+            return bytes.getInt(CHECKSUM_SIZE);
+        }
+        
+        public void setShutdown(int shutdown)
+        {
+            bytes.putInt(CHECKSUM_SIZE, shutdown);
+            invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+        }
+        
+        public int getPageSize()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE);
+        }
+        
+        public void setPageSize(int pageSize)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE, pageSize);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE, COUNT_SIZE);
+        }
+        
+        public int getAlignment()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 2);
+        }
+        
+        public void setAlignment(int alignment)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 2, alignment);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 2, COUNT_SIZE);
+        }
+        
+        public int getInternalJournalCount()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 3);
+        }
+        
+        public void setInternalJournalCount(int internalJournalCount)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 3, internalJournalCount);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 3, COUNT_SIZE);
+        }
+        
+        public int getStaticPageSize()
+        {
+            return bytes.getInt(CHECKSUM_SIZE + COUNT_SIZE * 4);
+        }
+        
+        public void setStaticPageSize(int staticPageSize)
+        {
+            bytes.putInt(CHECKSUM_SIZE + COUNT_SIZE * 4, staticPageSize);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 4, COUNT_SIZE);
+        }
+        
+        public long getFirstAddressPageStart()
+        {
+            return bytes.getLong(CHECKSUM_SIZE + COUNT_SIZE * 5);
+        }
+        
+        public void setFirstAddressPageStart(long firstAddressPageStart)
+        {
+            bytes.putLong(CHECKSUM_SIZE + COUNT_SIZE * 5, firstAddressPageStart);
+            invalidate(CHECKSUM_SIZE + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+
+        public long getDataBoundary()
+        {
+            return bytes.getLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5);
+        }
+        
+        public void setDataBoundary(long dataBoundary)
+        {
+            bytes.putLong(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, dataBoundary);
+            invalidate(CHECKSUM_SIZE * 2 + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+        
+        public long getOpenBoundary()
+        {
+            return bytes.getLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5);
+        }
+        
+        public void setOpenBoundary(long openBoundary)
+        {
+            bytes.putLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, openBoundary);
+            invalidate(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+    }
+
     /**
      * A representation of the basic page attributes of position and byte buffer
      * associated with an application of the raw page implemented by {@link
@@ -1808,7 +1669,7 @@ public class Pack
      * See {@link Pack.DataPage} for more details on the separate soft
      * references.
      */
-    private static final class RawPage extends Regional
+    static final class RawPage extends Regional
     {
         /**
          * The pager that manages this raw page.
@@ -2002,7 +1863,7 @@ public class Pack
      * 
      * @see Pack.Pager#getPage
      */
-    private interface Page
+    interface Page
     {
         /**
          * Return the underlying raw page associated with this page.
@@ -2039,6 +1900,11 @@ public class Pack
         public void load(RawPage rawPage);
     }
 
+    interface Medic
+    {
+        public Page recover(RawPage rawPage, Recovery recovery);
+    }
+
     /**
      * Interprets a {@link RawPage} as a position as an array of addresses that
      * reference specific positions in the data region of the file. A user
@@ -2067,7 +1933,7 @@ public class Pack
      * associated reservation page, then none of the free addresses are
      * reserved.
      */
-    private static final class AddressPage
+    static final class AddressPage
     implements Page, Medic
     {
         private RawPage rawPage;
@@ -2315,7 +2181,7 @@ public class Pack
         }
     }
 
-    private static class RelocatablePage
+    static class RelocatablePage
     implements Page
     {
         private RawPage rawPage;
@@ -2425,7 +2291,7 @@ public class Pack
      * <p>
      * FIXME RENAME BlockPage
      */
-    private static final class DataPage
+    static final class DataPage
     extends RelocatablePage implements Medic
     {
         private int remaining;
@@ -2482,7 +2348,7 @@ public class Pack
                 count = count == Integer.MIN_VALUE ? 0 : count & ~COUNT_MASK;
             }
             
-            this.remaining = getRemaining(count, bytes);
+            this.remaining = getRawPage().getPager().getPageSize() - getConsumed();
         }
         
         private boolean verifyChecksum(RawPage rawPage, Recovery recovery)
@@ -2499,7 +2365,6 @@ public class Pack
             }
             
             int count = bytes.getInt(CHECKSUM_SIZE);
-//            boolean isInterim = (count & 0XA0000000) != 0;
             count = (count & ~0xA0000000);
             
             int block = 0;
@@ -2523,7 +2388,7 @@ public class Pack
                 }
                 else
                 {
-                    bytes.position(bytes.position() + Math.abs(size));
+                    advance(bytes, size);
                 }
             }
             
@@ -2546,18 +2411,21 @@ public class Pack
             
             return null;
         }
-
-        private static int getRemaining(int count, ByteBuffer bytes)
+        
+        private int getConsumed()
         {
-            bytes.clear();
+            int consumed = DATA_PAGE_HEADER_SIZE;
+            ByteBuffer bytes = getBlockRange();
             for (int i = 0; i < count; i++)
             {
-                bytes.getLong();
-                int size = bytes.getInt();
-                int advance = Math.abs(size) > bytes.remaining() ? bytes.remaining() : Math.abs(size);
-                bytes.position(bytes.position() + advance);
+                int size = getSize(bytes);
+                if (size > 0)
+                {
+                    consumed += size;
+                }
+                advance(bytes, size);
             }
-            return bytes.remaining();
+            return consumed;
         }
 
         public int getCount()
@@ -2576,18 +2444,19 @@ public class Pack
             }
         }
 
-        public void reset(short type)
-        {
-            synchronized (getRawPage())
-            {
-                this.count = 0;
-                this.remaining = getRemaining(count, getRawPage().getByteBuffer());
-            }
-        }
-
         private int getSize(ByteBuffer bytes)
         {
-            int size = bytes.getInt();
+            int size = bytes.getInt(bytes.position());
+            if (Math.abs(size) > bytes.remaining())
+            {
+                throw new IllegalStateException();
+            }
+            return size;
+        }
+
+        private long getAddress(ByteBuffer bytes)
+        {
+            int size = bytes.getInt(bytes.position() + COUNT_SIZE);
             if (Math.abs(size) > bytes.remaining())
             {
                 throw new IllegalStateException();
@@ -2595,23 +2464,15 @@ public class Pack
             return size;
         }
         
-        private boolean seek(ByteBuffer bytes, int offset)
+        private void advance(ByteBuffer bytes, int size)
         {
-            int block = 0;
-            while (bytes.position() != offset && block < count)
-            {
-                int size = getSize(bytes);
-                if (size > 0)
-                {
-                    block++;
-                }
-                bytes.position(bytes.position() + Math.abs(size));
-            }
-            return block < count;
+            bytes.position(bytes.position() + Math.abs(size));
         }
 
-        private boolean seek(ByteBuffer bytes, long address)
+        private boolean seekx(ByteBuffer bytes, long address)
         {
+            bytes.clear();
+            bytes.position(DATA_PAGE_HEADER_SIZE);
             int block = 0;
             while (block < count)
             {
@@ -2620,31 +2481,29 @@ public class Pack
                 {
                     block++;
                 }
-                if (bytes.getLong(bytes.position()) == address)
+                if (getAddress(bytes) == address)
                 {
-                    bytes.position(bytes.position() - COUNT_SIZE + ADDRESS_SIZE);
                     return true;
                 }
-                bytes.position(bytes.position() + Math.abs(size));
+                advance(bytes, size);
             }
             return false;
         }
 
-        public ByteBuffer read(long position, long address)
+        public ByteBuffer read(long address)
         {
             synchronized (getRawPage())
             {
-                ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                int offset = getOffset(position);
-
-                if (seek(bytes, offset))
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seekx(bytes, address))
                 {
-                    int size = getSize(bytes);
-                    bytes.limit(bytes.position() + size);
+                    int offset = bytes.position();
+                    int size = bytes.getInt();
                     if (bytes.getLong() != address)
                     {
                         throw new IllegalStateException();
                     }
+                    bytes.limit(offset + Math.abs(size));
                     return bytes.slice();
                 }
             }
@@ -2666,7 +2525,7 @@ public class Pack
                     int size = getSize(bytes);
                     if (size < 0)
                     {
-                        bytes.position(bytes.position() + Math.abs(size));
+                        advance(bytes, size);
                         deleted = true;
                     }
                     else
@@ -2686,10 +2545,10 @@ public class Pack
                             ByteBuffer data = ByteBuffer.allocateDirect(Math.abs(size));
                             data.put(bytes);
     
-                            long position = vacuumPage.allocate(address, length, dirtyPages);
-                            vacuumPage.write(position, address, data, dirtyPages);
+                            vacuumPage.allocate(address, length, dirtyPages);
+                            vacuumPage.write(address, data, dirtyPages);
                         }
-                    }
+                    } 
                 }
                 if (vacuumPage != null)
                 {
@@ -2700,53 +2559,59 @@ public class Pack
             }
         }
 
-        public long allocate(long address, int length, DirtyPageMap dirtyPages)
+        /**
+         * Allocate a block that is referenced by the specified address.
+         * 
+         * @param address
+         *            The address that will reference the newly allocated block.
+         * @param blockSize
+         *            The full block size including the block header.
+         * @param dirtyPages
+         *            A dirty page map to record the block page if it changes.
+         * @return True if the allocation is successful.
+         */
+        public void allocate(long address, int blockSize, DirtyPageMap dirtyPages)
         {
-            long position = 0L;
             synchronized (getRawPage())
             {
                 assert ! mirrored;
 
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
+                boolean found = false;
                 int block = 0;
-                while (block != count && position == 0L)
+                while (block != count && !found)
                 {
-                    int offset = bytes.position();
                     int size = getSize(bytes);
                     if (size > 0 && bytes.getLong(bytes.position()) == address)
                     {
-                        position = getRawPage().getPosition() + offset;
+                        found = true;
                     }
                     else
                     {
-                        bytes.position(bytes.position() + Math.abs(size));
+                        bytes.position(bytes.position() + (Math.abs(size) - COUNT_SIZE));
                     }
                 }
 
-                if (position == 0L)
+                if (!found)
                 {
-                    position = getRawPage().getPosition() + bytes.position();
+                    getRawPage().invalidate(bytes.position(), blockSize);
 
-                    bytes.putInt(length);
+                    bytes.putInt(blockSize);
                     bytes.putLong(address);
 
                     count++;
-                    remaining -= length;
+                    remaining -= blockSize;
 
                     bytes.clear();
-                    bytes.getLong();
-                    bytes.putInt(count);
+                    bytes.putInt(CHECKSUM_SIZE, interim ? count : -count);
+
+                    dirtyPages.add(getRawPage());
                 }
             }
-
-            // FIXME Byte buffer can get reclaimed.
-            dirtyPages.add(getRawPage());
-
-            return position;
         }
 
         // FIXME This is the method I should use, right?
-        public boolean write(long address, ByteBuffer data, DirtyPageMap pages)
+        public boolean write(long address, ByteBuffer data, DirtyPageMap dirtyPages)
         {
             synchronized (getRawPage())
             {
@@ -2761,36 +2626,21 @@ public class Pack
                     {
                     }
                 }
-                ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                if (seek(bytes, address))
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seekx(bytes, address))
                 {
-                    int size = getSize(bytes);
-                    bytes.putLong(address);
-                    bytes.limit(size - POSITION_SIZE);
+                    int offset = bytes.position();
+                    int size = bytes.getInt();
+                    if (bytes.getLong() != address)
+                    {
+                        throw new Danger(ERROR_BLOCK_PAGE_CORRUPT);
+                    }
+                    bytes.limit(offset + size);
                     bytes.put(data);
-                    pages.add(getRawPage());
+                    dirtyPages.add(getRawPage());
                     return true;
                 }
                 return false;
-            }
-        }
-
-        public void write(long position, long address, ByteBuffer data, DirtyPageMap dirtyPages)
-        {
-            // FIXME Seek.
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getRawPage().getByteBuffer();
-                bytes.clear();
-                bytes.position((int) (position - getRawPage().getPosition()));
-                int size = bytes.getInt();
-                if (address != bytes.getLong())
-                {
-                    throw new IllegalStateException();
-                }
-                bytes.limit(bytes.position() + (size - BLOCK_HEADER_SIZE));
-                bytes.put(data);
-                dirtyPages.add(getRawPage());
             }
         }
 
@@ -2802,33 +2652,34 @@ public class Pack
          */
         private ByteBuffer getBlockRange(ByteBuffer bytes)
         {
+            bytes.clear();
             bytes.position(DATA_PAGE_HEADER_SIZE);
             bytes.limit(bytes.capacity());
             return bytes;
         }
-
-        private int getOffset(long position)
+        
+        private ByteBuffer getBlockRange()
         {
-            return (int) (position - getRawPage().getPosition());
+            return getBlockRange(getRawPage().getByteBuffer());
         }
 
-        public boolean free(long address, DirtyPageMap pages)
+        public boolean free(long address, DirtyPageMap dirtyPages)
         {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                if (seek(bytes, address))
+                if (seekx(bytes, address))
                 {
                     int offset = bytes.position();
 
-                    int size = getSize(bytes);
+                    int size = bytes.getInt();
                     if (size > 0)
                     {
                         size = -size;
                     }
                     bytes.putInt(offset, size);
 
-                    pages.add(getRawPage());
+                    dirtyPages.add(getRawPage());
                 }
                 return true;
             }
@@ -2852,7 +2703,7 @@ public class Pack
                 synchronized (addressPage.getRawPage())
                 {
                     ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                    if (seek(bytes, address))
+                    if (seekx(bytes, address))
                     {
                         int size = getSize(bytes);
                         
@@ -2908,12 +2759,12 @@ public class Pack
             }
         }
 
-        public int getSize(MovablePosition position, long address)
+        public int getSize(long address)
         {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getBlockRange(getRawPage().getByteBuffer());
-                if (seek(bytes, address))
+                if (seekx(bytes, address))
                 {
                     return Math.abs(getSize(bytes));
                 }
@@ -2922,7 +2773,7 @@ public class Pack
         }
     }
 
-    private final static class JournalPage
+    final static class JournalPage
     extends RelocatablePage
     {
         private int offset;
@@ -3034,6 +2885,136 @@ public class Pack
             offset = bytes.position();
             
             return operation;
+        }
+    }
+
+    private final static class Recovery
+    {
+        private final Map<Long, Long> mapOfBadAddresses;
+        
+        private final Set<Long> setOfCorruptDataPages;
+        
+        private final Set<Long> setOfBadDataChecksums;
+        
+        private final Set<Long> setOfBadAddressChecksums;
+
+        private final Checksum checksum;
+        
+        private short region;
+        
+        private int blockCount;
+        
+        public Recovery()
+        {
+            this.region = ADDRESS_REGION;
+            this.checksum = new Adler32();
+            this.mapOfBadAddresses = new HashMap<Long, Long>();
+            this.setOfBadAddressChecksums = new HashSet<Long>();
+            this.setOfBadDataChecksums = new HashSet<Long>();
+            this.setOfCorruptDataPages = new HashSet<Long>();
+        }
+        
+        public short getRegion()
+        {
+            return region;
+        }
+        
+        public void setRegion(short region)
+        {
+            this.region = region;
+        }
+        
+        public int getBlockCount()
+        {
+            return blockCount;
+        }
+        
+        public void incBlockCount()
+        {
+            blockCount++;
+        }
+        
+        public Checksum getChecksum()
+        {
+            return checksum;
+        }
+
+        public void badAddressChecksum(long position)
+        {
+            setOfBadAddressChecksums.add(position);
+        }
+        
+        public void corruptDataPage(long position)
+        {
+            setOfCorruptDataPages.add(position);
+        }
+
+        public void badDataChecksum(long position)
+        {
+            setOfBadDataChecksums.add(position);
+        }
+        
+        public void badAddress(long address, long position)
+        {
+            mapOfBadAddresses.put(address, position);
+        }
+        
+        public long getFileSize()
+        {
+            return 0L;
+        }
+    }
+
+    private final static class NonInterimMedic implements Medic
+    {
+        public Page recover(RawPage rawPage, Recovery recovery)
+        {
+            Medic medic = null;
+            long position = rawPage.getPosition();
+            long first = rawPage.getPager().getFirstAddressPageStart();
+            if (position < first)
+            {
+                int pageSize = rawPage.getPager().getPageSize();
+                if (position == first / pageSize * pageSize)
+                {
+                    medic = new AddressPage();
+                }
+                else
+                {
+                    throw new IllegalStateException();
+                }
+            }
+            else
+            {
+                ByteBuffer peek = rawPage.getByteBuffer();
+                
+                peek.clear();
+                
+                try
+                {
+                    Pager pager = rawPage.getPager();
+                    pager.getDisk().read(pager.getFileChannel(), peek, position + CHECKSUM_SIZE);
+                }
+                catch (IOException e)
+                {
+                    throw new Danger(ERROR_IO_READ, e);
+                }
+
+                if (peek.getInt(CHECKSUM_SIZE) < 0)
+                {
+                    medic = new DataPage(false);
+                }
+                else if (recovery.getBlockCount() == 0)
+                {
+                    medic = new AddressPage();
+                }
+                else
+                {
+                    recovery.setRegion(INTERIM_REGION);
+                    return null;
+                }
+            }
+            return medic.recover(rawPage, recovery);
         }
     }
 
@@ -3820,50 +3801,45 @@ public class Pack
     private final static class Write
     extends Operation
     {
+        private long address;
+        
         private long destination;
 
         private long source;
-
-        private int shift;
 
         public Write()
         {
         }
 
-        public Write(long destination, long source, int shift)
+        public Write(long address, long destination, long source)
         {
+            this.address = address;
             this.destination = destination;
             this.source = source;
-            this.shift = shift;
         }
 
         public void commit(Pager pager, Journal journal, DirtyPageMap dirtyPages)
         {
-            AddressPage toAddressPage = pager.getPage(destination, new AddressPage());
-            long toPosition = toAddressPage.dereference(destination);
-            DataPage toDataPage = pager.getPage(toPosition, new DataPage(false));
-            ByteBuffer fromBytes = journal.read(source, destination);
-            toDataPage.write(toPosition, destination, fromBytes, dirtyPages);
         }
 
         public void write(ByteBuffer bytes)
         {
             bytes.putShort(WRITE);
+            bytes.putLong(address);
             bytes.putLong(destination);
             bytes.putLong(source);
-            bytes.putInt(shift);
         }
 
         public void read(ByteBuffer bytes)
         {
+            address = bytes.getLong();
             destination = bytes.getLong();
             source = bytes.getLong();
-            shift = bytes.getInt();
         }
 
         public int length()
         {
-            return FLAG_SIZE + ADDRESS_SIZE * 2;
+            return FLAG_SIZE + ADDRESS_SIZE * 3;
         }
 
         public ByteBuffer getByteBuffer(Pager pager, ByteBuffer bytes)
@@ -4100,24 +4076,6 @@ public class Pack
         public Pager getPager()
         {
             return pager;
-        }
-
-        public void shift(long position, long address, ByteBuffer bytes)
-        {
-            DataPage dataPage = pager.getPage(position, new DataPage(false));
-            dataPage.write(position, address, bytes, dirtyPages);
-        }
-
-        public void write(long position, long address, ByteBuffer bytes)
-        {
-            DataPage dataPage = pager.getPage(position, new DataPage(false));
-            dataPage.write(position, address, bytes, dirtyPages);
-        }
-
-        public ByteBuffer read(long position, long address)
-        {
-            DataPage dataPage = pager.getPage(position, new DataPage(false));
-            return dataPage.read(position, address);
         }
 
         public void write(Operation operation)
@@ -4515,11 +4473,11 @@ public class Pack
                     
                     // Allocate a block from the wilderness data page.
                     
-                    long position = allocPage.allocate(address, fullSize, dirtyPages);
+                    allocPage.allocate(address, fullSize, dirtyPages);
                     
                     allocPagesBySize.add(allocPage);
                     
-                    mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), position));
+                    mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), allocPage.getRawPage().getPosition()));
                     
                     return address;
                 }
@@ -4957,9 +4915,9 @@ public class Pack
                         AddressPage addressPage = pager.getPage(address, new AddressPage());
                         DataPage dataPage = pager.getPage(addressPage.dereference(address), new DataPage(false));
                         
-                        int length = dataPage.getSize(position, address);
+                        int blockSize = dataPage.getSize(address);
                         
-                        long write = writePagesBySize.bestFit(length);
+                        long write = writePagesBySize.bestFit(blockSize);
                         if (write == 0L)
                         {
                             writePage = pager.newSystemPage(new DataPage(true), dirtyPages);
@@ -4970,7 +4928,7 @@ public class Pack
                             writePage = pager.getPage(write, new DataPage(true));
                         }
                         
-                        writePage.allocate(address, length, dirtyPages);
+                        writePage.allocate(address, blockSize, dirtyPages);
                         
                         position = new MovablePosition(moveRecorder.getMoveNode(), write);
                         mapOfAddresses.put(address, position);
@@ -4980,7 +4938,7 @@ public class Pack
                         writePage  = pager.getPage(position.getValue(pager), new DataPage(true));
                     }
 
-                    writePage.write(position.getValue(pager), address, bytes, dirtyPages);
+                    writePage.write(address, bytes, dirtyPages);
                 }
             });
         }
