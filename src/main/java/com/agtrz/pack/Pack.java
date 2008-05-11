@@ -4503,7 +4503,7 @@ public class Pack
         public long allocate(int blockSize)
         {
             AddressPage addressPage = null;
-            long address = 0L;
+            final long address;
             addressPage = pager.getAddressPage(lastPointerPage);
             try
             {
@@ -4514,11 +4514,6 @@ public class Pack
                 pager.returnAddressPage(addressPage);
             }
             
-            return allocate(address, blockSize);
-        }
-        
-        private long allocate(final long address, int blockSize)
-        {
             // Add the header size to the block size.
                     
             final int fullSize = blockSize + BLOCK_HEADER_SIZE;
@@ -4567,6 +4562,86 @@ public class Pack
             });
         }
 
+        public void write(final long address, final ByteBuffer bytes)
+        {
+            listOfMoves.mutate(new Runnable()
+            {
+                public void run()
+                {
+                    // For now, the first test will write to an allocated block, so
+                    // the write buffer is already there.
+                    
+                    BlockPage interimPage = null;
+                    MovablePosition position = mapOfAddresses.get(address);
+                    if (position == null)
+                    {
+                        AddressPage addressPage = pager.getPage(address, new AddressPage());
+                        BlockPage page = pager.getPage(addressPage.dereference(address), new BlockPage(false));
+                        
+                        int blockSize = page.getSize(address);
+                        
+                        long interim = writePagesBySize.bestFit(blockSize);
+                        if (interim == 0L)
+                        {
+                            interimPage = pager.newSystemPage(new BlockPage(true), dirtyPages);
+                            moveRecorder.getPageRecorder().getWritePageSet().add(interimPage.getRawPage().getPosition());
+                        }
+                        else
+                        {
+                            interimPage = pager.getPage(interim, new BlockPage(true));
+                        }
+                        
+                        interimPage.allocate(address, blockSize, dirtyPages);
+                        
+                        position = new MovablePosition(moveRecorder.getMoveNode(), interimPage.getRawPage().getPosition());
+                        mapOfAddresses.put(address, position);
+                    }
+                    else
+                    {
+                        interimPage = pager.getPage(position.getValue(pager), new BlockPage(true));
+                    }
+        
+                    if (!interimPage.write(address, bytes, dirtyPages))
+                    {
+                        throw new IllegalStateException();
+                    }
+                }
+            });
+        }
+
+        public void read(final long address, final ByteBuffer bytes)
+        {
+            listOfMoves.mutate(new Runnable()
+            {
+                public void run()
+                {
+                    BlockPage page = null;
+                    MovablePosition position = mapOfAddresses.get(address);
+                    if (position == null)
+                    {
+                        AddressPage addressPage = pager.getPage(address, new AddressPage());
+                        page = pager.getPage(addressPage.dereference(address), new BlockPage(false));
+                    }
+                    else
+                    {
+                        page = pager.getPage(position.getValue(pager), new BlockPage(true));
+                    }
+                    page.read(address, bytes);
+                }
+            });
+        }
+
+        public void free(final long address)
+        {
+            listOfMoves.mutate(new Runnable()
+            {
+                public void run()
+                {
+                    journal.write(new Free(address));
+                }
+            });
+        }
+
         public long newAddressPage()
         {
             pager.getCompactLock().readLock().lock();
@@ -4587,231 +4662,6 @@ public class Pack
             return 0L;
         }
 
-        public void commit()
-        {
-            // TODO I believe that compacting should be a separate lock that
-            // should lock the entire file exclusively and block any other moves
-            // or commits. I'm working under the assumption that the positions
-            // do not move backwards. Compact lock may only need to envelop the
-            // exiting move lock. 
-
-            pager.getCompactLock().readLock().lock();
-            try
-            {
-                Set<Long> setOfPageAddress = Collections.emptySet();
-                tryCommit(setOfPageAddress);
-            }
-            finally
-            {
-                pager.getCompactLock().readLock().unlock();
-            }
-        }
-        
-        private void tryCommit(final Set<Long> setOfAddressPages)
-        {
-            final CommitMoveRecorder commit = new CommitMoveRecorder(pageRecorder, journal, moveRecorder.getMoveNode());
-
-            // The set of address pages is a set of pages that need to be
-            // moved to new data pages. The data boundary has already been
-            // adjusted. The pages need to be moved.
-            
-            // We're going to create a set of address pages to move, which 
-            // is separate from the full set of address pages to initialize.
-            
-            final Set<Long> setOfDataPages = new HashSet<Long>(setOfAddressPages);
-            
-            // The map to use to map data pages to new data pages.
-            final Map<Long, MovablePosition> mapOfDataPages = new TreeMap<Long, MovablePosition>();
-            
-            // If the new address page is in the set of free data pages, the
-            // page does not have to be moved.
-            if (setOfDataPages.size() != 0)
-            {
-                Iterator<Long> positions = setOfDataPages.iterator();
-                while (positions.hasNext())
-                {
-                    long position = positions.next();
-                    if (pager.removeUserPageIfFree(position))
-                    {
-                        positions.remove();
-                    }
-                }
-            }
-            
-            pageRecorder.getAllocationPageSet().addAll(setOfDataPages);
-
-            if (pageRecorder.getAllocationPageSet().size() != 0)
-            {
-                // First we mate the interim data pages with 
-                listOfMoves.mutate(new Runnable()
-                {
-                    public void run()
-                    {
-                        // Consolidate pages by using existing, partially filled
-                        // pages to store our new block allocations.
-    
-                        pager.pagesBySize.join(allocPagesBySize, commit.getDataPageSet(), commit.getVacuumMap(), moveRecorder.getMoveNode());
-                        pageRecorder.getAllocationPageSet().removeAll(commit.getVacuumMap().keySet());
-                        
-                        // Use free data pages to store the interim pages whose
-                        // blocks would not fit on an existing page.
-                        
-                        pager.newUserDataPages(pageRecorder.getAllocationPageSet(), commit.getDataPageSet(), commit.getPageMap(), moveRecorder.getMoveNode());
-                    }
-                });
-            }
-
-
-            // If more pages are needed, then we need to extend the user area of
-            // the file.
-
-            if (pageRecorder.getAllocationPageSet().size() != 0)
-            {
-                pager.getExpandLock().lock();
-                try
-                {
-                    // This invocation is to flush the move list for the current
-                    // mutator. You may think that this is pointless, but it's
-                    // not. It will ensure that the relocatable references are
-                    // all up to date before we try to move.
-
-                    new MoveList(commit, listOfMoves).mutate(new Runnable()
-                    {
-                        public void run()
-                        {
-                        }
-                    });
-
-                    // Now we can try to move the pages.
-
-                    tryMove(commit);
-                }
-                finally
-                {
-                    pager.getExpandLock().unlock();
-                }
-            }
-            
-            new MoveList(commit, listOfMoves).mutate(new Runnable()
-            {
-                public void run()
-                {
-                    // Write a terminate to end the playback loop. This
-                    // terminate is the true end of the journal.
-
-                    journal.write(new Terminate());
-
-                    // Grab the current position of the journal. This is the
-                    // actual start of playback.
-
-                    long beforeVacuum = journal.getJournalPosition();
-                    
-                    // Create a vacuum operation for all the vacuums.
-
-                    for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
-                    {
-                        // FIXME This has not run yet.
-                        // FIXME By not holding onto the data page, the garbage
-                        // collector can reap the raw page and we lose our
-                        // mirrored flag.
-                        BlockPage dataPage = pager.getPage(entry.getValue().getValue(pager), new BlockPage(false));
-                        dataPage.mirror(pager, journal, dirtyPages);
-                    }
-
-                    long afterVacuum = journal.getJournalPosition(); 
-                    
-                    // Write out all your allocations from above. Each of them
-                    // becomes an action. Read the interim page and copy the
-                    // data over to the data page.
-                    
-                    // Here we insert the vacuum break. During a recovery, the
-                    // data pages will be recreated without a reference to their
-                    // vacuumed page.
-
-                    // Although, I suppose the vacuum page reference could
-                    // simply be a reference to the data page.
-
-                    // Two ways to deal with writing to a vacuumed page. One it
-                    // to overwrite the vacuum journal. The other is to wait
-                    // until the vacuumed journal is written.
-
-                    journal.write(new Vacuum(afterVacuum));
-                    
-                    journal.write(new Terminate());
-                    
-                    for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
-                    {
-                        BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
-                        for (long address: page.getAddresses())
-                        {
-                            journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
-                        }
-                    }
-                    
-                    // Ugly double duty.
-                    if (setOfAddressPages.size() == 0)
-                    {
-                        // These are allocations to be copied to empty data pages.
-                        for (Map.Entry<Long, MovablePosition> entry: commit.getPageMap().entrySet())
-                        {
-                            BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
-                            for (long address: page.getAddresses())
-                            {
-                                journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // These data pages that are are supposed to be moved.
-                    }
-                   
-                    
-                    for (long position: commit.getPageRecorder().getWritePageSet())
-                    {
-                        BlockPage page = pager.getPage(position, new BlockPage(true));
-                        for (long address: page.getAddresses())
-                        {
-                            AddressPage addressPage = pager.getPage(address, new AddressPage());
-                            journal.write(new Commit(address, position, addressPage.dereference(address)));
-                        }
-                    }
-
-                    // Create the list of moves.
-                    MoveNode iterator = moveRecorder.getFirstMoveNode();
-                    while (iterator.getNext() != null)
-                    {
-                        iterator = iterator.getNext();
-                        journal.write(new AddMove(iterator.getMove()));
-                    }
-
-                    // Need to use the entire list of moves since the start
-                    // of the journal to determine the actual journal start.
-                    
-                    long journalStart = journal.getJournalStart().getValue(pager);
-                    journal.write(new NextOperation(journalStart));
-
-                    // TODO Abstract journal replay out, so it can be used
-                    // here and during recovery.
-                    
-                    // Create a next pointer to point at the start of operations.
-                    Pointer header = pager.getJournalHeaderSet().allocate();
-                    header.getByteBuffer().putLong(beforeVacuum);
-                    dirtyPages.flush(header);
-                    
-                    Player player = new Player(pager, header, dirtyPages);
-                    
-                    // Obtain a journal header and record the head.
-                    
-                    // First do the vacuums.
-                    player.vacuum();
-                    
-                    // Then do everything else.
-                    player.commit();
-                }
-            });
-        }
-    
         /**
          * Map the pages in the set of pages to a soon to be moved interim
          * that is immediately after the data to interim page boundary. Each
@@ -4904,7 +4754,7 @@ public class Pack
          *
          * @param head The head a linked list of move latches.
          */
-        private void tryMove(MoveLatch head)
+        private void moveAndUnlatch(MoveLatch head)
         {
             // Iterate through the linked list moving pages and releasing
             // latches.
@@ -4948,59 +4798,68 @@ public class Pack
             }  
         }
 
+        private MoveLatch appendToMoveList(SortedSet<Long> setOfInUse)
+        {
+            // For the set of pages in use, add the page to the move list.
+      
+            MoveLatch head = null;  // Head of the list.
+            MoveLatch move = null;  // End of the list for building list.
+      
+            Iterator<Long> inUse = setOfInUse.iterator();
+      
+            // Start the linked list of moves and latches assigning the
+            // head.
+      
+            if (inUse.hasNext())
+            {
+                long from = inUse.next();
+                head = move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), null);
+            }
+      
+            // Append of the rest of the moves and latches to the list. 
+      
+            while (inUse.hasNext())
+            {
+                long from = inUse.next();
+                move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), move);
+            }
+      
+            // This will 
+      
+            pager.getMoveList().add(move);
+      
+            return head;
+        }
+
         private void tryMove(CommitMoveRecorder commit)
         {
             SortedSet<Long> setOfInUse = new TreeSet<Long>();
             SortedSet<Long> setOfGathered = new TreeSet<Long>();
-
+        
             // Gather the interim pages that will become data pages, moving the
             // data to interim boundary.
-
+        
             gatherPages(pageRecorder.getAllocationPageSet(),
                         commit.getDataPageSet(),
                         commit.getPageMap(),
                         setOfInUse,
                         setOfGathered);
-
+            
+            // If we have interim pages in use, move them.
+        
             if (setOfInUse.size() != 0)
             {
-                // For the set of pages in use, add the page to the move list.
-
-                MoveLatch head = null;  // Head of the list.
-                MoveLatch move = null;  // End of the list for building list.
-
-                Iterator<Long> inUse = setOfInUse.iterator();
-
-                // Start the linked list of moves and latches assigning the
-                // head.
-
-                if (inUse.hasNext())
-                {
-                    long from = inUse.next();
-                    head = move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), null);
-                }
-
-                // Append of the rest of the moves and latches to the list. 
-
-                while (inUse.hasNext())
-                {
-                    long from = inUse.next();
-                    move = new MoveLatch(new Move(from, pager.newBlankInterimPage()), move);
-                }
-
-                // This will 
-
-                pager.getMoveList().add(move);
-            
+                MoveLatch head = appendToMoveList(setOfInUse);
+                         
                 // At this point, no one else is moving because we have a
                 // monitor that only allows one mutator to move at once. Other
                 // mutators may be referencing pages that are moved. Appending
                 // to the move list blocked referencing mutators with a latch on
                 // each move. We are clear to move the pages that are in use.
-
-                tryMove(head);
+        
+                moveAndUnlatch(head);
             }
-
+        
             // At this point we have guarded these pages in this way. No one
             // else is able to move pages at all because we hold the move lock.
             // We waited for everyone else to complete committing, allocating,
@@ -5024,7 +4883,7 @@ public class Pack
             // see data pages. We need to scan all the way to the end of the
             // file for data pages. Also, these new user pages will be empty
             // and for the purpouses of recover can be ignored.
-
+        
             // Synapse: And if we crash now? What about these phantom new pages?
             // If we crash now, there are no journals queued because we've
             // blocked out all committers. The first journal to initialize will
@@ -5035,91 +4894,236 @@ public class Pack
             // Can't we wait until we really need them? No. You would need to
             // keep the fact that they are uninitialized around somehow, and
             // write that into the journal. Just get it over with.
-
+        
             for (long gathered: setOfGathered)
             {
                 pager.setPage(gathered, new BlockPage(false), dirtyPages);
             }
         }
 
-        public void read(final long address, final ByteBuffer bytes)
+        private void tryCommit(final Set<Long> setOfAddressPages)
         {
-            listOfMoves.mutate(new Runnable()
+            final CommitMoveRecorder commit = new CommitMoveRecorder(pageRecorder, journal, moveRecorder.getMoveNode());
+        
+            // The set of address pages is a set of pages that need to be
+            // moved to new data pages. The data boundary has already been
+            // adjusted. The pages need to be moved.
+            
+            // We're going to create a set of address pages to move, which 
+            // is separate from the full set of address pages to initialize.
+            
+            final Set<Long> setOfDataPages = new HashSet<Long>(setOfAddressPages);
+            
+            // The map to use to map data pages to new data pages.
+            final Map<Long, MovablePosition> mapOfDataPages = new TreeMap<Long, MovablePosition>();
+            
+            // If the new address page is in the set of free data pages, the
+            // page does not have to be moved.
+            if (setOfDataPages.size() != 0)
             {
-                public void run()
+                Iterator<Long> positions = setOfDataPages.iterator();
+                while (positions.hasNext())
                 {
-                    BlockPage page = null;
-                    MovablePosition position = mapOfAddresses.get(address);
-                    if (position == null)
+                    long position = positions.next();
+                    if (pager.removeUserPageIfFree(position))
                     {
-                        AddressPage addressPage = pager.getPage(address, new AddressPage());
-                        page = pager.getPage(addressPage.dereference(address), new BlockPage(false));
+                        positions.remove();
                     }
-                    else
-                    {
-                        page = pager.getPage(position.getValue(pager), new BlockPage(true));
-                    }
-                    page.read(address, bytes);
                 }
-            });
-        }
-
-        public void write(final long address, final ByteBuffer bytes)
-        {
-            listOfMoves.mutate(new Runnable()
+            }
+            
+            pageRecorder.getAllocationPageSet().addAll(setOfDataPages);
+        
+            if (pageRecorder.getAllocationPageSet().size() != 0)
+            {
+                // First we mate the interim data pages with 
+                listOfMoves.mutate(new Runnable()
+                {
+                    public void run()
+                    {
+                        // Consolidate pages by using existing, partially filled
+                        // pages to store our new block allocations.
+        
+                        pager.pagesBySize.join(allocPagesBySize, commit.getDataPageSet(), commit.getVacuumMap(), moveRecorder.getMoveNode());
+                        pageRecorder.getAllocationPageSet().removeAll(commit.getVacuumMap().keySet());
+                        
+                        // Use free data pages to store the interim pages whose
+                        // blocks would not fit on an existing page.
+                        
+                        pager.newUserDataPages(pageRecorder.getAllocationPageSet(), commit.getDataPageSet(), commit.getPageMap(), moveRecorder.getMoveNode());
+                    }
+                });
+            }
+        
+        
+            // If more pages are needed, then we need to extend the user area of
+            // the file.
+        
+            if (pageRecorder.getAllocationPageSet().size() != 0)
+            {
+                pager.getExpandLock().lock();
+                try
+                {
+                    // This invocation is to flush the move list for the current
+                    // mutator. You may think that this is pointless, but it's
+                    // not. It will ensure that the relocatable references are
+                    // all up to date before we try to move.
+        
+                    new MoveList(commit, listOfMoves).mutate(new Runnable()
+                    {
+                        public void run()
+                        {
+                        }
+                    });
+        
+                    // Now we can try to move the pages.
+        
+                    tryMove(commit);
+                }
+                finally
+                {
+                    pager.getExpandLock().unlock();
+                }
+            }
+            
+            new MoveList(commit, listOfMoves).mutate(new Runnable()
             {
                 public void run()
                 {
-                    // For now, the first test will write to an allocated block, so
-                    // the write buffer is already there.
+                    // Write a terminate to end the playback loop. This
+                    // terminate is the true end of the journal.
+        
+                    journal.write(new Terminate());
+        
+                    // Grab the current position of the journal. This is the
+                    // actual start of playback.
+        
+                    long beforeVacuum = journal.getJournalPosition();
                     
-                    BlockPage interimPage = null;
-                    MovablePosition position = mapOfAddresses.get(address);
-                    if (position == null)
+                    // Create a vacuum operation for all the vacuums.
+        
+                    for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
                     {
-                        AddressPage addressPage = pager.getPage(address, new AddressPage());
-                        BlockPage page = pager.getPage(addressPage.dereference(address), new BlockPage(false));
-                        
-                        int blockSize = page.getSize(address);
-                        
-                        long interim = writePagesBySize.bestFit(blockSize);
-                        if (interim == 0L)
+                        // FIXME This has not run yet.
+                        // FIXME By not holding onto the data page, the garbage
+                        // collector can reap the raw page and we lose our
+                        // mirrored flag.
+                        BlockPage dataPage = pager.getPage(entry.getValue().getValue(pager), new BlockPage(false));
+                        dataPage.mirror(pager, journal, dirtyPages);
+                    }
+        
+                    long afterVacuum = journal.getJournalPosition(); 
+                    
+                    // Write out all your allocations from above. Each of them
+                    // becomes an action. Read the interim page and copy the
+                    // data over to the data page.
+                    
+                    // Here we insert the vacuum break. During a recovery, the
+                    // data pages will be recreated without a reference to their
+                    // vacuumed page.
+        
+                    // Although, I suppose the vacuum page reference could
+                    // simply be a reference to the data page.
+        
+                    // Two ways to deal with writing to a vacuumed page. One it
+                    // to overwrite the vacuum journal. The other is to wait
+                    // until the vacuumed journal is written.
+        
+                    journal.write(new Vacuum(afterVacuum));
+                    
+                    journal.write(new Terminate());
+                    
+                    for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
+                    {
+                        BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
+                        for (long address: page.getAddresses())
                         {
-                            interimPage = pager.newSystemPage(new BlockPage(true), dirtyPages);
-                            moveRecorder.getPageRecorder().getWritePageSet().add(interimPage.getRawPage().getPosition());
+                            journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
                         }
-                        else
+                    }
+                    
+                    // Ugly double duty.
+                    if (setOfAddressPages.size() == 0)
+                    {
+                        // These are allocations to be copied to empty data pages.
+                        for (Map.Entry<Long, MovablePosition> entry: commit.getPageMap().entrySet())
                         {
-                            interimPage = pager.getPage(interim, new BlockPage(true));
+                            BlockPage page = pager.getPage(entry.getKey(), new BlockPage(true));
+                            for (long address: page.getAddresses())
+                            {
+                                journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
+                            }
                         }
-                        
-                        interimPage.allocate(address, blockSize, dirtyPages);
-                        
-                        position = new MovablePosition(moveRecorder.getMoveNode(), interimPage.getRawPage().getPosition());
-                        mapOfAddresses.put(address, position);
                     }
                     else
                     {
-                        interimPage = pager.getPage(position.getValue(pager), new BlockPage(true));
+                        // These data pages that are are supposed to be moved.
                     }
-
-                    if (!interimPage.write(address, bytes, dirtyPages))
+                   
+                    
+                    for (long position: commit.getPageRecorder().getWritePageSet())
                     {
-                        throw new IllegalStateException();
+                        BlockPage page = pager.getPage(position, new BlockPage(true));
+                        for (long address: page.getAddresses())
+                        {
+                            AddressPage addressPage = pager.getPage(address, new AddressPage());
+                            journal.write(new Commit(address, position, addressPage.dereference(address)));
+                        }
                     }
+        
+                    // Create the list of moves.
+                    MoveNode iterator = moveRecorder.getFirstMoveNode();
+                    while (iterator.getNext() != null)
+                    {
+                        iterator = iterator.getNext();
+                        journal.write(new AddMove(iterator.getMove()));
+                    }
+        
+                    // Need to use the entire list of moves since the start
+                    // of the journal to determine the actual journal start.
+                    
+                    long journalStart = journal.getJournalStart().getValue(pager);
+                    journal.write(new NextOperation(journalStart));
+        
+                    // TODO Abstract journal replay out, so it can be used
+                    // here and during recovery.
+                    
+                    // Create a next pointer to point at the start of operations.
+                    Pointer header = pager.getJournalHeaderSet().allocate();
+                    header.getByteBuffer().putLong(beforeVacuum);
+                    dirtyPages.flush(header);
+                    
+                    Player player = new Player(pager, header, dirtyPages);
+                    
+                    // Obtain a journal header and record the head.
+                    
+                    // First do the vacuums.
+                    player.vacuum();
+                    
+                    // Then do everything else.
+                    player.commit();
                 }
             });
         }
 
-        public void free(final long address)
+        public void commit()
         {
-            listOfMoves.mutate(new Runnable()
+            // TODO I believe that compacting should be a separate lock that
+            // should lock the entire file exclusively and block any other moves
+            // or commits. I'm working under the assumption that the positions
+            // do not move backwards. Compact lock may only need to envelop the
+            // exiting move lock. 
+        
+            pager.getCompactLock().readLock().lock();
+            try
             {
-                public void run()
-                {
-                    journal.write(new Free(address));
-                }
-            });
+                Set<Long> setOfPageAddress = Collections.emptySet();
+                tryCommit(setOfPageAddress);
+            }
+            finally
+            {
+                pager.getCompactLock().readLock().unlock();
+            }
         }
     }
 }
