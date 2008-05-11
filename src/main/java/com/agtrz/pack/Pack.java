@@ -3108,14 +3108,14 @@ public class Pack
             this.mutex = mutex;
         }
 
-        public ByteBuffer getByteBuffer()
-        {
-            return slice;
-        }
-
         public long getPosition()
         {
             return position;
+        }
+
+        public ByteBuffer getByteBuffer()
+        {
+            return slice;
         }
 
         public Object getMutex()
@@ -3134,6 +3134,11 @@ public class Pack
         {
             this.position = position;
             this.reserved = new boolean[count];
+        }
+
+        public int getCapacity()
+        {
+            return reserved.length;
         }
 
         public synchronized Pointer allocate()
@@ -3172,11 +3177,6 @@ public class Pack
             int offset = (int) (pointer.getPosition() - position) / POSITION_SIZE;
             reserved[offset] = false;
             notify();
-        }
-        
-        public int getCapacity()
-        {
-            return reserved.length;
         }
     }
 
@@ -3280,19 +3280,19 @@ public class Pack
 
     final static class Recovery
     {
+        private short region;
+
+        private final Checksum checksum;
+
+        private int blockCount;
+
+        private final Set<Long> setOfBadAddressChecksums;
+
         private final Map<Long, Long> mapOfBadAddresses;
-        
+
         private final Set<Long> setOfCorruptDataPages;
         
         private final Set<Long> setOfBadDataChecksums;
-        
-        private final Set<Long> setOfBadAddressChecksums;
-
-        private final Checksum checksum;
-        
-        private short region;
-        
-        private int blockCount;
         
         public Recovery()
         {
@@ -3304,6 +3304,11 @@ public class Pack
             this.setOfCorruptDataPages = new HashSet<Long>();
         }
         
+        public long getFileSize()
+        {
+            return 0L;
+        }
+
         public short getRegion()
         {
             return region;
@@ -3314,6 +3319,11 @@ public class Pack
             this.region = region;
         }
         
+        public Checksum getChecksum()
+        {
+            return checksum;
+        }
+
         public int getBlockCount()
         {
             return blockCount;
@@ -3324,16 +3334,16 @@ public class Pack
             blockCount++;
         }
         
-        public Checksum getChecksum()
-        {
-            return checksum;
-        }
-
         public void badAddressChecksum(long position)
         {
             setOfBadAddressChecksums.add(position);
         }
         
+        public void badAddress(long address, long position)
+        {
+            mapOfBadAddresses.put(address, position);
+        }
+
         public void corruptDataPage(long position)
         {
             setOfCorruptDataPages.add(position);
@@ -3342,16 +3352,6 @@ public class Pack
         public void badDataChecksum(long position)
         {
             setOfBadDataChecksums.add(position);
-        }
-        
-        public void badAddress(long address, long position)
-        {
-            mapOfBadAddresses.put(address, position);
-        }
-        
-        public long getFileSize()
-        {
-            return 0L;
         }
     }
 
@@ -3574,16 +3574,16 @@ public class Pack
             return move;
         }
         
-        public MoveLatch getNext()
-        {
-            return next;
-        }
-
         public void extend(MoveLatch next)
         {
             assert this.next == null;
-
+        
             this.next = next;
+        }
+
+        public MoveLatch getNext()
+        {
+            return next;
         }
 
         public MoveLatch getLast()
@@ -3613,6 +3613,13 @@ public class Pack
             return move;
         }
         
+        public MoveNode extend(Move move)
+        {
+            assert next == null;
+            
+            return next = new MoveNode(move);
+        }
+
         public MoveNode getNext()
         {
             return next;
@@ -3626,13 +3633,6 @@ public class Pack
                 iterator = iterator.next;
             }
             return iterator;
-        }
-        
-        public MoveNode extend(Move move)
-        {
-            assert next == null;
-            
-            return next = new MoveNode(move);
         }
     }
 
@@ -3747,12 +3747,12 @@ public class Pack
     {
         private final Journal journal;
 
-        private final PageRecorder pageRecorder;
-        
         private final MoveNode firstMoveNode;
 
         private MoveNode moveNode;
         
+        private final PageRecorder pageRecorder;
+
         public MutateMoveRecorder(PageRecorder pageRecorder, Journal journal, MoveNode moveNode)
         {
             this.journal = journal;
@@ -3794,22 +3794,22 @@ public class Pack
     {
         private final Journal journal;
         
-        private final PageRecorder pageRecorder;
-        
-        private final Set<Long> setOfDataPages;
+        private final MoveNode firstMoveNode;
 
-        private final SortedMap<Long, MovablePosition> mapOfVacuums;
-        
-        private final SortedMap<Long, MovablePosition> mapOfPages;
-        
+        private MoveNode moveNode;
+
         private final SortedMap<Long, MovablePosition> mapOfAddressPages;
         
         private final SortedMap<Long, MovablePosition> mapOfMovePages;
         
-        private final MoveNode firstMoveNode;
+        private final SortedMap<Long, MovablePosition> mapOfVacuums;
 
-        private MoveNode moveNode;
-        
+        private final SortedMap<Long, MovablePosition> mapOfPages;
+
+        private final Set<Long> setOfDataPages;
+
+        private final PageRecorder pageRecorder;
+
         public CommitMoveRecorder(PageRecorder pageRecorder, Journal journal, MoveNode moveNode)
         {
             this.pageRecorder = pageRecorder;
@@ -3881,11 +3881,6 @@ public class Pack
             return firstMoveNode;
         }
         
-        public Set<Long> getDataPageSet()
-        {
-            return setOfDataPages;
-        }
-
         public SortedMap<Long, MovablePosition> getVacuumMap()
         {
             return mapOfVacuums;
@@ -3896,11 +3891,11 @@ public class Pack
             return mapOfPages;
         }
         
-        public SortedMap<Long, MovablePosition> getMovePageMap()
+        public Set<Long> getDataPageSet()
         {
-            return mapOfMovePages;
+            return setOfDataPages;
         }
-        
+
         public PageRecorder getPageRecorder()
         {
             return pageRecorder;
@@ -3961,11 +3956,6 @@ public class Pack
             return journalPage.getJournalPosition();
         }
 
-        public Pager getPager()
-        {
-            return pager;
-        }
-
         public void write(Operation operation)
         {
             if (!journalPage.write(operation, dirtyPages))
@@ -3985,14 +3975,14 @@ public class Pack
 
         private final Pointer header;
 
+        private long entryPosition;
+
         private final DirtyPageMap dirtyPages;
         
         private final Set<Long> setOfVacuumPages; 
         
         private final LinkedList<Move> listOfMoves;
         
-        private long entryPosition;
-
         public Player(Pager pager, Pointer header, DirtyPageMap dirtyPages)
         {
             ByteBuffer bytes = header.getByteBuffer();
@@ -4082,16 +4072,6 @@ public class Pack
         public JournalPage getJournalPage(Player player, JournalPage journalPage)
         {
             return journalPage;
-        }
-
-        public boolean write(Pager pager, long destination, ByteBuffer data, DirtyPageMap pages)
-        {
-            return false;
-        }
-
-        public boolean unwrite(JournalPage journalPage, long destination)
-        {
-            return false;
         }
 
         public boolean terminate()
@@ -4292,6 +4272,11 @@ public class Pack
             pager.addAddressPage(addressPage);
         }
 
+        public int length()
+        {
+            return FLAG_SIZE + ADDRESS_SIZE;
+        }
+
         public void write(ByteBuffer bytes)
         {
             bytes.putShort(FREE);
@@ -4301,16 +4286,6 @@ public class Pack
         public void read(ByteBuffer bytes)
         {
             address = bytes.getLong();
-        }
-
-        public int length()
-        {
-            return FLAG_SIZE + ADDRESS_SIZE;
-        }
-
-        public ByteBuffer getByteBuffer(Pager pager, ByteBuffer bytes)
-        {
-            return bytes;
         }
     }
 
@@ -4336,6 +4311,11 @@ public class Pack
             return journalPage;
         }
 
+        public int length()
+        {
+            return FLAG_SIZE + ADDRESS_SIZE;
+        }
+
         public void write(ByteBuffer bytes)
         {
             bytes.putShort(NEXT_PAGE);
@@ -4345,11 +4325,6 @@ public class Pack
         public void read(ByteBuffer bytes)
         {
             position = bytes.getLong();
-        }
-
-        public int length()
-        {
-            return FLAG_SIZE + ADDRESS_SIZE;
         }
     }
 
@@ -4409,15 +4384,15 @@ public class Pack
     extends Operation
     {
         @Override
-        public int length()
-        {
-            return FLAG_SIZE;
-        }
-
-        @Override
         public boolean terminate()
         {
             return true;
+        }
+
+        @Override
+        public int length()
+        {
+            return FLAG_SIZE;
         }
 
         @Override
