@@ -803,11 +803,6 @@ public class Pack
          */
         private final Lock expandLock;
         
-        /**
-         * A read/write lock that protects the end of the move list.
-         */
-        private final ReadWriteLock moveListLock;
-        
         public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long interimBoundary)
         {
             this.file = file;
@@ -824,7 +819,6 @@ public class Pack
             this.setOfFreeUserPages = new TreeSet<Long>();
             this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
             this.queue = new ReferenceQueue<RawPage>();
-            this.moveListLock = new ReentrantReadWriteLock();
             this.compactLock = new ReentrantReadWriteLock();
             this.expandLock = new ReentrantLock();
             this.listOfMoves = new MoveList();
@@ -892,11 +886,6 @@ public class Pack
         public ReadWriteLock getCompactLock()
         {
             return compactLock;
-        }
-        
-        public ReadWriteLock getMoveListLock()
-        {
-            return moveListLock;
         }
         
         private synchronized void collect()
