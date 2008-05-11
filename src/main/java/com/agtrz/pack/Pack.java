@@ -1741,12 +1741,7 @@ public class Pack
         private ByteBuffer load()
         {
             int pageSize = pager.getPageSize();
-            int bufferSize = pageSize;
-            if (getPosition() % pageSize != 0L)
-            {
-                bufferSize = (int) (pageSize - getPosition() % pageSize);
-            }
-            ByteBuffer bytes = ByteBuffer.allocateDirect(bufferSize);
+            ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
             try
             {
                 pager.getDisk().read(pager.getFileChannel(), bytes, getPosition());
