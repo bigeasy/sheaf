@@ -2,6 +2,7 @@
 package com.agtrz.pack;
 
 import static junit.framework.Assert.assertEquals;
+import static junit.framework.Assert.assertTrue;
 import static junit.framework.Assert.fail;
 
 import java.io.File;
@@ -311,8 +312,6 @@ public class PackTestCase
         assertEquals(8192, page.getRawPage().getPosition());
     }
 
-    // 17% 10%
-
     @Test public void write()
     {
         File file = newFile();
@@ -322,11 +321,12 @@ public class PackTestCase
         ByteBuffer bytes = ByteBuffer.allocateDirect(64);
         for (int i = 0; i < 64; i++)
         {
-            bytes.put(i, (byte) i);
+            bytes.put((byte) i);
         }
+        bytes.flip();
         mutator.write(address, bytes);
 
-        bytes.clear();
+        bytes = ByteBuffer.allocateDirect(64);
         mutator.read(address, bytes);
         bytes.flip();
         
@@ -339,8 +339,9 @@ public class PackTestCase
         
         mutator = pack.mutate();
 
-        bytes.clear();
+        bytes = ByteBuffer.allocateDirect(64);
         mutator.read(address, bytes);
+        bytes.flip();
         
         for (int i = 0; i < 64; i++)
         {
@@ -351,7 +352,231 @@ public class PackTestCase
         
         pack.close();
     }
+    
+    @Test public void rewrite()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        
+        mutator = pack.mutate();
+        ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+        for (int i = 0; i < 64; i++)
+        {
+            bytes.put((byte) i);
+        }
+        bytes.flip();
+        
+        mutator.write(address, bytes);
+        
+        bytes = ByteBuffer.allocateDirect(64);
+        mutator.read(address, bytes);
+        bytes.flip();
+        
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
 
+        mutator.commit();
+        mutator = pack.mutate();
+
+        bytes = ByteBuffer.allocateDirect(64);
+        mutator.read(address, bytes);
+        bytes.flip();
+
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
+
+        mutator.commit();
+        
+        pack.close();
+    }
+    
+    @Test public void collect()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        
+        System.gc();
+        System.gc();
+        System.gc();
+        
+        mutator = pack.mutate();
+        ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+        for (int i = 0; i < 64; i++)
+        {
+            bytes.put((byte) i);
+        }
+        bytes.flip();
+        
+        mutator.write(address, bytes);
+        
+        System.gc();
+        System.gc();
+        System.gc();
+
+        bytes = ByteBuffer.allocateDirect(64);
+        mutator.read(address, bytes);
+        bytes.flip();
+        
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
+
+        mutator.commit();
+        
+        System.gc();
+        System.gc();
+        System.gc();
+
+        mutator = pack.mutate();
+
+        bytes = ByteBuffer.allocateDirect(64);
+        mutator.read(address, bytes);
+        bytes.flip();
+
+        for (int i = 0; i < 64; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
+
+        mutator.commit();
+        
+        pack.close();
+    }
+    
+    @Test public void rewriteMany()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+
+        rewrite(pack, 12);
+                
+        pack.close();
+    }
+
+    public void rewrite(Pack pack, int count)
+    {
+        Pack.Mutator mutator = pack.mutate();
+        long[] addresses = new long[count];
+        for (int i = 0; i < count; i++)
+        {
+            addresses[i] = mutator.allocate(64);
+        }
+        mutator.commit();
+        
+        mutator = pack.mutate();
+        for (int i = 0; i < count; i++)
+        {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+            for (int j = 0; j < 64; j++)
+            {
+                bytes.put((byte) j);
+            }
+            bytes.flip();
+            
+            mutator.write(addresses[i], bytes);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+            mutator.read(addresses[i], bytes);
+            bytes.flip();
+            
+            for (int j = 0; j < 64; j++)
+            {
+                assertEquals((byte) j, bytes.get());
+            }
+        }
+
+        mutator.commit();
+        mutator = pack.mutate();
+        for (int i = 0; i < count; i++)
+        {
+            ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+            mutator.read(addresses[i], bytes);
+            bytes.flip();
+            
+            for (int j = 0; j < 64; j++)
+            {
+                assertEquals((byte) j, bytes.get());
+            }
+        }
+
+        mutator.commit();
+    }
+
+    @Test public void free()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        
+        mutator = pack.mutate();
+        mutator.free(address);
+        mutator.commit();
+
+        boolean thrown = false;
+        mutator = pack.mutate();
+        try
+        {
+            mutator.read(address, ByteBuffer.allocateDirect(64));
+        }
+        catch (Pack.Danger e)
+        {
+            thrown = true;
+            assertEquals(Pack.ERROR_FREED_ADDRESS, e.getCode());
+        }
+        assertTrue(thrown);
+        mutator.commit();
+
+        pack.close();
+    }
+    
+    @Test public void freeWithContext()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        
+        rewrite(pack, 3);
+
+        mutator = pack.mutate();
+        mutator.free(address);
+        mutator.commit();
+
+        boolean thrown = false;
+        mutator = pack.mutate();
+        try
+        {
+            mutator.read(address, ByteBuffer.allocateDirect(64));
+        }
+        catch (Pack.Danger e)
+        {
+            thrown = true;
+            assertEquals(Pack.ERROR_FREED_ADDRESS, e.getCode());
+        }
+        assertTrue(thrown);
+        mutator.commit();
+
+        pack.close();
+    }
     @Ignore @Test public void recover()
     {
         Pack.Creator newPack = new Pack.Creator();
@@ -393,7 +618,6 @@ public class PackTestCase
         }
         Pack.Opener opener = new Pack.Opener();
         opener.open(file);
-        
     }
 }
 
