@@ -307,7 +307,7 @@ public class PackTestCase
         pack = new Pack.Opener().open(file);
         Pack.Pager pager = pack.pager;
         Pack.Page page = pager.getPage(8192, new Pack.RelocatablePage());
-        page = pager.getPage(8192, new Pack.DataPage(false));
+        page = pager.getPage(8192, new Pack.BlockPage(false));
         assertEquals(8192, page.getRawPage().getPosition());
     }
 

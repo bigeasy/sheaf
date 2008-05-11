@@ -29,7 +29,6 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.Map.Entry;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -685,7 +684,7 @@ public class Pack
             for (int i = 0; i < blockPageCount; i++)
             {
                 long position = reopen.getLong();
-                DataPage blockPage = pager.getPage(position, new DataPage(false));
+                BlockPage blockPage = pager.getPage(position, new BlockPage(false));
                 pager.returnUserPage(blockPage);
             }
             
@@ -1179,7 +1178,7 @@ public class Pack
             }
         }
         
-        public void returnUserPage(DataPage blockPage)
+        public void returnUserPage(BlockPage blockPage)
         {
             // FIXME Is it not the case that the block changes can mutated
             // by virtue of a deallocation operation?
@@ -1658,7 +1657,7 @@ public class Pack
      * let go of the hard reference to the raw page and byte buffer in the raw
      * page map. It can be collected. The separate soft references only benefit
      * the data page which maintains a concurrency lock in the data page object.
-     * See {@link Pack.DataPage} for more details on the separate soft
+     * See {@link Pack.BlockPage} for more details on the separate soft
      * references.
      */
     static final class RawPage extends Regional
@@ -1775,7 +1774,7 @@ public class Pack
          * <p>
          * Whenever we write to the byte buffer we hold onto a hard
          * reference to the byte buffer until the byte buffer is written back to
-         * file. We keep a hard refernce to the raw page and the byte buffer
+         * file. We keep a hard reference to the raw page and the byte buffer
          * returned by this method in the dirty page map. The dirty page map
          * will flush the page.
          *
@@ -2036,9 +2035,9 @@ public class Pack
                 {
                     copacetic = false;
                 }
-                else if (rawPage.getPager().recover(recovery, position, new DataPage(false)))
+                else if (rawPage.getPager().recover(recovery, position, new BlockPage(false)))
                 {
-                    DataPage dataPage = rawPage.getPager().getPage(position, new DataPage(false));
+                    BlockPage dataPage = rawPage.getPager().getPage(position, new BlockPage(false));
                     if (!dataPage.verify(address, position))
                     {
                         copacetic = false;
@@ -2280,10 +2279,8 @@ public class Pack
      * You cannot deadlock by mirroring, because only one mutator at a time
      * will ever vacuum a data page, because only one mutator at a time can
      * use a data page for block allocation.
-     * <p>
-     * FIXME RENAME BlockPage
      */
-    static final class DataPage
+    static final class BlockPage
     extends RelocatablePage implements Medic
     {
         private int remaining;
@@ -2298,7 +2295,7 @@ public class Pack
          */
         private boolean mirrored;
         
-        public DataPage(boolean interim)
+        public BlockPage(boolean interim)
         {
             this.mirrored = false;
             this.interim = interim;
@@ -2504,7 +2501,7 @@ public class Pack
 
         public boolean mirror(Pager pager, Journal journal, DirtyPageMap dirtyPages)
         {
-            DataPage vacuumPage = null;
+            BlockPage vacuumPage = null;
             synchronized (getRawPage())
             {
                 assert !mirrored;
@@ -2529,7 +2526,7 @@ public class Pack
                         }
                         if (deleted)
                         {
-                            vacuumPage = pager.newSystemPage(new DataPage(true), dirtyPages);
+                            vacuumPage = pager.newSystemPage(new BlockPage(true), dirtyPages);
 
                             int length = Math.abs(size);
                             long address = bytes.getLong(bytes.position());
@@ -2727,7 +2724,7 @@ public class Pack
             dirtyPages.add(getRawPage());
         }
 
-        public void commit(DataPage dataPage, DirtyPageMap dirtyPages)
+        public void commit(BlockPage dataPage, DirtyPageMap dirtyPages)
         {
             // FIXME Locking a lot. Going to deadlock?
             synchronized (getRawPage())
@@ -2994,7 +2991,7 @@ public class Pack
 
                 if (peek.getInt(CHECKSUM_SIZE) < 0)
                 {
-                    medic = new DataPage(false);
+                    medic = new BlockPage(false);
                 }
                 else if (recovery.getBlockCount() == 0)
                 {
@@ -3280,7 +3277,7 @@ public class Pack
             return size;
         }
 
-        public synchronized void add(DataPage dataPage)
+        public synchronized void add(BlockPage dataPage)
         {
             // Maybe don't round down if exact.
             int aligned = ((dataPage.getRemaining() | alignment - 1) + 1) - alignment;
@@ -3756,7 +3753,7 @@ public class Pack
         {
             for (long position: player.getVacuumPageSet())
             {
-                DataPage dataPage = player.getPager().getPage(position, new DataPage(false));
+                BlockPage dataPage = player.getPager().getPage(position, new BlockPage(false));
                 dataPage.compact();
             }
             ByteBuffer bytes = player.getJournalHeader().getByteBuffer();
@@ -3899,7 +3896,7 @@ public class Pack
         {
             AddressPage addressPage = pager.getPage(address, new AddressPage());
             long referenced = addressPage.dereference(address);
-            DataPage dataPage = pager.getPage(referenced, new DataPage(false));
+            BlockPage dataPage = pager.getPage(referenced, new BlockPage(false));
             dataPage.free(address, dirtyPages);
         }
 
@@ -3984,8 +3981,8 @@ public class Pack
         @Override
         public void commit(Player player)
         {
-            DataPage interimPage = player.getPager().getPage(interim, new DataPage(true));
-            DataPage dataPage = player.getPager().getPage(data, new DataPage(false));
+            BlockPage interimPage = player.getPager().getPage(interim, new BlockPage(true));
+            BlockPage dataPage = player.getPager().getPage(data, new BlockPage(false));
             interimPage.commit(dataPage, player.getDirtyPages());
         }
 
@@ -4451,16 +4448,16 @@ public class Pack
                     // the block, use that page. Otherwise, allocate a new
                     // wilderness data page for allocation.
                     
-                    DataPage allocPage = null;
+                    BlockPage allocPage = null;
                     long alloc = allocPagesBySize.bestFit(fullSize);
                     if (alloc == 0L)
                     {
-                        allocPage = pager.newSystemPage(new DataPage(true), dirtyPages);
+                        allocPage = pager.newSystemPage(new BlockPage(true), dirtyPages);
                         moveRecorder.getPageRecorder().getAllocationPageSet().add(allocPage.getRawPage().getPosition());
                     }
                     else
                     {
-                        allocPage = pager.getPage(alloc, new DataPage(true));
+                        allocPage = pager.getPage(alloc, new BlockPage(true));
                     }
                     
                     // Allocate a block from the wilderness data page.
@@ -4623,7 +4620,7 @@ public class Pack
                         // FIXME By not holding onto the data page, the garbage
                         // collector can reap the raw page and we lose our
                         // mirroed flag.
-                        DataPage dataPage = pager.getPage(entry.getValue().getValue(pager), new DataPage(false));
+                        BlockPage dataPage = pager.getPage(entry.getValue().getValue(pager), new BlockPage(false));
                         dataPage.mirror(pager, journal, dirtyPages);
                     }
 
@@ -4882,7 +4879,7 @@ public class Pack
 
             for (long gathered: setOfGathered)
             {
-                pager.setPage(gathered, new DataPage(false), dirtyPages);
+                pager.setPage(gathered, new BlockPage(false), dirtyPages);
             }
         }
 
@@ -4900,24 +4897,24 @@ public class Pack
                     // For now, the first test will write to an allocated block, so
                     // the write buffer is already there.
                     
-                    DataPage writePage = null;
+                    BlockPage writePage = null;
                     MovablePosition position = mapOfAddresses.get(address);
                     if (position == null)
                     {
                         AddressPage addressPage = pager.getPage(address, new AddressPage());
-                        DataPage dataPage = pager.getPage(addressPage.dereference(address), new DataPage(false));
+                        BlockPage dataPage = pager.getPage(addressPage.dereference(address), new BlockPage(false));
                         
                         int blockSize = dataPage.getSize(address);
                         
                         long write = writePagesBySize.bestFit(blockSize);
                         if (write == 0L)
                         {
-                            writePage = pager.newSystemPage(new DataPage(true), dirtyPages);
+                            writePage = pager.newSystemPage(new BlockPage(true), dirtyPages);
                             moveRecorder.getPageRecorder().getAllocationPageSet().add(write);
                         }
                         else
                         {
-                            writePage = pager.getPage(write, new DataPage(true));
+                            writePage = pager.getPage(write, new BlockPage(true));
                         }
                         
                         writePage.allocate(address, blockSize, dirtyPages);
@@ -4927,7 +4924,7 @@ public class Pack
                     }
                     else
                     {
-                        writePage  = pager.getPage(position.getValue(pager), new DataPage(true));
+                        writePage  = pager.getPage(position.getValue(pager), new BlockPage(true));
                     }
 
                     writePage.write(address, bytes, dirtyPages);
