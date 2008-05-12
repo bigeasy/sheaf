@@ -34,7 +34,11 @@ import java.util.zip.Checksum;
 
 public class Pack
 {
-    public final static int ERROR_FREED_ADDRESS = 300;
+    public final static int ERROR_FREED_FREE_ADDRESS = 300;
+    
+    public final static int ERROR_FREED_STATIC_ADDRESS = 301;
+
+    public final static int ERROR_READ_FREE_ADDRESS = 302;
 
     public final static int ERROR_FILE_NOT_FOUND = 400;
     
@@ -375,7 +379,7 @@ public class Pack
             for (Map.Entry<URI, Integer> entry: mapOfStaticPageSizes.entrySet())
             {
                 size += COUNT_SIZE + ADDRESS_SIZE;
-                size += entry.getValue().toString().length();
+                size += entry.getKey().toString().length() * 2;
             }
             return size;
         }
@@ -492,7 +496,7 @@ public class Pack
 
             ByteBuffer statics = ByteBuffer.allocateDirect(getStaticPagesMapSize());
             
-            statics.putInt(mapOfStaticPages.size());
+            statics.putInt(mapOfStaticPageSizes.size());
             
             if (mapOfStaticPageSizes.size() != 0)
             {
@@ -741,7 +745,7 @@ public class Pack
         
         private final Header header;
 
-        public final Map<URI, Long> mapOfStaticPages;
+        private final Map<URI, Long> mapOfStaticPages;
 
         private final int pageSize;
 
@@ -850,6 +854,16 @@ public class Pack
         public int getAlignment()
         {
             return alignment;
+        }
+        
+        public long getStaticPageAddress(URI uri)
+        {
+            return mapOfStaticPages.get(uri);
+        }
+        
+        public boolean isStaticPageAddress(long address)
+        {
+            return mapOfStaticPages.containsValue(address);
         }
 
         public PositionSet getJournalHeaderSet()
@@ -2613,7 +2627,7 @@ public class Pack
                         long actual = addresses.dereference(address);
                         if (actual == 0L || actual == Long.MAX_VALUE)
                         {
-                            throw new Danger(ERROR_FREED_ADDRESS);
+                            throw new Danger(ERROR_READ_FREE_ADDRESS);
                         }
                         
                         if (actual != lastPosition)
@@ -4670,7 +4684,7 @@ public class Pack
                 long actual = addresses.dereference(address);
                 if (actual == 0L || actual == Long.MAX_VALUE)
                 {
-                    throw new Danger(ERROR_FREED_ADDRESS);
+                    throw new Danger(ERROR_READ_FREE_ADDRESS);
                 }
 
                 if (actual != lastPosition)
@@ -4866,6 +4880,11 @@ public class Pack
             this.pageRecorder = pageRecorder;
         }
         
+        public long getStaticPageAddress(URI uri)
+        {
+            return pager.getStaticPageAddress(uri);
+        }
+        
         /**
          * Allocate a block in the <code>Pack</code> to accommodate a block
          * of the specified block size. This method will reserve a new block
@@ -4959,7 +4978,7 @@ public class Pack
                             long actual = addresses.dereference(address);
                             if (actual == 0L || actual == Long.MAX_VALUE)
                             {
-                                throw new Danger(ERROR_FREED_ADDRESS);
+                                throw new Danger(ERROR_READ_FREE_ADDRESS);
                             }
 
                             if (actual != lastPosition)
@@ -5038,7 +5057,7 @@ public class Pack
                             long actual = addresses.dereference(address);
                             if (actual == 0L || actual == Long.MAX_VALUE)
                             {
-                                throw new Danger(ERROR_FREED_ADDRESS);
+                                throw new Danger(ERROR_READ_FREE_ADDRESS);
                             }
 
                             if (actual != lastPosition)
@@ -5067,6 +5086,10 @@ public class Pack
 
         public void free(final long address)
         {
+            if (pager.isStaticPageAddress(address))
+            {
+                throw new Danger(ERROR_FREED_STATIC_ADDRESS);
+            }
             listOfMoves.mutate(new Runnable()
             {
                 public void run()
@@ -5078,7 +5101,7 @@ public class Pack
                         long actual = addressPage.dereference(address);
                         if (actual == 0L || actual == Long.MAX_VALUE)
                         {
-                            throw new Danger(ERROR_FREED_ADDRESS);
+                            throw new Danger(ERROR_FREED_FREE_ADDRESS);
                         }
 
                         if (actual != lastPosition)

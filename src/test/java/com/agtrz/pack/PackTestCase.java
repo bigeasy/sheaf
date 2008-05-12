@@ -7,6 +7,7 @@ import static junit.framework.Assert.fail;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -316,6 +317,17 @@ public class PackTestCase
         assertEquals(8192, page.getRawPage().getPosition());
     }
 
+    private ByteBuffer get64bytes()
+    {
+        ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+        for (int i = 0; i < 64; i++)
+        {
+            bytes.put((byte) i);
+        }
+        bytes.flip();
+        return bytes;
+    }
+    
     @Test public void write()
     {
         File file = newFile();
@@ -542,7 +554,7 @@ public class PackTestCase
         catch (Pack.Danger e)
         {
             thrown = true;
-            assertEquals(Pack.ERROR_FREED_ADDRESS, e.getCode());
+            assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
         }
         assertTrue(thrown);
         mutator.commit();
@@ -574,7 +586,7 @@ public class PackTestCase
         catch (Pack.Danger e)
         {
             thrown = true;
-            assertEquals(Pack.ERROR_FREED_ADDRESS, e.getCode());
+            assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
         }
         assertTrue(thrown);
         mutator.commit();
@@ -632,6 +644,18 @@ public class PackTestCase
         listOfListsOfSizes.add(new LinkedList<Long>());
         Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
         iterator.next();
+    }
+    
+    @Test public void staticPages()
+    {
+        Pack.Creator creator = new Pack.Creator();
+        creator.addStaticPage(URI.create("http://one.com/"), 64);
+        creator.addStaticPage(URI.create("http://two.com/"), 64);
+        File file = newFile();
+        Pack pack = creator.create(file);
+        Pack.Mutator mutator = pack.mutate();
+        mutator.write(mutator.getStaticPageAddress(URI.create("http://one.com/")), get64bytes());
+        mutator.commit();
     }
     
     @Ignore @Test public void moveInterimPageForAddress()
