@@ -577,8 +577,42 @@ public class PackTestCase
 
         pack.close();
     }
+
+    @Test public void mulipleJournalPages()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+
+        rewrite(pack, 1);
+        
+        Pack.Mutator mutator = pack.mutate();
+        for (int i = 0; i < 800; i++)
+        {
+            mutator.allocate(64);
+        }
+        mutator.commit();
+        
+        pack.close();
+    }
+
+    @Test public void moveDataPageForAddress()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+
+        rewrite(pack, 1);
+        
+        Pack.Mutator mutator = pack.mutate();
+        for (int i = 0; i < 1000; i++)
+        {
+            mutator.allocate(64);
+        }
+        mutator.commit();
+        
+        pack.close();
+    }
     
-    @Test public void moveDataPage()
+    @Ignore @Test public void moveInterimPageForAddress()
     {
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
