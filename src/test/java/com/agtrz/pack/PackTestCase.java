@@ -9,6 +9,10 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
 
 import org.junit.Ignore;
 import org.junit.Test;
@@ -610,6 +614,24 @@ public class PackTestCase
         mutator.commit();
         
         pack.close();
+    }
+    
+    @Test(expected=java.lang.UnsupportedOperationException.class)
+    public void bySizeTableIteratorRemove()
+    {
+        List<LinkedList<Long>> listOfListsOfSizes = new ArrayList<LinkedList<Long>>();
+        listOfListsOfSizes.add(new LinkedList<Long>());
+        Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
+        iterator.remove();
+    }
+    
+    @Test(expected=java.lang.ArrayIndexOutOfBoundsException.class)
+    public void bySizeTableIteratorOutOfBounds()
+    {
+        List<LinkedList<Long>> listOfListsOfSizes = new ArrayList<LinkedList<Long>>();
+        listOfListsOfSizes.add(new LinkedList<Long>());
+        Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
+        iterator.next();
     }
     
     @Ignore @Test public void moveInterimPageForAddress()
