@@ -645,9 +645,14 @@ public class Pack
             
             if (shutdown == HARD_SHUTDOWN)
             {
-                throw new UnsupportedOperationException();
+                return hardOpen(file, fileChannel, header);
             }
 
+            return softOpen(file, fileChannel, header);
+       }
+
+        private Pack softOpen(File file, FileChannel fileChannel, Header header)
+        {
             Map<URI, Long> mapOfStaticPages = readStaticPages(header, fileChannel);
 
             int reopenSize = 0;
@@ -720,18 +725,18 @@ public class Pack
             }
 
             return new Pack(pager);
-       }
+        }
         
-        // FIXME Not yet called anywhere.
-        public void recovery(Pager pager)
+        public Pack hardOpen(File file, FileChannel fileChannel, Header header)
         {
-            Recovery recovery = new Recovery();
-            long position = 0L;
-            while (recovery.getRegion() != INTERIM_REGION)
-            {
-                pager.recover(recovery, position, new NonInterimMedic());
-                position += pager.getPageSize();
-            }
+            throw new UnsupportedOperationException();
+//            Recovery recovery = new Recovery();
+//            long position = 0L;
+//            while (recovery.getRegion() != INTERIM_REGION)
+//            {
+//                pager.recover(recovery, position, new NonInterimMedic());
+//                position += pager.getPageSize();
+//            }
         }
     }
 

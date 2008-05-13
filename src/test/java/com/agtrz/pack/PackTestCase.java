@@ -668,7 +668,8 @@ public class PackTestCase
         pack.close();
     }
 
-    @Ignore @Test public void recover()
+    @Test(expected=java.lang.UnsupportedOperationException.class)
+    public void recover()
     {
         Pack.Creator newPack = new Pack.Creator();
         newPack.setDisk(new Pack.Disk()
@@ -677,7 +678,7 @@ public class PackTestCase
             
             public int write(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
             {
-                if (position == 0)
+                if (position == 52)
                 {
                     if (count++ == 1)
                     {
@@ -692,21 +693,24 @@ public class PackTestCase
         File file = newFile();
         Pack pack = newPack.create(file);
         Pack.Mutator mutator = pack.mutate();
-        long address = mutator.allocate(20);
-        ByteBuffer bytes = ByteBuffer.allocateDirect(20);
-        for (int i = 0; i < 20; i++)
+        long address = mutator.allocate(64);
+        ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+        for (int i = 0; i < 64; i++)
         {
             bytes.put((byte) i);
         }
         bytes.flip();
         mutator.write(address, bytes);
+        boolean thrown = false;
         try
         {
             mutator.commit();
         }
-        catch (Error e)
+        catch (Pack.Danger e)
         {
+            thrown = true;
         }
+        assertTrue(thrown);
         Pack.Opener opener = new Pack.Opener();
         opener.open(file);
     }
