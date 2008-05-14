@@ -666,8 +666,7 @@ public class PackTestCase
         pack.close();
     }
 
-    @Test(expected=java.lang.UnsupportedOperationException.class)
-    public void softRecover()
+    @Test public void softRecover()
     {
         Pack.Creator newPack = new Pack.Creator();
         newPack.setDisk(new Pack.Disk()
