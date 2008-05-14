@@ -669,26 +669,37 @@ public class PackTestCase
     }
 
     @Test(expected=java.lang.UnsupportedOperationException.class)
-    public void recover()
+    public void softRecover()
     {
         Pack.Creator newPack = new Pack.Creator();
         newPack.setDisk(new Pack.Disk()
         {
             int count = 0;
-            
-            public int write(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
+
+            @Override
+            public FileChannel truncate(FileChannel fileChannel, long size) throws IOException
             {
-                if (position == 52)
+                if (count++ == 2)
                 {
-                    if (count++ == 1)
-                    {
-                        fileChannel.close();
-                        throw new IOException();
-                    }
+                    fileChannel.close();
+                    throw new IOException();
                 }
-                
-                return fileChannel.write(dst, position);
+                return fileChannel.truncate(size);
             }
+//            
+//            public int write(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
+//            {
+//                if (position == 52)
+//                {
+//                    if (count++ == 1)
+//                    {
+//                        fileChannel.close();
+//                        throw new IOException();
+//                    }
+//                }
+//                
+//                return fileChannel.write(dst, position);
+//            }
         });
         File file = newFile();
         Pack pack = newPack.create(file);
@@ -701,10 +712,11 @@ public class PackTestCase
         }
         bytes.flip();
         mutator.write(address, bytes);
+        mutator.commit();
         boolean thrown = false;
         try
         {
-            mutator.commit();
+            pack.close();
         }
         catch (Pack.Danger e)
         {
