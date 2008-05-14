@@ -505,31 +505,29 @@ public class PackTestCase
 
         for (int i = 0; i < count; i++)
         {
-            ByteBuffer bytes = ByteBuffer.allocateDirect(64);
-            mutator.read(addresses[i], bytes);
-            bytes.flip();
-            
-            for (int j = 0; j < 64; j++)
-            {
-                assertEquals((byte) j, bytes.get());
-            }
+            assertBuffer(mutator, addresses[i], 64);
         }
 
         mutator.commit();
         mutator = pack.mutate();
         for (int i = 0; i < count; i++)
         {
-            ByteBuffer bytes = ByteBuffer.allocateDirect(64);
-            mutator.read(addresses[i], bytes);
-            bytes.flip();
-            
-            for (int j = 0; j < 64; j++)
-            {
-                assertEquals((byte) j, bytes.get());
-            }
+            assertBuffer(mutator, addresses[i], 64);
         }
 
         mutator.commit();
+    }
+
+    private void assertBuffer(Pack.Mutator mutator, long address, int count)
+    {
+        ByteBuffer bytes = ByteBuffer.allocateDirect(64);
+        mutator.read(address, bytes);
+        bytes.flip();
+        
+        for (int i = 0; i < count; i++)
+        {
+            assertEquals((byte) i, bytes.get());
+        }
     }
 
     @Test public void free()
@@ -686,7 +684,7 @@ public class PackTestCase
                 }
                 return fileChannel.truncate(size);
             }
-//            
+//            Saving this for a different sort of recover.
 //            public int write(FileChannel fileChannel, ByteBuffer dst, long position) throws IOException
 //            {
 //                if (position == 52)
@@ -724,7 +722,11 @@ public class PackTestCase
         }
         assertTrue(thrown);
         Pack.Opener opener = new Pack.Opener();
-        opener.open(file);
+        pack = opener.open(file);
+        mutator = pack.mutate();
+        assertBuffer(mutator, address, 64);
+        mutator.commit();
+        pack.close();
     }
 }
 

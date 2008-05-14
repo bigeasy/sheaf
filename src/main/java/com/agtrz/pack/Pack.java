@@ -65,6 +65,8 @@ public class Pack
     public final static int ERROR_HEADER_CORRUPT = 600;
 
     public final static int ERROR_BLOCK_PAGE_CORRUPT = 601;
+    
+    public final static int ERROR_CORRUPT = 602;
 
     private final static long SIGNATURE = 0xAAAAAAAAAAAAAAAAL;
     
@@ -115,12 +117,6 @@ public class Pack
     private final static int JOURNAL_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
     
     private final static int COUNT_MASK = 0xA0000000;
-
-    private final static short ADDRESS_REGION = 1;
-    
-//    private final static short DATA_REGION = 2;
-    
-    private final static short INTERIM_REGION = 3;
     
 
     final Pager pager;
@@ -329,6 +325,57 @@ public class Pack
         }
     }
  
+    final static class Offsets
+    {
+        private final int pageSize;
+        
+        private final int internalJournalCount;
+        
+        private final int staticPageMapSize;
+        
+        public Offsets(int pageSize, int internalJournalCount, int staticPageMapSize)
+        {
+            this.pageSize = pageSize;
+            this.internalJournalCount = internalJournalCount;
+            this.staticPageMapSize = staticPageMapSize;
+        }
+        
+        public int getPageSize()
+        {
+            return pageSize;
+        }
+        
+        public int getInternalJournalCount()
+        {
+            return internalJournalCount;
+        }
+        private long getEndOfHeader()
+        {
+            return FILE_HEADER_SIZE + staticPageMapSize + internalJournalCount * POSITION_SIZE; 
+        }
+        
+        public long getFirstAddressPageStart()
+        {
+            long endOfHeader = getEndOfHeader();
+            long remaining = pageSize - endOfHeader % pageSize;
+            if (remaining < ADDRESS_PAGE_HEADER_SIZE + ADDRESS_SIZE)
+            {
+                return  (endOfHeader + pageSize - 1) / pageSize * pageSize;
+            }
+            return endOfHeader;
+        }
+        
+        public long getFirstAddressPage()
+        {
+            return getFirstAddressPageStart() / pageSize * pageSize;
+        }
+
+        public long getDataBoundary()
+        {
+            return (getFirstAddressPageStart() + pageSize - 1) / pageSize * pageSize;
+        }
+    }
+
     public final static class Creator
     {
         private final Map<URI, Integer> mapOfStaticPageSizes;
@@ -386,32 +433,6 @@ public class Pack
             return size;
         }
 
-        private long getEndOfHeader()
-        {
-            return FILE_HEADER_SIZE + getStaticPagesMapSize() + internalJournalCount * POSITION_SIZE; 
-        }
-        
-        private long getFirstAddressPageStart()
-        {
-            long endOfHeader = getEndOfHeader();
-            long remaining = pageSize - endOfHeader % pageSize;
-            if (remaining < ADDRESS_PAGE_HEADER_SIZE + ADDRESS_SIZE)
-            {
-                return  (endOfHeader + pageSize - 1) / pageSize * pageSize;
-            }
-            return endOfHeader;
-        }
-        
-        private long getFirstAddressPage()
-        {
-            return getFirstAddressPageStart() / pageSize * pageSize;
-        }
-
-        private long getDataBoundary()
-        {
-            return (getFirstAddressPageStart() + pageSize - 1) / pageSize * pageSize;
-        }
-
         /**
          * Create a new pack that writes to the specified file.
          */
@@ -429,7 +450,8 @@ public class Pack
                 throw new Danger(ERROR_FILE_NOT_FOUND, e);
             }
             
-            ByteBuffer fullSize = ByteBuffer.allocateDirect((int) (getFirstAddressPage() + pageSize));
+            Offsets offsets = new Offsets(pageSize, internalJournalCount, getStaticPagesMapSize());
+            ByteBuffer fullSize = ByteBuffer.allocateDirect((int) (offsets.getFirstAddressPage() + pageSize));
             try
             {
                 disk.write(fileChannel, fullSize, 0L);
@@ -449,8 +471,8 @@ public class Pack
             header.setAlignment(alignment);
             header.setInternalJournalCount(internalJournalCount);
             header.setStaticPageSize(getStaticPagesMapSize());
-            header.setFirstAddressPageStart(getFirstAddressPageStart());
-            header.setDataBoundary(getDataBoundary());
+            header.setFirstAddressPageStart(offsets.getFirstAddressPageStart());
+            header.setDataBoundary(offsets.getDataBoundary());
             header.setOpenBoundary(0L);
 
             try
@@ -491,9 +513,20 @@ public class Pack
             Map<URI, Long> mapOfStaticPages = new HashMap<URI, Long>();
 
             SortedSet<Long> setOfAddressPages = new TreeSet<Long>();
-            setOfAddressPages.add(getFirstAddressPage());
+            setOfAddressPages.add(offsets.getFirstAddressPage());
             Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getDataBoundary(), header.getDataBoundary());
-
+            
+            long user = pager.getInterimBoundary().getPosition();
+            pager.getInterimBoundary().increment();
+            
+            DirtyPageMap dirtyPages = new DirtyPageMap(pager, 0);
+            pager.setPage(user, new BlockPage(false), dirtyPages, false);
+            BlockPage blocks = pager.getPage(user, new BlockPage(false));
+            blocks.getRawPage().invalidate(0, pageSize);
+            dirtyPages.flush();
+            
+            pager.returnUserPage(blocks);
+            
             Pack pack = new Pack(pager);
 
             ByteBuffer statics = ByteBuffer.allocateDirect(getStaticPagesMapSize());
@@ -729,7 +762,34 @@ public class Pack
             return new Pack(pager);
         }
         
-        private Pack addressRecover(Pager pager, Recovery recovery)
+        public boolean isBlockPage(RawPage rawPage, Recovery recovery)
+        {
+            long position = rawPage.getPosition();
+            long first = rawPage.getPager().getFirstAddressPageStart();
+            if (position < first)
+            {
+                int pageSize = rawPage.getPager().getPageSize();
+                if (position == first / pageSize * pageSize)
+                {
+                    return false;
+                }
+                else
+                {
+                    throw new IllegalStateException();
+                }
+            }
+            else
+            {
+                ByteBuffer peek = rawPage.getByteBuffer();
+                if (peek.getInt(CHECKSUM_SIZE) < 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private Pack addressRecover(Recovery recovery)
         {
             // Clever data structure to track data pages has count of 
             // blocks, maps page to count of blocks. If not exist, check
@@ -737,16 +797,100 @@ public class Pack
             // Uh, yeah, so I don't checksum and recover twice. Or else,
             // just checksum and recover, hey, it's just a more convoluted load.
             // Definitely keep a set of failed checksums.
-            long position = 0L;
-            while (recovery.getRegion() != INTERIM_REGION)
+            Pager pager = recovery.getPager();
+            
+            long position = (pager.getDataBoundary().getPosition() - 1) / pager.getPageSize() * pager.getPageSize();
+            
+            RawPage rawPage = new RawPage(pager, position);
+            if (isBlockPage(rawPage, recovery))
             {
-                pager.recover(recovery, position, new NonInterimMedic());
-                position += pager.getPageSize();
+                throw new Danger(ERROR_CORRUPT);
             }
-            throw new UnsupportedOperationException();
+            
+            if (new AddressPage().verifyChecksum(rawPage, recovery))
+            {
+                AddressPage addresses = pager.getPage(position, new AddressPage());
+                addresses.verifyAddresses(recovery);
+            }
+            else
+            {
+                recovery.badAddressChecksum(position);
+            }
+            
+            position += recovery.getPager().getPageSize();
+
+            while (position < recovery.getFileSize())
+            {
+                rawPage = new RawPage(pager, position);
+                BlockPage test = new BlockPage(false);
+                test.verifyChecksum(rawPage, recovery);
+                if (isBlockPage(rawPage, recovery))
+                {
+                    break;
+                }
+                else
+                {
+                    AddressPage addresses = new AddressPage();
+                    if (addresses.verifyChecksum(rawPage, recovery))
+                    {
+                        addresses = pager.getPage(position, addresses);
+                        if (addresses.verifyAddresses(recovery))
+                        {
+                            if (addresses.getFreeCount() != 0)
+                            {
+                                pager.addAddressPage(addresses);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        recovery.badAddressChecksum(position);
+                    }
+                }
+                position += recovery.getPager().getPageSize();
+                pager.getDataBoundary().increment();
+                pager.getInterimBoundary().increment();
+            }
+
+            for (;;)
+            {
+                pager.getInterimBoundary().increment();
+                BlockPage blocks = new BlockPage(false);
+                if (blocks.verifyChecksum(rawPage, recovery))
+                {
+                    blocks = pager.getPage(position, blocks);
+                    if (blocks.verifyAddresses(recovery))
+                    {
+                        pager.returnUserPage(blocks);
+                    }
+                }
+                else
+                {
+                    recovery.badUserChecksum(position);
+                }
+                position += recovery.getPager().getPageSize();
+                if (position >= recovery.getFileSize())
+                {
+                    break;
+                }
+                rawPage = new RawPage(pager, position);
+                if (!isBlockPage(rawPage, recovery))
+                {
+                    break;
+                }
+            }
+            
+            pager.close();
+            
+            if (recovery.copacetic())
+            {
+                return open(pager.getFile());
+            }
+            
+            return null;
         }
         
-        private Pack journalRecover(Pager pager, Recovery recovery)
+        private Pack journalRecover(Recovery recovery)
         {
             throw new UnsupportedOperationException();
         }
@@ -791,16 +935,17 @@ public class Pack
                 throw new Danger(ERROR_IO_SIZE, e);
             }
  
+            Offsets offsets = new Offsets(header.getPageSize(), header.getInternalJournalCount(), header.getStaticPageSize());
             // First see if we can get to the data section cleanly.We're not
             // going to anything but checksum.
             
-            Pager pager = new Pager(file, fileChannel, disk, header, new HashMap<URI, Long>(), new TreeSet<Long>(), 0, 0);
+            Pager pager = new Pager(file, fileChannel, disk, header, new HashMap<URI, Long>(), new TreeSet<Long>(), offsets.getDataBoundary(), offsets.getDataBoundary());
             if (listOfAddressJournals.size() == 0 && listOfUserJournals.size() == 0)
             {
-                return addressRecover(pager, new Recovery(fileSize, true));
+                return addressRecover(new Recovery(pager, fileSize, true));
             }
 
-            return journalRecover(pager, new Recovery(fileSize, false));
+            return journalRecover(new Recovery(pager, fileSize, false));
         }
     }
 
@@ -1176,22 +1321,36 @@ public class Pack
 
         public <P extends Page> P getPage(long position, P page)
         {
-            RawPage rawPage = null;
-            synchronized (mapOfPagesByPosition)
+            position = (long) Math.floor(position - (position % pageSize));
+            RawPage rawPage = new RawPage(this, position);
+            synchronized (rawPage)
             {
-                position = (long) Math.floor(position - (position % pageSize));
-                rawPage = getPageByPosition(position);
-                if (rawPage == null)
+                RawPage found = null;
+                synchronized (mapOfPagesByPosition)
                 {
-                    rawPage = new RawPage(this, position);
+                    found = getPageByPosition(position);
+                    if (found == null)
+                    {
+                        addPageByPosition(rawPage);
+                    }
+                }
+                if (found == null)
+                {
                     page.load(rawPage);
-                    addPageByPosition(rawPage);
+                }
+                else
+                {
+                    rawPage = found;
                 }
             }
             synchronized (rawPage)
             {
                 if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
                 {
+                    if (!rawPage.getPage().getClass().isAssignableFrom(page.getClass()))
+                    {
+                        throw new IllegalStateException();
+                    }
                     page.load(rawPage);
                 }
             }
@@ -1432,24 +1591,6 @@ public class Pack
                 }
             }
             return position + offset;
-        }
-
-        public boolean recover(Recovery recovery, long position, Medic medic)
-        {
-            RawPage rawPage = getPageByPosition(position);
-            if (rawPage == null)
-            {
-                rawPage = new RawPage(this, position);
-                Page page = medic.recover(rawPage, recovery);
-                if (page != null)
-                {
-                    rawPage.setPage(page);
-                    addPageByPosition(rawPage);
-                    return true;
-                }
-                return false;
-            }
-            return true;
         }
 
         public void close()
@@ -1994,6 +2135,8 @@ public class Pack
         public void load(RawPage rawPage);
         
         public void checksum(Checksum checksum);
+        
+        public boolean verifyChecksum(RawPage rawPage, Recovery recovery);
     }
 
     /**
@@ -2025,7 +2168,7 @@ public class Pack
      * reserved.
      */
     static final class AddressPage
-    implements Page, Medic
+    implements Page
     {
         private RawPage rawPage;
         
@@ -2220,7 +2363,7 @@ public class Pack
             }
         }
 
-        private boolean verifyChecksum(RawPage rawPage, Recovery recovery)
+        public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
         {
             Checksum checksum = recovery.getChecksum();
         
@@ -2244,20 +2387,24 @@ public class Pack
             return true;
         }
 
-        private boolean verifyAddresses(RawPage rawPage, Recovery recovery)
+        public boolean verifyAddresses(Recovery recovery)
         {
             boolean copacetic = true;
         
-            ByteBuffer bytes = rawPage.getByteBuffer();
+            ByteBuffer bytes = getRawPage().getByteBuffer();
         
             bytes.clear();
             bytes.position(getFirstAddressOffset(rawPage));
             
+            Pager pager = getRawPage().getPager();
             while (bytes.remaining() >= Long.SIZE / Byte.SIZE)
             {
-                long address = rawPage.getPosition() + bytes.position();
+                long address = getRawPage().getPosition() + bytes.position();
                 long position = bytes.getLong();
-                if (position < rawPage.getPager().getPageSize())
+                if (position == 0)
+                {
+                }
+                else if (position < pager.getPageSize())
                 {
                     copacetic = false;
                 }
@@ -2265,35 +2412,20 @@ public class Pack
                 {
                     copacetic = false;
                 }
-                else if (rawPage.getPager().recover(recovery, position, new BlockPage(false)))
+                else
                 {
-                    // FIXME Note that it has been recovered.
-                    BlockPage blocks = rawPage.getPager().getPage(position, new BlockPage(false));
-                    if (!blocks.verify(address, position))
+                    RawPage rawPage = new RawPage(getRawPage().getPager(), position);
+                    BlockPage blocks = new BlockPage(false);
+                    if (!blocks.verifyChecksum(rawPage, recovery)
+                        || !pager.getPage(position, blocks).contains(address))
                     {
                         copacetic = false;
+                        recovery.badAddress(address, position);
                     }
                 }
             }
             
             return copacetic;
-        }
-
-        public Page recover(RawPage rawPage, Recovery recovery)
-        {
-            if (verifyChecksum(rawPage, recovery))
-            {
-                if (recovery.isAddressRecovery())
-                {
-                    if (verifyAddresses(rawPage, recovery))
-                    {
-                        load(rawPage);
-                        return this;
-                    }
-                }
-            }
-            
-            return null;
         }
     }
     
@@ -2320,6 +2452,11 @@ public class Pack
         }
         
         public void checksum(Checksum checksum)
+        {
+            throw new UnsupportedOperationException();
+        }
+        
+        public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
         {
             throw new UnsupportedOperationException();
         }
@@ -2412,7 +2549,7 @@ public class Pack
      * use a data page for block allocation.
      */
     static final class BlockPage
-    extends RelocatablePage implements Medic
+    extends RelocatablePage
     {
         private boolean interim;
 
@@ -3038,11 +3175,6 @@ public class Pack
             }
         }
 
-        public boolean verify(long address, long position)
-        {
-            throw new UnsupportedOperationException();
-        }
-
         public Page recover(RawPage rawPage, Recovery recovery)
         {
             if (verifyChecksum(rawPage, recovery))
@@ -3054,14 +3186,12 @@ public class Pack
             return null;
         }
 
-        private boolean verifyChecksum(RawPage rawPage, Recovery recovery)
+        public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
         {
             Checksum checksum = recovery.getChecksum();
             checksum.reset();
             
             ByteBuffer bytes = rawPage.getByteBuffer();
-            
-            bytes.clear();
             bytes.position(CHECKSUM_SIZE);
             
             for (int i = 0; i < Integer.SIZE / Byte.SIZE; i++)
@@ -3078,7 +3208,7 @@ public class Pack
             int block = 0;
             while (block < count)
             {
-                int size = getBlockSize(bytes);
+                int size = bytes.getInt(bytes.position());
                 
                 if (Math.abs(size) > bytes.remaining())
                 {
@@ -3105,16 +3235,45 @@ public class Pack
             
             if (expected != actual)
             {
-                recovery.badDataChecksum(rawPage.getPosition());
+                recovery.badUserChecksum(rawPage.getPosition());
                 return false;
             }
             
             return true;
         }
-
-        public boolean track(Set<Long> userPageSet)
+        
+        public boolean verifyAddresses(Recovery recovery)
         {
-            return false;
+            boolean copacetic = true;
+            Pager pager = getRawPage().getPager();
+            ByteBuffer bytes = getBlockRange();
+            int block = 0;
+            while (block < count)
+            {
+                int size = getBlockSize(bytes);
+                if (size > 0)
+                {
+                    block++;
+                    long address = getAddress(bytes);
+                    if (address < pager.getFirstAddressPageStart() + ADDRESS_PAGE_HEADER_SIZE
+                        || address >= pager.getDataBoundary().getPosition())
+                    {
+                        recovery.badUserAddress(getRawPage().getPosition(), address);
+                        copacetic = false;
+                    }
+                    AddressPage addresses = pager.getPage(address, new AddressPage());
+                    if (getRawPage().getPosition() != addresses.dereference(address))
+                    {
+                        recovery.badUserAddress(getRawPage().getPosition(), address);
+                        copacetic = false;
+                    }
+                }
+                else
+                {
+                    advance(bytes, size);
+                }
+            }
+            return copacetic;
         }
     }
     
@@ -3690,49 +3849,56 @@ public class Pack
     // would take place until after the vacuum commits.
     final static class Recovery
     {
-        private short region;
-
+        private final Pager pager;
+        
         private final Checksum checksum;
 
         private int blockCount;
 
         private final Set<Long> setOfBadAddressChecksums;
 
-        private final Map<Long, Long> mapOfBadAddresses;
-
+        private final Map<Long, Map<Long, Long>> mapOfBadAddressPages;
+        
         private final Set<Long> setOfCorruptDataPages;
         
-        private final Set<Long> setOfBadDataChecksums;
+        private final Set<Long> setOfBadUserChecksums;
+
+        private final Map<Long, List<Long>> mapOfBadUserAddresses;
         
         private boolean addressRecovery;
         
         private long fileSize;
         
-        public Recovery(long fileSize, boolean addressRecovery)
+        public Recovery(Pager pager, long fileSize, boolean addressRecovery)
         {
-            this.region = ADDRESS_REGION;
+            this.pager = pager;
             this.checksum = new Adler32();
-            this.mapOfBadAddresses = new HashMap<Long, Long>();
+            this.mapOfBadAddressPages = new HashMap<Long, Map<Long, Long>>();
             this.setOfBadAddressChecksums = new HashSet<Long>();
-            this.setOfBadDataChecksums = new HashSet<Long>();
+            this.setOfBadUserChecksums = new HashSet<Long>();
             this.setOfCorruptDataPages = new HashSet<Long>();
+            this.mapOfBadUserAddresses = new HashMap<Long, List<Long>>();
             this.fileSize = fileSize;
             this.addressRecovery = addressRecovery;
+        }
+
+        public boolean copacetic()
+        {
+            return mapOfBadAddressPages.size() == 0
+                && setOfBadAddressChecksums.size() == 0
+                && setOfBadUserChecksums.size() == 0
+                && setOfCorruptDataPages.size() == 0
+                && mapOfBadUserAddresses.size() == 0;
+        }
+
+        public Pager getPager()
+        {
+            return pager;
         }
         
         public long getFileSize()
         {
             return fileSize;
-        }
-
-        public short getRegion()
-        {
-            return region;
-        }
-        
-        public void setRegion(short region)
-        {
-            this.region = region;
         }
         
         public boolean isAddressRecovery()
@@ -3762,6 +3928,13 @@ public class Pack
         
         public void badAddress(long address, long position)
         {
+            long page = address / pager.getPageSize() * pager.getPageSize(); 
+            Map<Long, Long> mapOfBadAddresses = mapOfBadAddressPages.get(page);
+            if (mapOfBadAddresses == null)
+            {
+                mapOfBadAddresses = new HashMap<Long, Long>();
+                mapOfBadAddressPages.put(page, mapOfBadAddresses);
+            }
             mapOfBadAddresses.put(address, position);
         }
 
@@ -3770,70 +3943,23 @@ public class Pack
             setOfCorruptDataPages.add(position);
         }
 
-        public void badDataChecksum(long position)
+        public void badUserChecksum(long position)
         {
-            setOfBadDataChecksums.add(position);
+            setOfBadUserChecksums.add(position);
+        }
+        
+        public void badUserAddress(long position, long address)
+        {
+            List<Long> listOfAddresses = mapOfBadUserAddresses.get(position);
+            if (listOfAddresses == null)
+            {
+                listOfAddresses = new ArrayList<Long>();
+                mapOfBadUserAddresses.put(position, listOfAddresses);
+            }
+            listOfAddresses.add(address);
         }
     }
 
-    interface Medic
-    {
-        public Page recover(RawPage rawPage, Recovery recovery);
-    }
-
-    final static class NonInterimMedic implements Medic
-    {
-        public Page recover(RawPage rawPage, Recovery recovery)
-        {
-            Medic medic = null;
-            long position = rawPage.getPosition();
-            long first = rawPage.getPager().getFirstAddressPageStart();
-            if (position < first)
-            {
-                int pageSize = rawPage.getPager().getPageSize();
-                if (position == first / pageSize * pageSize)
-                {
-                    medic = new AddressPage();
-                }
-                else
-                {
-                    throw new IllegalStateException();
-                }
-            }
-            else
-            {
-                ByteBuffer peek = rawPage.getByteBuffer();
-                
-                peek.clear();
-                
-                try
-                {
-                    Pager pager = rawPage.getPager();
-                    pager.getDisk().read(pager.getFileChannel(), peek, position + CHECKSUM_SIZE);
-                }
-                catch (IOException e)
-                {
-                    throw new Danger(ERROR_IO_READ, e);
-                }
-
-                if (peek.getInt(CHECKSUM_SIZE) < 0)
-                {
-                    medic = new BlockPage(false);
-                }
-                else if (recovery.getBlockCount() == 0)
-                {
-                    medic = new AddressPage();
-                }
-                else
-                {
-                    recovery.setRegion(INTERIM_REGION);
-                    return null;
-                }
-            }
-            return medic.recover(rawPage, recovery);
-        }
-    }
-     
     final static class MoveList
     {
         private final MoveRecorder recorder;
