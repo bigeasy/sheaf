@@ -167,6 +167,10 @@ public class Pack
         return pager.getFile();
     }
 
+    public void copacetic()
+    {
+    }
+
     public final static class Danger
     extends RuntimeException
     {
@@ -5305,6 +5309,11 @@ public class Pack
                 }
             });
         }
+        
+        public ByteBuffer read(final long address)
+        {
+            throw new UnsupportedOperationException();
+        }
 
         public void read(final long address, final ByteBuffer bytes)
         {
@@ -5389,6 +5398,11 @@ public class Pack
                     }
                 }
             });
+        }
+        
+        public void rollback()
+        {
+            throw new UnsupportedOperationException();
         }
 
         private long tryNewAddressPage(int count)
