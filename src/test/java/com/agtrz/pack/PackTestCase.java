@@ -609,7 +609,7 @@ public class PackTestCase
         pack.close();
     }
 
-    @Test public void moveDataPageForAddress()
+    @Ignore @Test public void moveDataPageForAddress()
     {
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);

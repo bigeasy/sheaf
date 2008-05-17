@@ -99,14 +99,14 @@ public class Pack
     private final static short SHIFT_MOVE = 4;
 
     private final static short CREATE_ADDRESS_PAGE = 5;
-
+    
     private final static short WRITE = 6;
     
     private final static short FREE = 7;
 
     private final static short NEXT_PAGE = 8;
 
-    private final static short COMMIT = 9;
+    private final static short COPY = 9;
 
     private final static short TERMINATE = 10;
 
@@ -1015,6 +1015,10 @@ public class Pack
         /**
          * A read/write lock that coordinates rewind of area boundaries and the
          * wilderness. 
+         * <p>
+         * The compact lock locks the entire file exclusively and block any
+         * other moves or commits. Ordinary commits can run in parallel so long
+         * as blocks are moved forward and not backward in in the file.
          */
         private final ReadWriteLock compactLock;
         
@@ -1093,6 +1097,7 @@ public class Pack
             return header.getFirstAddressPageStart();
         }
 
+        // FIXME Rename.
         public Boundary getDataBoundary()
         {
             return dataBoundary;
@@ -1409,7 +1414,7 @@ public class Pack
                             return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
                         }
                     });
-                    position = mutator.newAddressPage();
+                    position = mutator.newAddressPage().first();
                 }
                 else
                 {
@@ -1487,7 +1492,7 @@ public class Pack
             }
         }
 
-        public void newUserPages(Set<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
+        public void newUserPages(Set<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
         {
             synchronized (setOfFreeUserPages)
             {
@@ -1497,7 +1502,7 @@ public class Pack
                     Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
                     long position = freeUserPages.next();
                     setOfDataPages.add(position);
-                    mapOfPages.put(pages.next(), new MovablePosition(moveNode, position));
+                    mapOfPages.put(pages.next(), new Movable(moveNode, position, 0));
                     pages.remove();
                     freeUserPages.remove();
                 }
@@ -1669,12 +1674,12 @@ public class Pack
     {
         private long position;
         
-        final SortedMap<Long, Long> setOfRegions;
+        final SortedMap<Integer, Integer> setOfRegions;
         
         public Regional(long position)
         {
             this.position = position;
-            this.setOfRegions = new TreeMap<Long, Long>();
+            this.setOfRegions = new TreeMap<Integer, Integer>();
         }
         
         /**
@@ -1699,24 +1704,26 @@ public class Pack
 
         public abstract ByteBuffer getByteBuffer();
 
-        private void invalidate(long start, long end)
+        public void invalidate(int offset, int length)
         {
-            if (start < getPosition())
+            int start = offset;
+            int end = offset + length;
+            if (start < 0)
             {
                 throw new IllegalStateException();
             }
             
-            if (end > getPosition() + getByteBuffer().capacity())
+            if (end > getByteBuffer().capacity())
             {
                 throw new IllegalStateException();
             }
             
             INVALIDATE: for(;;)
             {
-                Iterator<Map.Entry<Long, Long>> entries = setOfRegions.entrySet().iterator();
+                Iterator<Map.Entry<Integer, Integer>> entries = setOfRegions.entrySet().iterator();
                 while (entries.hasNext())
                 {
-                    Map.Entry<Long, Long> entry = entries.next();
+                    Map.Entry<Integer, Integer> entry = entries.next();
                     if (start < entry.getKey() && end >= entry.getKey())
                     {
                         entries.remove();
@@ -1739,28 +1746,18 @@ public class Pack
             }
             setOfRegions.put(start, end);
         }
-
-        public void invalidate(int offset, int length)
-        {
-            long start = getPosition() + offset;
-            long end = start + length;
-            invalidate(start, end);
-        }
         
         public void write(Disk disk, FileChannel fileChannel) throws IOException
         {
             ByteBuffer bytes = getByteBuffer();
-            bytes.clear();
+            bytes.clear(); // FIXME Shouldn't be necessary.
 
-            for(Map.Entry<Long, Long> entry: setOfRegions.entrySet())
+            for(Map.Entry<Integer, Integer> entry: setOfRegions.entrySet())
             {
-                int offset = (int) (entry.getKey() - getPosition());
-                int length = (int) (entry.getValue() - entry.getKey());
-
-                bytes.limit(offset + length);
-                bytes.position(offset);
+                bytes.limit(entry.getValue());
+                bytes.position(entry.getKey());
                 
-                disk.write(fileChannel, bytes, entry.getKey());
+                disk.write(fileChannel, bytes, getPosition() + entry.getKey());
             }
 
             bytes.limit(bytes.capacity());
@@ -3000,10 +2997,9 @@ public class Pack
          * @param force
          * @return
          */
-        public Mirror mirror(Pager pager, DirtyPageMap dirtyPages, boolean force)
+        public Mirror mirror(Pager pager, BlockPage mirrored, boolean force, DirtyPageMap dirtyPages)
         {
             int offset = force ? 0 : -1;
-            BlockPage mirrored = null;
             
             synchronized (getRawPage())
             {
@@ -3424,8 +3420,8 @@ public class Pack
                     return new Free();
                 case NEXT_PAGE:
                     return new NextOperation();
-                case COMMIT:
-                    return new Commit();
+                case COPY:
+                    return new Copy();
                 case TERMINATE:
                     return new Terminate();
             }
@@ -3724,11 +3720,16 @@ public class Pack
 
         public synchronized void add(BlockPage blocks)
         {
+            add(blocks.getRawPage().getPosition(), blocks.getRemaining());
+        }
+        
+        public synchronized void add(long position, int remaning)
+        {
             // Maybe don't round down if exact.
-            int aligned = ((blocks.getRemaining() | alignment - 1) + 1) - alignment;
+            int aligned = ((remaning | alignment - 1) + 1) - alignment;
             if (aligned != 0)
             {
-                listOfListsOfSizes.get(aligned / alignment).addFirst(blocks.getRawPage().getPosition());
+                listOfListsOfSizes.get(aligned / alignment).addFirst(position);
             }
         }
         
@@ -3774,8 +3775,9 @@ public class Pack
             return bestFit;
         }
 
-        public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, MovablePosition> mapOfPages, MoveNode moveNode)
+        public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
         {
+            // FIXME We can compact even further by joining vacuumed pages.
             for (int i = 0; i < pagesBySize.listOfListsOfSizes.size(); i++)
             {
                 List<Long> listOfSizes = pagesBySize.listOfListsOfSizes.get(i);
@@ -3785,7 +3787,7 @@ public class Pack
                     if (found != 0L)
                     {
                         setOfDataPages.add(found);
-                        mapOfPages.put(size, new MovablePosition(moveNode, found));
+                        mapOfPages.put(size, new Movable(moveNode, found, 0));
                     }
                 }
             }
@@ -3967,14 +3969,21 @@ public class Pack
         private final MoveRecorder recorder;
 
         private final ReadWriteLock readWriteLock;
-
+        
+        private final List<MoveLatch> listOfMoveLatches;
+        
         private MoveLatch headOfMoves;
+        
+        private boolean wasLocked;
+        
+        private boolean skipping;
         
         public MoveList()
         {
             this.recorder = new NullMoveRecorder();
             this.headOfMoves = new MoveLatch(false);
             this.readWriteLock = new ReentrantReadWriteLock();
+            this.listOfMoveLatches = new ArrayList<MoveLatch>();
         }
 
         public MoveList(MoveRecorder recorder, MoveList listOfMoves)
@@ -3982,6 +3991,7 @@ public class Pack
             this.recorder = recorder;
             this.headOfMoves = listOfMoves.headOfMoves;
             this.readWriteLock = listOfMoves.readWriteLock;
+            this.listOfMoveLatches = new ArrayList<MoveLatch>(listOfMoves.listOfMoveLatches);
         }
         
         public void add(MoveLatch next)
@@ -3993,6 +4003,17 @@ public class Pack
                 while (iterator.getNext() != null)
                 {
                     iterator = iterator.getNext();
+                    if (iterator.isUser())
+                    {
+                        if (iterator.isTerminal())
+                        {
+                            listOfMoveLatches.clear();
+                        }
+                        else
+                        {
+                            listOfMoveLatches.add(iterator);
+                        }
+                    }
                 }
                 iterator.extend(next);
                 
@@ -4004,11 +4025,35 @@ public class Pack
             }
         }
         
+        public void skip(MoveLatch skip)
+        {
+            wasLocked = false;
+            skipping = false;
+            readWriteLock.readLock().lock();
+            try
+            {
+                for (;;)
+                {
+                    if (headOfMoves.next == null)
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        advance(skip);
+                    }
+                }
+            }
+            finally
+            {
+                readWriteLock.readLock().unlock();
+            }
+        }
+
         public <T> T mutate(final GuardedReturnable<T> guarded)
         {
-            boolean wasUser = false;
-            boolean wasLocked = false;
-            List<MoveLatch> listOfMoveLatches = new ArrayList<MoveLatch>();
+            wasLocked = false;
+            skipping = false;
             readWriteLock.readLock().lock();
             try
             {
@@ -4020,7 +4065,7 @@ public class Pack
                     }
                     else
                     {
-                        wasLocked = advance(wasUser, wasLocked, listOfMoveLatches);
+                        advance(null);
                     }
                 }
             }
@@ -4032,9 +4077,8 @@ public class Pack
         
         public void mutate(Guarded guarded)
         {
-            boolean wasUser = false;
-            boolean wasLocked = false;
-            List<MoveLatch> listOfMoveLatches = new ArrayList<MoveLatch>();
+            wasLocked = false;
+            skipping = false;
             readWriteLock.readLock().lock();
             try
             {
@@ -4047,7 +4091,7 @@ public class Pack
                     }
                     else
                     {
-                        wasLocked = advance(wasUser, wasLocked, listOfMoveLatches);
+                        advance(null);
                     }
                 }
             }
@@ -4057,7 +4101,7 @@ public class Pack
             }
         }
 
-        private boolean advance(boolean wasUser, boolean wasLocked, List<MoveLatch> listOfMoveLatches)
+        private void advance(MoveLatch skip)
         {
             headOfMoves = headOfMoves.next;
             if (headOfMoves.isTerminal())
@@ -4068,37 +4112,42 @@ public class Pack
                     {
                         throw new IllegalStateException();
                     }
+                    listOfMoveLatches.clear();
                 }
-                listOfMoveLatches.clear();
-                wasUser = true;
+                skipping = skip == headOfMoves;
             }
             else
             {
-                wasUser = false;
-            }
-            if (recorder.contains(headOfMoves.getMove().getFrom()))
-            {
-                if (headOfMoves.enter())
+                if (recorder.involves(headOfMoves.getMove().getFrom()))
+                {
+                    if (skipping)
+                    {
+                        if (headOfMoves.isUser() && headOfMoves.isLocked())
+                        {
+                            wasLocked = true;
+                        }
+                    }
+                    else if (headOfMoves.enter())
+                    {
+                        if (headOfMoves.isUser())
+                        {
+                            wasLocked = true;
+                        }
+                    }
+                    recorder.record(headOfMoves.getMove(), false);
+                }
+                else
                 {
                     if (headOfMoves.isUser())
                     {
-                        wasLocked = true;
+                        if (headOfMoves.isLocked())
+                        {
+                            wasLocked = true;
+                        }
+                        listOfMoveLatches.add(headOfMoves);
                     }
                 }
-                recorder.record(headOfMoves.getMove());
             }
-            else
-            {
-                if (headOfMoves.isUser())
-                {
-                    if (headOfMoves.isLocked())
-                    {
-                        wasLocked = true;
-                    }
-                    listOfMoveLatches.add(headOfMoves);
-                }
-            }
-            return wasLocked;
         }
     }
     
@@ -4291,74 +4340,162 @@ public class Pack
         }
     }
 
-    static class MovablePosition
+    static class Movable
     {
-        protected final MoveNode moveNode;
+        private final MoveNode moveNode;
         
-        protected final long position;
+        private final long position;
         
-        public MovablePosition(MoveNode moveNode, long position)
+        private final int skip;
+        
+        public Movable(MoveNode moveNode, long position, int skip)
         {
             this.moveNode = moveNode;
             this.position = position;
+            this.skip = skip;
         }
         
-        public long getValue(Pager pager)
+        public long getPosition(Pager pager)
         {
-            return pager.adjust(moveNode, position, 0);
-        }
-    }
-
-    static final class SkippingMovablePosition
-    extends MovablePosition
-    {
-        public SkippingMovablePosition(MoveNode moveNode, long position)
-        {
-            super(moveNode, position);
-        }
-        
-        public long getValue(Pager pager)
-        {
-            return pager.adjust(moveNode, position, 1);
+            return pager.adjust(moveNode, position, skip);
         }
     }
     
     interface MoveRecorder
     {
-        public boolean contains(long position);
+        public boolean involves(long position);
 
-        public void record(Move move);
+        public boolean record(Move move, boolean moved);
     }
-    
+     
     public final static class NullMoveRecorder
     implements MoveRecorder
     {
-        public boolean contains(long position)
+        public boolean involves(long position)
         {
             return false;
         }
 
-        public void record(Move move)
+        public boolean record(Move move, boolean moved)
         {
+            return moved;
+        }
+    }
+   
+    static class CompositeMoveRecorder
+    implements MoveRecorder
+    {
+        private final List<MoveRecorder> listOfMoveRecorders;
+        
+        public CompositeMoveRecorder()
+        {
+            this.listOfMoveRecorders = new ArrayList<MoveRecorder>();
+        }
+        
+        public void add(MoveRecorder recorder)
+        {
+            listOfMoveRecorders.add(recorder);
+        }
+        
+        public boolean involves(long position)
+        {
+            for (MoveRecorder recorder: listOfMoveRecorders)
+            {
+                if (recorder.involves(position))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        public boolean record(Move move, boolean moved)
+        {
+            for (MoveRecorder recorder: listOfMoveRecorders)
+            {
+                moved = recorder.record(move, moved);
+            }
+            return moved;
+        }
+    }
+    
+    final static class SetRecorder
+    extends TreeSet<Long>
+    implements MoveRecorder
+    {
+        private static final long serialVersionUID = 1L;
+
+        public boolean involves(long position)
+        {
+            return contains(position) || contains(-position);
+        }
+        
+        public boolean record(Move move, boolean moved)
+        {
+            if (contains(move.getFrom()))
+            {
+                moved = true;
+            }
+            if (contains(-move.getFrom()))
+            {
+                remove(-move.getFrom());
+                add(move.getFrom());
+            }
+            return moved;
+        }
+    }
+    
+    final static class MapRecorder
+    extends TreeMap<Long, Movable>
+    implements MoveRecorder
+    {
+        private static final long serialVersionUID = 1L;
+
+        public boolean involves(long position)
+        {
+            return containsKey(position) || containsKey(-position);
+        }
+        
+        public boolean record(Move move, boolean moved)
+        {
+            if (containsKey(move.getFrom()))
+            {
+                put(move.getTo(), remove(move.getFrom()));
+                moved = true;
+            }
+            if (containsKey(-move.getFrom()))
+            {
+                put(move.getFrom(), remove(-move.getFrom()));
+            }
+            return moved;
         }
     }
 
-    final static class PageRecorder implements MoveRecorder
+    final static class PageRecorder
+    extends CompositeMoveRecorder
     {
-        private final Set<Long> setOfUserPages;
+        private final Set<Long> setOfAddressPages;
 
-        private final Set<Long> setOfJournalPages;
+        private final SetRecorder setOfUserPages;
+
+        private final SetRecorder setOfJournalPages;
         
-        private final Set<Long> setOfWritePages;
+        private final SetRecorder setOfWritePages;
         
-        private final Set<Long> setOfAllocationPages;
+        private final SetRecorder setOfAllocationPages;
         
         public PageRecorder()
         {
-            this.setOfUserPages = new HashSet<Long>();
-            this.setOfJournalPages = new HashSet<Long>();
-            this.setOfWritePages = new HashSet<Long>();
-            this.setOfAllocationPages = new HashSet<Long>();
+            this.setOfAddressPages = new HashSet<Long>();
+            add(this.setOfUserPages = new SetRecorder());
+            add(this.setOfJournalPages = new SetRecorder());
+            add(this.setOfWritePages = new SetRecorder());
+            add(this.setOfAllocationPages = new SetRecorder());
+        }
+        
+        public Set<Long> getAddressPageSet()
+        {
+            return setOfAddressPages;
         }
         
         public Set<Long> getUserPageSet()
@@ -4380,201 +4517,72 @@ public class Pack
         {
             return setOfAllocationPages;
         }
-        
-        public boolean contains(long position)
-        {
-            return setOfUserPages.contains(position)
-                || setOfJournalPages.contains(position)
-                || setOfWritePages.contains(position)
-                || setOfAllocationPages.contains(position);
-        }
-
-        public void record(Move move)
-        {
-            if (setOfUserPages.remove(move.getFrom()))
-            {
-                setOfUserPages.add(move.getTo());
-            }
-            if (setOfJournalPages.remove(move.getFrom()))
-            {
-                setOfJournalPages.add(move.getTo());
-            }
-            if (setOfWritePages.remove(move.getFrom()))
-            {
-                setOfWritePages.add(move.getTo());
-            }
-            if (setOfAllocationPages.remove(move.getFrom()))
-            {
-                setOfAllocationPages.add(move.getTo());
-            }
-        }
     }
 
-    final static class MutateMoveRecorder
+    final static class JournalRecorder
     implements MoveRecorder
     {
         private final Journal journal;
+        
+        public JournalRecorder(Journal journal)
+        {
+            this.journal = journal;
+        }
 
+        public boolean involves(long position)
+        {
+            return false;
+        }
+        
+        public boolean record(Move move, boolean moved)
+        {
+            if (moved)
+            {
+                journal.write(new ShiftMove());
+            }
+
+            return moved;
+        }
+    }
+    
+    final static class MoveNodeRecorder
+    implements MoveRecorder
+    {
         private final MoveNode firstMoveNode;
 
         private MoveNode moveNode;
         
-        private final PageRecorder pageRecorder;
-
-        public MutateMoveRecorder(PageRecorder pageRecorder, Journal journal, MoveNode moveNode)
+        public MoveNodeRecorder(MoveNode moveNode)
         {
-            this.journal = journal;
-            this.pageRecorder = pageRecorder;
             this.firstMoveNode = moveNode;
             this.moveNode = moveNode;
         }
 
-        public boolean contains(long position)
-        {
-            return pageRecorder.contains(position);
-        }
-
-        public void record(Move move)
-        {
-            pageRecorder.record(move);
-            moveNode = moveNode.extend(move);
-            journal.write(new ShiftMove());
-        }
-        
         public MoveNode getFirstMoveNode()
         {
             return firstMoveNode;
         }
-        
+
         public MoveNode getMoveNode()
         {
             return moveNode;
         }
         
-        public PageRecorder getPageRecorder()
+        public boolean involves(long position)
         {
-            return pageRecorder;
-        }
-    }
-
-    final static class CommitMoveRecorder
-    implements MoveRecorder
-    {
-        private final Journal journal;
-        
-        private final MoveNode firstMoveNode;
-
-        private MoveNode moveNode;
-        
-        private final SortedMap<Long, MovablePosition> mapOfVacuums;
-
-        private final SortedMap<Long, MovablePosition> mapOfEmpties;
-
-        private final Set<Long> setOfDataPages;
-
-        private final PageRecorder pageRecorder;
-
-        public CommitMoveRecorder(PageRecorder pageRecorder, Journal journal, MoveNode moveNode)
-        {
-            this.pageRecorder = pageRecorder;
-            this.journal = journal;
-            this.setOfDataPages = new HashSet<Long>();
-            this.mapOfVacuums = new TreeMap<Long, MovablePosition>();
-            this.mapOfEmpties = new TreeMap<Long, MovablePosition>();
-            this.firstMoveNode = moveNode;
-            this.moveNode = moveNode;
+            return false;
         }
         
-        public boolean contains(long position)
+        public boolean record(Move move, boolean moved)
         {
-            return pageRecorder.contains(position)
-                || setOfDataPages.contains(-position)
-                || setOfDataPages.contains(position)
-                || mapOfVacuums.containsKey(-position)
-                || mapOfVacuums.containsKey(position)
-                || mapOfEmpties.containsKey(-position)
-                || mapOfEmpties.containsKey(position);
-        }
-        
-        /**
-         * Record a move.
-         * <p>
-         * You wanted to know why you're ignoring the data page move and not
-         * ignoring some of the mapped moves. It's because when you were moving
-         * you were only using interim pages as keys and not inspecting them.
-         * You were making no note of whether or not they were going to be
-         * moved, so you've stored their pre-move value. Even if they are pages
-         * that this mutator has moved, we know nothing of it. However we did
-         * store the moved value of the data page, we had to. We had to store
-         * the moved value of the data page. That is a move that we need to
-         * observe if we've moved one our interim pages, but ignore if it's a
-         * data page. It is the place where our moving started.
-         */
-        public void record(Move move)
-        {
-            boolean moved = pageRecorder.contains(move.getFrom());
-            pageRecorder.record(move);
-            if (mapOfVacuums.containsKey(move.getFrom()))
-            {
-                mapOfVacuums.put(move.getTo(), mapOfVacuums.remove(move.getFrom()));
-                moved = true;
-            }
-            if (mapOfVacuums.containsKey(-move.getFrom()))
-            {
-                mapOfVacuums.put(move.getFrom(), mapOfVacuums.remove(-move.getFrom()));
-            }
-            if (mapOfEmpties.containsKey(move.getFrom()))
-            {
-                mapOfEmpties.put(move.getTo(), mapOfEmpties.remove(move.getFrom()));
-                moved = true;
-            }
-            if (mapOfEmpties.containsKey(-move.getFrom()))
-            {
-                mapOfEmpties.put(move.getFrom(), mapOfEmpties.remove(-move.getFrom()));
-            }
-            if (setOfDataPages.remove(move.getFrom()))
-            {
-                setOfDataPages.add(move.getTo());
-                moved = true;
-            }
-            if (setOfDataPages.remove(-move.getFrom()))
-            {
-                setOfDataPages.add(move.getFrom());
-            }
-            // FIXME SkippableMovablePosition? Aren't we doing that by not adding it?
             if (moved)
             {
                 moveNode = moveNode.extend(move);
-                journal.write(new ShiftMove());
             }
-        }
-        
-        public MoveNode getFirstMoveNode()
-        {
-            return firstMoveNode;
-        }
-        
-        public SortedMap<Long, MovablePosition> getVacuumMap()
-        {
-            return mapOfVacuums;
-        }
-        
-        public SortedMap<Long, MovablePosition> getEmptyMap()
-        {
-            return mapOfEmpties;
-        }
-        
-        public Set<Long> getDataPageSet()
-        {
-            return setOfDataPages;
-        }
-
-        public PageRecorder getPageRecorder()
-        {
-            return pageRecorder;
+            return moved;
         }
     }
-
+    
     private static class Journal
     {
         private final Pager pager;
@@ -4583,7 +4591,7 @@ public class Pack
 
         private final DirtyPageMap dirtyPages;
 
-        private final MovablePosition journalStart;
+        private final Movable journalStart;
 
         private JournalPage journalPage;
 
@@ -4612,14 +4620,14 @@ public class Pack
         public Journal(Pager pager, PageRecorder pageRecorder, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
             this.journalPage = pager.newInterimPage(new JournalPage(), dirtyPages);
-            this.journalStart = new MovablePosition(moveNode, journalPage.getJournalPosition());
+            this.journalStart = new Movable(moveNode, journalPage.getJournalPosition(), 0);
             this.pager = pager;
             this.dirtyPages = dirtyPages;
             this.pageRecorder = pageRecorder;
             this.pageRecorder.getJournalPageSet().add(journalPage.getRawPage().getPosition());
         }
         
-        public MovablePosition getJournalStart()
+        public Movable getJournalStart()
         {
             return journalStart;
         }
@@ -4700,7 +4708,7 @@ public class Pack
             return pager.adjust(getMoveList(), position);
         }
 
-        private Operation execute()
+        private void execute()
         {
             JournalPage journalPage = pager.getPage(entryPosition, new JournalPage());
             
@@ -4715,29 +4723,23 @@ public class Pack
             }
 
             entryPosition = journalPage.getJournalPosition();
-            
-            return operation;
         }
 
         public void vacuum()
         {
-            Operation operation = execute();
-            
-            assert operation instanceof Terminate;
+            execute();
         }
 
         public void commit()
         {
-            Operation operation = execute();
-            
+            execute();
+
             header.getByteBuffer().clear();
             header.getByteBuffer().putLong(0, 0L);
 
             dirtyPages.flush(header);
 
             pager.getJournalHeaderSet().free(header);
-            
-            assert operation instanceof Terminate;
         }
     }
         
@@ -4961,8 +4963,7 @@ public class Pack
         @Override
         public void commit(Player player)
         {
-            Pager pager = player.getPager();
-            pager.setPage(position, new AddressPage(), player.getDirtyPages(), true);
+            player.getPager().setPage(position, new AddressPage(), player.getDirtyPages(), true);
         }
         
         @Override
@@ -4984,7 +4985,7 @@ public class Pack
             position = bytes.getLong(); 
         }
     }
-
+    
     final static class Write
     extends Operation
     {
@@ -5120,7 +5121,7 @@ public class Pack
         }
     }
 
-    private final static class Commit
+    private final static class Copy
     extends Operation
     {
         private long address;
@@ -5129,11 +5130,11 @@ public class Pack
         
         private long to;
         
-        public Commit()
+        public Copy()
         {
         }
 
-        public Commit(long address, long from, long to)
+        public Copy(long address, long from, long to)
         {
             this.address = address;
             this.from = from;
@@ -5157,7 +5158,7 @@ public class Pack
         @Override
         public void write(ByteBuffer bytes)
         {
-            bytes.putShort(COMMIT);
+            bytes.putShort(COPY);
             bytes.putLong(address);
             bytes.putLong(from);
             bytes.putLong(to);
@@ -5209,11 +5210,11 @@ public class Pack
         
         private final BySizeTable writePagesBySize;
 
-        private final Map<Long, MovablePosition> mapOfAddresses;
+        private final Map<Long, Movable> mapOfAddresses;
 
         private final DirtyPageMap dirtyPages;
         
-        private MutateMoveRecorder moveRecorder;
+        private final MoveNodeRecorder moveNodeRecorder;
         
         private final PageRecorder pageRecorder;
         
@@ -5223,13 +5224,18 @@ public class Pack
 
         public Mutator(Pager pager, MoveList listOfMoves, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
+            MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder(moveNode);
+            CompositeMoveRecorder moveRecorder = new CompositeMoveRecorder();
+            moveRecorder.add(pageRecorder);
+            moveRecorder.add(moveNodeRecorder);
+            moveRecorder.add(new JournalRecorder(journal));
             this.pager = pager;
             this.journal = journal;
             this.allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
             this.writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
             this.dirtyPages = dirtyPages;
-            this.mapOfAddresses = new HashMap<Long, MovablePosition>();
-            this.moveRecorder = new MutateMoveRecorder(pageRecorder, journal, moveNode);
+            this.mapOfAddresses = new HashMap<Long, Movable>();
+            this.moveNodeRecorder = moveNodeRecorder;
             this.listOfMoves = new MoveList(moveRecorder, listOfMoves);
             this.pageRecorder = pageRecorder;
         }
@@ -5286,25 +5292,25 @@ public class Pack
                     // the block, use that page. Otherwise, allocate a new
                     // wilderness data page for allocation.
                     
-                    BlockPage allocPage = null;
-                    long alloc = allocPagesBySize.bestFit(fullSize);
-                    if (alloc == 0L)
+                    BlockPage interim = null;
+                    long bestFit = allocPagesBySize.bestFit(fullSize);
+                    if (bestFit == 0L)
                     {
-                        allocPage = pager.newInterimPage(new BlockPage(true), dirtyPages);
-                        moveRecorder.getPageRecorder().getAllocationPageSet().add(allocPage.getRawPage().getPosition());
+                        interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                        pageRecorder.getAllocationPageSet().add(interim.getRawPage().getPosition());
                     }
                     else
                     {
-                        allocPage = pager.getPage(alloc, new BlockPage(true));
+                        interim = pager.getPage(bestFit, new BlockPage(true));
                     }
                     
                     // Allocate a block from the wilderness data page.
                     
-                    allocPage.allocate(address, fullSize, dirtyPages);
+                    interim.allocate(address, fullSize, dirtyPages);
                     
-                    allocPagesBySize.add(allocPage);
+                    allocPagesBySize.add(interim);
                     
-                    mapOfAddresses.put(address, new MovablePosition(moveRecorder.getMoveNode(), allocPage.getRawPage().getPosition()));
+                    mapOfAddresses.put(address, new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
                     
                     return address;
                 }
@@ -5341,26 +5347,25 @@ public class Pack
                 {
                     // For now, the first test will write to an allocated block, so
                     // the write buffer is already there.
-                    BlockPage interimPage = null;
-                    MovablePosition position = mapOfAddresses.get(address);
+                    BlockPage interim = null;
+                    Movable position = mapOfAddresses.get(address);
                     if (position == null)
                     {
                         BlockPage blocks = dereference(address, listOfMoveLatches);
                         int blockSize = blocks.getSize(address);
                        
-                        // FIXME Rename variables.
-                        long interim = writePagesBySize.bestFit(blockSize);
-                        if (interim == 0L)
+                        long bestFit = writePagesBySize.bestFit(blockSize);
+                        if (bestFit == 0L)
                         {
-                            interimPage = pager.newInterimPage(new BlockPage(true), dirtyPages);
-                            moveRecorder.getPageRecorder().getWritePageSet().add(interimPage.getRawPage().getPosition());
+                            interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                            pageRecorder.getWritePageSet().add(interim.getRawPage().getPosition());
                         }
                         else
                         {
-                            interimPage = pager.getPage(interim, new BlockPage(true));
+                            interim = pager.getPage(bestFit, new BlockPage(true));
                         }
                         
-                        interimPage.allocate(address, blockSize, dirtyPages);
+                        interim.allocate(address, blockSize, dirtyPages);
                         
                         if (blockSize < src.remaining() + BLOCK_HEADER_SIZE)
                         {
@@ -5370,18 +5375,18 @@ public class Pack
                                 throw new IllegalStateException();
                             }
                             copy.flip();
-                            interimPage.write(address, copy, dirtyPages);
+                            interim.write(address, copy, dirtyPages);
                         }
 
-                        position = new MovablePosition(moveRecorder.getMoveNode(), interimPage.getRawPage().getPosition());
+                        position = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
                         mapOfAddresses.put(address, position);
                     }
                     else
                     {
-                        interimPage = pager.getPage(position.getValue(pager), new BlockPage(true));
+                        interim = pager.getPage(position.getPosition(pager), new BlockPage(true));
                     }
         
-                    if (!interimPage.write(address, src, dirtyPages))
+                    if (!interim.write(address, src, dirtyPages))
                     {
                         throw new IllegalStateException();
                     }
@@ -5400,8 +5405,8 @@ public class Pack
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    MovablePosition position = mapOfAddresses.get(address);
-                    if (position == null)
+                    Movable movable = mapOfAddresses.get(address);
+                    if (movable == null)
                     {
                         AddressPage addresses = pager.getPage(address, new AddressPage());
                         long lastPosition = 0L;
@@ -5430,7 +5435,7 @@ public class Pack
                     }
                     else
                     {
-                        BlockPage blocks = pager.getPage(position.getValue(pager), new BlockPage(true));
+                        BlockPage blocks = pager.getPage(movable.getPosition(pager), new BlockPage(true));
                         blocks.read(address, bytes);
                     }
                 }
@@ -5459,13 +5464,109 @@ public class Pack
         {
             throw new UnsupportedOperationException();
         }
-
-        private long tryNewAddressPage(int count)
+        
+        private int getUserPageCount()
         {
-            SortedSet<Long> setOfAddressPages = new TreeSet<Long>();
+            long userPageSize = pager.getInterimBoundary().getPosition()
+                              - pager.getDataBoundary().getPosition();
+            return (int) (userPageSize / pager.getPageSize());
+        }
+        
+        private void tryExpandUser(MoveList listOfMoves, Commit commit, MoveLatch userMoves, int count)
+        {
+            // This invocation is to flush the move list for the current
+            // mutator. You may think that this is pointless, but it's
+            // not. It will ensure that the relocatable references are
+            // all up to date before we try to move.
+            
+            // If any of the pages we currently referenced are moving
+            // those moves will be complete when this call returns.
+            
+            listOfMoves.mutate(new Guarded()
+            {
+                public void run(List<MoveLatch> listOfMoveLatches)
+                {
+                }
+            });
+            
+            SortedSet<Long> setOfInUse = new TreeSet<Long>();
+
+            // Gather the interim pages that will become data pages, moving the
+            // data to interim boundary.
+            
+            gatherPages(count, setOfInUse, commit.getGatheredSet());
+            
+            // If we have interim pages in use, move them.
+        
+            if (setOfInUse.size() != 0)
+            {
+                appendToMoveList(setOfInUse, userMoves);
+                pager.getMoveList().add(userMoves);
+                listOfMoves.skip(userMoves);
+            }
+        }
+
+        private void allocateMirrors(Commit commit)
+        {
+            for (long position: commit.getInUseAddressSet())
+            {
+                BlockPage blocks = pager.getPage(position, new BlockPage(false));
+                BlockPage interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                allocPagesBySize.add(interim.getRawPage().getPosition(), blocks.getRemaining());
+                pageRecorder.getAllocationPageSet().add(interim.getRawPage().getPosition());
+                commit.getAddressMirrorMap().put(blocks.getRawPage().getPosition(), new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
+            }
+        }
+
+        private SortedSet<Long> tryNewAddressPage(MoveList listOfMoves, final Commit commit, int count)
+        {
+            final MoveLatch userMoves = new MoveLatch(false);
+            final SortedSet<Long> setOfGathered = new TreeSet<Long>();
+
+            pager.getExpandLock().lock();
+            try
+            {
+                // If there is enough or else we'll wait for there to
+                // be enough because an interim region expansion is ahead of
+                // us in the move this. The addresses will cause us to wait.
+                
+                int userPageCount = getUserPageCount();
+                if (userPageCount < count)
+                {
+                    // Now we can try to move the pages.
+                    tryExpandUser(listOfMoves,
+                                  commit,
+                                  userMoves,
+                                  count - userPageCount);
+                }
+            }
+            finally
+            {
+                pager.getExpandLock().unlock();
+            }
+            
+            if (userMoves.getNext() != null)
+            {
+                listOfMoves.mutate(new Guarded()
+                {
+                    @Override
+                    public void run(List<MoveLatch> listOfMoveLatches)
+                    {
+                        moveAndUnlatch(userMoves);
+                    }
+                });
+            }
+            
+            // Now we know we have enough user pages to accommodate our
+            // creation of address pages.
+            
+            // Some of those user  block pages may not yet exist. We are going to 
+            // have to wait until they exist before we do anything with
+            // with the block pages.
+
             for (int i = 0; i < count; i++)
             {
-                setOfAddressPages.add(pager.getDataBoundary().getPosition());
+                commit.getAddressSet().add(pager.getDataBoundary().getPosition());
                 pager.getDataBoundary().increment();
             }
 
@@ -5477,62 +5578,45 @@ public class Pack
             // take place before the operations written, so we write out our
             // address page initializations now.
             
-            for (long position: setOfAddressPages)
+            for (long position : commit.getAddressSet())
             {
                 journal.write(new CreateAddressPage(position));
             }
             
-                        // The set of address pages is a set of pages that need to be
-            // moved to new block pages. The data boundary has already been
-            // adjusted. The pages need to be moved.
-            
-            // We're going to create a set of address pages to move, which 
-            // is separate from the full set of address pages to initialize.
-            
-            final Set<Long> setOfInUseAddressPages = new HashSet<Long>(setOfAddressPages);
-            
-            // If the new address page is in the set of free block pages, the
+            // If the new address page is in the set of free block pages or if
+            // it is a block page we've just created the
             // page does not have to be moved.
-            if (setOfInUseAddressPages.size() != 0)
+
+            for (long position : commit.getAddressSet())
             {
-                Iterator<Long> positions = setOfInUseAddressPages.iterator();
-                while (positions.hasNext())
+                if (!setOfGathered.contains(position)
+                    && !pager.removeUserPageIfFree(position))
                 {
-                    long position = positions.next();
-                    if (pager.removeUserPageIfFree(position))
-                    {
-                        positions.remove();
-                    }
+                    commit.getInUseAddressSet().add(position);
                 }
             }
-
-            // Synapse: Deadlock if we mirror here. Must mirror while holding
-            // a shared lock on the move list and must release the mirrors
-            // before we release the lock. 
             
-            for (long position: setOfInUseAddressPages)
+            listOfMoves.mutate(new Guarded()
             {
-                // FIXME Also remove from by size map, and note somehow,
-                // if we are the ones to return the pages.
-                BlockPage blocks = pager.getPage(position, new BlockPage(false));
-                pager.pagesBySize.remove(blocks);
-                pager.removeUserPageIfFree(position);
-                allocPagesBySize.add(blocks);
-                pageRecorder.getAllocationPageSet().add(blocks.getRawPage().getPosition());
-            }
+                public void run(List<MoveLatch> listOfMoveLatches)
+                {
+                    allocateMirrors(commit);
+                }
+            });
 
-            tryCommit(setOfInUseAddressPages);
+            tryCommit(listOfMoves, commit);
             
-            return setOfAddressPages.first();
+            return commit.getAddressSet();
         }
 
-        public long newAddressPage()
+        public SortedSet<Long> newAddressPage()
         {
             pager.getCompactLock().readLock().lock();
             
             try
             {
-                return tryNewAddressPage(1); 
+                final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
+                return tryNewAddressPage(new MoveList(commit, listOfMoves), commit, 1); 
             }
             finally
             {
@@ -5570,60 +5654,57 @@ public class Pack
          * @param setOfGathered
          *            A set of the newly created data positions.
          */
-        private void gatherPages(Set<Long> setOfPages,
-            Set<Long> setOfMovingPages, Map<Long, MovablePosition> mapOfPages,
-            Set<Long> setOfInUse, Set<Long> setOfGathered, boolean addresses)
+        private void gatherPages(int count, Set<Long> setOfInUse, SortedSet<Long> setOfGathered)
         {
-            // For each page in the data page set.
-            while (setOfPages.size() != 0)
+            for (int i = 0; i < count; i++)
             {
                 // Use the page that is at the data to interim boundary.
-
-                long position = pager.getInterimBoundary().getPosition();
-
+                
+                long soonToBeCreatedUser = pager.getInterimBoundary().getPosition();
+                
                 // If it is not in the set of free pages it needs to be moved,
                 // so we add it to the set of in use.
-
-                if (!pager.removeInterimPageIfFree(position))
+                
+                if (!pager.removeInterimPageIfFree(soonToBeCreatedUser))
                 {
-                    setOfInUse.add(position);
+                    setOfInUse.add(soonToBeCreatedUser);
                 }
 
-                // Remove a page from the set of pages.
-
-                // TODO Sorted set? Then I don't have to create an iterator.
-
-                long from = setOfPages.iterator().next();
-                setOfPages.remove(from);
-
-                // Add the page to the set of pages used to track the pages
-                // referenced in regards to the move list. We are going to move
-                // this page and we are aware of this move. Negating the value
-                // tells us not adjust our own move list for the first move
-                // detected for this position.
-
-                // Synapse: What if this page is already in our set?
-
-                // This set is for data pages only. There is a separate set of
-                // referenced interim pages. We're okay if we're moving our own
-                // interim page.
+                // Synapse: What if this page is already in our set? That's
+                // fine because we'll first check to see if the page exists
+                // as a positive value, then we'll adjust the negative value.
                 
-                setOfMovingPages.add(-position);
-
-                // We associate the move with a skipping movable position that
-                // will skip the first move in the linked list of moves for this
-                // mutator.
-
-                mapOfPages.put(addresses ? from : from, new SkippingMovablePosition(moveRecorder.getMoveNode(), position));
-
-                // Add this page to the set of new data pages.
+                // However, I'm pretty sure that this is never the case, so
+                // I'm going to put an assertion here and think about it.
                 
-                setOfGathered.add(position);
+                if (pageRecorder.getUserPageSet().contains(soonToBeCreatedUser))
+                {
+                    throw new IllegalStateException();
+                }
 
+                setOfGathered.add(soonToBeCreatedUser);
+                
                 // Increment the data to interim boundary.
 
                 pager.getInterimBoundary().increment();
             }
+        }
+        
+        private Map<Long, Long> associate(Commit commit, SortedSet<Long> setOfUnassigned)
+        {
+            SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getGatheredSet());
+            Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
+            while (setOfUnassigned.size() != 0)
+            {
+                long interimAllocation = setOfUnassigned.first();
+                setOfUnassigned.remove(interimAllocation);
+                
+                long soonToBeCreatedUser = setOfGathered.first();
+                setOfGathered.remove(soonToBeCreatedUser);
+                
+                mapOfCopies.put(interimAllocation, soonToBeCreatedUser);
+            }
+            return mapOfCopies;
         }
         
         /**
@@ -5637,8 +5718,12 @@ public class Pack
             // Iterate through the linked list moving pages and releasing
             // latches.
 
-            while (head != null)
+            while (head.getNext() != null && !head.getNext().isTerminal())
             {
+                // Goto the next node.
+
+                head = head.getNext();
+                
                 // Get a relocatable page.
 
                 RelocatablePage page = pager.getPage(head.getMove().getFrom(), new RelocatablePage());
@@ -5665,34 +5750,15 @@ public class Pack
                 
                 pager.relocate(head.getMove().getFrom(), head.getMove().getTo());
 
+                pager.setPage(head.getMove().getFrom(), new BlockPage(true), dirtyPages, false);
+
                 // Now we can let anyone who is waiting on this interim page
                 // through.
                 
                 head.unlatch();
-                
-                // Onto the next page.
-                
-                head = head.getNext();
-            }  
-        }
-
-        private void addUserMovesToMoveList(Map<Long, MovablePosition> mapOfInUse, CommitMoveRecorder commit, MoveLatch head)
-        {
-            // For the set of pages in use, add the page to the move list.
-      
-            Iterator<Map.Entry<Long, MovablePosition>> inUse = mapOfInUse.entrySet().iterator();
-      
-            // Append of the rest of the moves and latches to the list.
-      
-            while (inUse.hasNext())
-            {
-                Map.Entry<Long, MovablePosition> entry = inUse.next();
-                long from = entry.getKey();
-                long to = entry.getValue().getValue(pager);
-                head.getLast().extend(new MoveLatch(new Move(from, to), true));
             }
         }
-
+        
         private void appendToMoveList(SortedSet<Long> setOfInUse, MoveLatch head)
         {
             // For the set of pages in use, add the page to the move list.
@@ -5709,210 +5775,118 @@ public class Pack
                 {
                     throw new IllegalStateException();
                 }
-                head.getLast().extend(new MoveLatch(new Move(from, to), true));
+                head.getLast().extend(new MoveLatch(new Move(from, to), false));
             }
         }
 
-        private void tryMove(CommitMoveRecorder commit, boolean addresses)
+        private void asssignAllocations(Commit commit, SortedSet<Long> setOfUnassigned)
         {
-            SortedSet<Long> setOfInUse = new TreeSet<Long>();
-            SortedSet<Long> setOfGathered = new TreeSet<Long>();
-        
-            // Gather the interim pages that will become data pages, moving the
-            // data to interim boundary.
+            Map<Long, Long> mapOfCopies = associate(commit, setOfUnassigned);
             
-            // FIXME This is all that needs to be guarded by the move lock.
-        
-            gatherPages(pageRecorder.getAllocationPageSet(),
-                        commit.getDataPageSet(),
-                        commit.getEmptyMap(),
-                        setOfInUse,
-                        setOfGathered, addresses);
-            
-            // FIXME We then flush here.
-            
-            // If we have interim pages in use, move them.
-        
-            if (setOfInUse.size() != 0)
+            for (Map.Entry<Long, Long> copy: mapOfCopies.entrySet())
             {
-                MoveLatch head = new MoveLatch(false);
-                
-                appendToMoveList(setOfInUse, head);
-                
-                if (head.getNext() != null)
-                {
-                    pager.getMoveList().add(head.getNext());
-                    
-                    // At this point, no one else is moving because we have a
-                    // monitor that only allows one mutator to move at once. Other
-                    // mutators may be referencing pages that are moved. Appending
-                    // to the move list blocked referencing mutators with a latch on
-                    // each move. We are clear to move the pages that are in use.
-                    
-                    moveAndUnlatch(head.getNext());
-                }
+                long iterimAllocation = copy.getKey();
+                long soonToBeCreatedUser = copy.getValue();
+
+                Movable movable = new Movable(moveNodeRecorder.getMoveNode(),
+                                              soonToBeCreatedUser,
+                                              0);
+                // Add the page to the set of pages used to track the pages
+                // referenced in regards to the move list. We are going to move
+                // this page and we are aware of this move. Negating the value
+                // tells us not adjust our own move list for the first move
+                // detected for this position.
+
+                // FIXME Only add as negative if we are going to observe the move.
+                pageRecorder.getUserPageSet().add(soonToBeCreatedUser);
+
+                commit.getEmptyMap().put(iterimAllocation, movable);
             }
+        }
         
-            // At this point we have guarded these pages in this way. No one
-            // else is able to move pages at all because we hold the move lock.
-            // We waited for everyone else to complete committing, allocating,
-            // writing, etc. by locking the move list exclusively. No one is
-            // going to be interested in the pages we've removed from the list
-            // of free interim pages.
-            
-            // For the pages we've moved, we've locked them. We've moved them in
-            // the pager and have copied them to their new place on disk. The
-            // copy may not have been forced yet, but that is not necessary
-            // since no one is in the midst of a commit.
-            
-            // Now we set the pages, not load them, creating a new blank and
-            // empty data page. This does not need to be forced, since the pages
-            // that we are initializing are interim pages that are now
-            // unreferenced, they will be cleaned up.
-            
-            // TODO The data to interim page boundary may be determined by
-            // scanning through the data pages. This will represent a rough
-            // area. Once we begin to see interim pages, we can still expect to
-            // see data pages. We need to scan all the way to the end of the
-            // file for block pages. Also, these new user pages will be empty
-            // and for the purpouses of recover can be ignored.
-        
-            // Synapse: And if we crash now? What about these phantom new pages?
-            // If we crash now, there are no journals queued because we've
-            // blocked out all committers. The first journal to initialize will
-            // force the new file. Until then things are wavy, but it's only
-            // interim pages and empty user pages that are in play.
-            
-            // Synapse: Why are creating the pages here when they are temporary?
-            // Can't we wait until we really need them? No. You would need to
-            // keep the fact that they are uninitialized around somehow, and
-            // write that into the journal. Just get it over with.
-        
-            for (long gathered: setOfGathered)
+        /**
+         * Add the map of user page moves to the move list. There is no need to
+         * record the move addresses in the user page set, since the only move
+         * of the page will be the move recored here.
+         * 
+         * @param commit
+         *            Commit map state and move recorder.
+         * @param addressMoves
+         *            The head of a linked list of move latches.
+         */
+        private void tryExpandAddress(Commit commit, MoveLatch addressMoves)
+        {
+            Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
+            for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
             {
-                pager.setPage(gathered, new BlockPage(false), dirtyPages, false);
+                long soonToBeCreatedAddress = entry.getKey();
+                long mirroredAsAllocation = entry.getValue().getPosition(pager);
+                
+                Movable movable = commit.getVacuumMap().get(mirroredAsAllocation);
+                if (movable == null)
+                {
+                    movable = commit.getEmptyMap().get(mirroredAsAllocation);
+                }
+                if (movable == null)
+                {
+                    throw new IllegalStateException();
+                }
+                
+                long newOrExistingUser = movable.getPosition(pager);
+                mapOfCopies.put(soonToBeCreatedAddress, newOrExistingUser);
+            }
+            
+            for (Map.Entry<Long, Long> entry: mapOfCopies.entrySet())
+            {
+                long soonToBeCreatedAddress = entry.getKey();
+                long newOrExistingUser = entry.getValue();
+                addressMoves.getLast().extend(new MoveLatch(new Move(soonToBeCreatedAddress, newOrExistingUser), true));
             }
         }
 
-        private void journalMirrorCommits(Map<Long, MovablePosition> mapOfCommits, Set<BlockPage> setOfMirroredBlockPages)
+        private void mirrorUsers(Commit commit, Set<BlockPage> setOfMirroredBlockPages)
         {
-            for (Map.Entry<Long, MovablePosition> entry: mapOfCommits.entrySet())
+            for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
             {
-                long from = entry.getKey();
-                long to = entry.getValue().getValue(pager);
-                BlockPage blocks = pager.getPage(from, new BlockPage(true));
-                Mirror mirror = blocks.mirror(pager, dirtyPages, true);
-                // FIXME BEFORE I DO THIS. I need to know that their is no dirty page?
-                // No. I'm copying everything.
-                // Ah! But someone might flush.
-                long mirrored = mirror.getMirrored().getRawPage().getPosition();
+                long soonToBeCreatedAddress = entry.getKey();
+                long allocation = entry.getValue().getPosition(pager);
                 
-                // FIXME Well at this point we've blocked everyone by virtue
-                // of the move list, and the writers by virtue of mirroring.
-                
-                // Now, when others enter, they will adjust their move lists.
-                // When writers resume, they will fail.
-                // If there are any unflushed writes, we have copied them
-                // with the mirror.
-                
-                // What if someone writes before the mirror? But, we never
-                // get to commit? Regardless, they could flush their 
-                // write page. Or if we invalidate it, we could crash before
-                // reaching commit.
-                
-                // Ah, can't we simply add this page to our dirty page map?
-                // Then it gets flushed, if it's dirty according to itself,
-                // before we begin destroying it.
-                
-                // In recovery, we will have to be run first, addresses are,
-                // so that we can put things in place. The write will
-                // find the correct place through addressing.
-                
-                // FIXME Wait does it matter? Someone else is committing. We'll
-                // capture some of their commit. We'll replay it if we get there,
-                // if we don't get there we won't. Ah, it doesn't matter for
-                // playback at all, only for now, while processes are live,
-                // we don't want the other thread to mistakenly flush that 
-                // source page, so we'll force it before we begin to write.
-                
-                for (long address: mirror.getMirrored().getAddresses())
+                Movable movable = commit.getVacuumMap().get(allocation);
+                if (movable == null)
                 {
-                    journal.write(new Commit(address, mirrored, to));
+                    movable = commit.getEmptyMap().get(allocation);
                 }
+                if (movable == null)
+                {
+                    throw new IllegalStateException();
+                }
+                
+                BlockPage mirrored = pager.getPage(allocation, new BlockPage(false));
+                
+                BlockPage blocks = pager.getPage(soonToBeCreatedAddress, new BlockPage(true));
+                blocks.mirror(pager, mirrored, true, dirtyPages);
 
-                dirtyPages.add(blocks.getRawPage());
                 setOfMirroredBlockPages.add(blocks);
             }
         }
 
-        private void journalCommits(Map<Long, MovablePosition> mapOfCommits)
+        private void journalCommits(Map<Long, Movable> mapOfCommits)
         {
-            for (Map.Entry<Long, MovablePosition> entry: mapOfCommits.entrySet())
+            for (Map.Entry<Long, Movable> entry: mapOfCommits.entrySet())
             {
-                BlockPage blocks = pager.getPage(entry.getKey(), new BlockPage(true));
-                for (long address: blocks.getAddresses())
+                BlockPage interim = pager.getPage(entry.getKey(), new BlockPage(true));
+                for (long address: interim.getAddresses())
                 {
-                    journal.write(new Commit(address, entry.getKey(), entry.getValue().getValue(pager)));
+                    journal.write(new Copy(address, entry.getKey(), entry.getValue().getPosition(pager)));
                 }
             }
         }
 
-        private void tryCommit(final Set<Long> setOfInUseAddressPages)
+        private void tryCommit(MoveList listOfMoves, final Commit commit)
         {
-            final CommitMoveRecorder commit = new CommitMoveRecorder(pageRecorder, journal, moveRecorder.getMoveNode());
+            final SortedSet<Long> setOfUnassigned = new TreeSet<Long>(pageRecorder.getAllocationPageSet());
 
-            // Moving address pages is like allocation pages. Allocation pages
-            // can cause a move of interim pages because allocation can consume
-            // more space, while writes and frees do not.
-
-            // A commit does not contain both new address pages and new
-            // allocation pages. We're doing one or the other, but using the
-            // same ungangly method since the thoughts are all here for now. It
-            // will be easier to split this out a bit later.
-
-            // Essentially, the address region expansion is similar to the user
-            // region expansion. We are doing the same thing. We are copying a
-            // block page into the user region, but from where user region used
-            // to be. We commit the existing data pages over to the user region
-            // and they update the address pages as if it were an ordinary
-            // commit. After we commit the transaction, we can proceed to build
-            // the address pages in memory, only writing them out at the next
-            // commit. We cannot destroy it as part of the ...
-            
-            // Moving back is worse then. Too confusing.
-
-            // FIXME None of these rebuilds are actually using addressing in the
-            // addressing tables. Only assigning.
-
-            // FIXME Then recovery is try for address based recovery, but then
-            // try to run journals, then rebuild address table by running any
-            // journals first. Wanted to check the checksums of the block pages,
-            // though, wanted to know that they were good.
-
-            // FIXME Than read through the journals and see which block pages
-            // they are touching? They will rebuild the block pages correctly at
-            // least, and then we can run thourgh the block pages and rebuild
-            // addressing.
-
-            // FIXME If there are no journals, then address recovery must be
-            // good.
-
-            // FIXME Is there a difference between address journals and block
-            // journals? If address journals are preseent, than we can expect
-            // that things are awkward in addressing. We can replay those first,
-            // because they are aggressive.
-
-            // The alternative is to copy the data page into the interim area
-            // and work our way out from there, but we're going to do it this
-            // way for now.
-
-            // For recovery, we are going to have to note that there may be
-            // duplicate pages. They will checksum correctly, but the addresses
-            // will point to the wrong place. This will cause us to rebuild the
-            // addressing. Bad data pages will be ignored. Earlier data pages
-            // will have moved 
-
-            if (pageRecorder.getAllocationPageSet().size() != 0)
+            if (setOfUnassigned.size() != 0)
             {
                 // First we mate the interim data pages with 
                 listOfMoves.mutate(new Guarded()
@@ -5922,42 +5896,33 @@ public class Pack
                         // Consolidate pages by using existing, partially filled
                         // pages to store our new block allocations.
         
-                        pager.pagesBySize.join(allocPagesBySize, commit.getDataPageSet(), commit.getVacuumMap(), moveRecorder.getMoveNode());
-                        pageRecorder.getAllocationPageSet().removeAll(commit.getVacuumMap().keySet());
+                        pager.pagesBySize.join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getVacuumMap(), moveNodeRecorder.getMoveNode());
+                        setOfUnassigned.removeAll(commit.getVacuumMap().keySet());
                         
                         // Use free data pages to store the interim pages whose
                         // blocks would not fit on an existing page.
                         
-                        pager.newUserPages(pageRecorder.getAllocationPageSet(), commit.getDataPageSet(), commit.getEmptyMap(), moveRecorder.getMoveNode());
+                        pager.newUserPages(setOfUnassigned, pageRecorder.getUserPageSet(), commit.getEmptyMap(), moveNodeRecorder.getMoveNode());
                     }
                 });
             }
         
-            final boolean addresses = setOfInUseAddressPages.size() != 0;
-        
             // If more pages are needed, then we need to extend the user area of
             // the file.
+            
+            final MoveLatch userMoves = new MoveLatch(false);
         
-            if (pageRecorder.getAllocationPageSet().size() != 0)
+            if (setOfUnassigned.size() != 0)
             {
                 pager.getExpandLock().lock();
                 try
                 {
-                    // This invocation is to flush the move list for the current
-                    // mutator. You may think that this is pointless, but it's
-                    // not. It will ensure that the relocatable references are
-                    // all up to date before we try to move.
-        
-                    new MoveList(commit, listOfMoves).mutate(new Guarded()
-                    {
-                        public void run(List<MoveLatch> listOfMoveLatches)
-                        {
-                        }
-                    });
-        
                     // Now we can try to move the pages.
-        
-                    tryMove(commit, addresses);
+                    tryExpandUser(listOfMoves,
+                                  commit,
+                                  userMoves,
+                                  setOfUnassigned.size());
+                    asssignAllocations(commit, setOfUnassigned);
                 }
                 finally
                 {
@@ -5965,24 +5930,36 @@ public class Pack
                 }
             }
             
-            MoveLatch addressMoves = new MoveLatch(false);
-  
-            if (addresses)
+            if (userMoves.getNext() != null)
             {
-                addUserMovesToMoveList(commit.getVacuumMap(), commit, addressMoves);
-                addUserMovesToMoveList(commit.getEmptyMap(), commit, addressMoves);
+                listOfMoves.mutate(new Guarded()
+                {
+                    @Override
+                    public void run(List<MoveLatch> listOfMoveLatches)
+                    {
+                        moveAndUnlatch(userMoves);
+                    }
+                });
             }
             
-            // FIXME Work what you know to be true into this strategy.
-            // You know that you'll only expanding here, that compacting locks
-            // everyone else out. You do not have to track so viciously. 
+            final MoveLatch addressMoves = new MoveLatch(true);
             
-            // FIXME The address moves might even deadlock, but for the 
-            // fact that Lock is reentrant. But, there seems to be no way
-            // for someone else to move those user pages. Only one mutator
-            // at a time may expand the addresses.
-            
-            new MoveList(commit, listOfMoves).mutate(new Guarded()
+            if (commit.isAddressExpansion())
+            {
+                listOfMoves.mutate(new Guarded()
+                {
+                    @Override
+                    public void run(List<MoveLatch> listOfMoveLatches)
+                    {
+                        tryExpandAddress(commit,addressMoves);
+                    }
+                });
+
+                pager.getMoveList().add(addressMoves);
+                listOfMoves.skip(addressMoves);
+            }
+
+            listOfMoves.mutate(new Guarded()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
@@ -6003,10 +5980,10 @@ public class Pack
                     // vacuum in recovery as well?
                     // FIXME No. Just make addresses go first. Negative journal.
 
-                    for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
+                    for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                     {
-                        BlockPage page = pager.getPage(entry.getValue().getValue(pager), new BlockPage(false));
-                        Mirror mirror = page.mirror(pager, dirtyPages, false);
+                        BlockPage page = pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false));
+                        Mirror mirror = page.mirror(pager, null, false, dirtyPages);
                         if (mirror != null)
                         {
                             journal.write(new AddVacuum(mirror, page));
@@ -6035,18 +6012,12 @@ public class Pack
                     
                     journal.write(new Terminate());
                     
-                    if (addresses)
-                    {
-                        journalMirrorCommits(commit.getVacuumMap(), setOfMirroredBlockPages);
-                        journalMirrorCommits(commit.getEmptyMap(), setOfMirroredBlockPages);
-                    }
-                    else
-                    {
-                        journalCommits(commit.getVacuumMap());
-                        journalCommits(commit.getEmptyMap());
-                    }
+                    mirrorUsers(commit, setOfMirroredBlockPages);
+
+                    journalCommits(commit.getVacuumMap());
+                    journalCommits(commit.getEmptyMap());
                    
-                    for (long position: commit.getPageRecorder().getWritePageSet())
+                    for (long position: pageRecorder.getWritePageSet())
                     {
                         BlockPage page = pager.getPage(position, new BlockPage(true));
                         for (long address: page.getAddresses())
@@ -6056,7 +6027,7 @@ public class Pack
                     }
         
                     // Create the list of moves.
-                    MoveNode iterator = moveRecorder.getFirstMoveNode();
+                    MoveNode iterator = moveNodeRecorder.getFirstMoveNode();
                     while (iterator.getNext() != null)
                     {
                         iterator = iterator.getNext();
@@ -6066,7 +6037,7 @@ public class Pack
                     // Need to use the entire list of moves since the start
                     // of the journal to determine the actual journal start.
                     
-                    long journalStart = journal.getJournalStart().getValue(pager);
+                    long journalStart = journal.getJournalStart().getPosition(pager);
                     journal.write(new NextOperation(journalStart));
         
                     // TODO Abstract journal replay out, so it can be used
@@ -6084,7 +6055,7 @@ public class Pack
                     // First do the vacuums.
                     player.vacuum();
                     
-                    if (!addresses)
+                    if (!commit.isAddressExpansion())
                     {
                         setOfMirroredBlockPages.clear();
                     }
@@ -6094,17 +6065,17 @@ public class Pack
 
                     setOfMirroredBlockPages.clear();
                     
-                    if (!addresses)
+                    if (!commit.isAddressExpansion())
                     {
-                        for (Map.Entry<Long, MovablePosition> entry: commit.getVacuumMap().entrySet())
+                        for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                         {
                             pager.returnInterimPage(entry.getKey());
 //                            pager.returnUserPage(pager.getPage(entry.getValue().getValue(pager), new BlockPage(false)));
                         }
-                        for (Map.Entry<Long, MovablePosition> entry: commit.getEmptyMap().entrySet())
+                        for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
                         {
                             pager.returnInterimPage(entry.getKey());
-                            pager.returnUserPage(pager.getPage(entry.getValue().getValue(pager), new BlockPage(false)));
+                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
                         }
                     }
                     else
@@ -6112,42 +6083,109 @@ public class Pack
                         // FIXME Do I return user pages here?
                     }
                     
-                    for (long position: commit.getPageRecorder().getJournalPageSet())
+                    for (long position: pageRecorder.getJournalPageSet())
                     {
                         pager.returnInterimPage(position);
                     }
                     
-                    for (long position: commit.getPageRecorder().getWritePageSet())
+                    for (long position: pageRecorder.getWritePageSet())
                     {
                         pager.returnInterimPage(position);
                     }
                 }
             });
             
-            while (addressMoves.getNext() != null)
+            MoveLatch iterator = addressMoves;
+            while (iterator.getNext() != null && !iterator.getNext().isTerminal())
             {
-                addressMoves.getNext().unlatch();
-                addressMoves = addressMoves.getNext();
+                iterator.getNext().unlatch();
+                iterator = iterator.getNext();
             }
         }
 
         public void commit()
         {
-            // TODO I believe that compacting should be a separate lock that
-            // should lock the entire file exclusively and block any other moves
-            // or commits. I'm working under the assumption that the positions
-            // do not move backwards. Compact lock may only need to envelop the
-            // exiting move lock. 
-        
             pager.getCompactLock().readLock().lock();
             try
             {
-                tryCommit(new HashSet<Long>());
+                final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
+                tryCommit(new MoveList(commit, listOfMoves), commit);
             }
             finally
             {
                 pager.getCompactLock().readLock().unlock();
             }
+        }
+    }
+    
+    final static class Commit
+    extends CompositeMoveRecorder
+    {
+        private final MapRecorder mapOfVaccums;
+        
+        private final MapRecorder mapOfEmpties;
+        
+        private final SortedSet<Long> setOfAddressPages;
+        
+        private final SortedSet<Long> setOfGatheredPages;
+        
+        private final SortedSet<Long> setOfInUseAddressPages;
+        
+        private final SortedMap<Long, Movable> mapOfAddressMirrors;
+        
+        public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
+        {
+            this.setOfAddressPages = new TreeSet<Long>();
+            this.setOfGatheredPages = new TreeSet<Long>();
+            this.setOfInUseAddressPages = new TreeSet<Long>();
+            this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
+            add(pageRecorder);
+            add(mapOfVaccums = new MapRecorder());
+            add(mapOfEmpties = new MapRecorder());
+            add(moveNodeRecorder);
+            add(new JournalRecorder(journal));
+        }
+        
+        @Override
+        public boolean involves(long position)
+        {
+            return setOfAddressPages.contains(position)
+                || super.involves(position);
+        }
+        
+        public boolean isAddressExpansion()
+        {
+            return setOfAddressPages.size() != 0;
+        }
+
+        public SortedSet<Long> getAddressSet()
+        {
+            return setOfAddressPages;
+        }
+        
+        public SortedSet<Long> getGatheredSet()
+        {
+            return setOfGatheredPages;
+        }
+        
+        public SortedMap<Long, Movable> getAddressMirrorMap()
+        {
+            return mapOfAddressMirrors;
+        }
+        
+        public SortedSet<Long> getInUseAddressSet()
+        {
+            return setOfInUseAddressPages;
+        }
+        
+        public SortedMap<Long, Movable> getVacuumMap()
+        {
+            return mapOfVaccums;
+        }
+        
+        public SortedMap<Long, Movable> getEmptyMap()
+        {
+            return mapOfEmpties;
         }
     }
 }
