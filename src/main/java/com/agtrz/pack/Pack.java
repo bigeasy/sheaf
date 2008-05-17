@@ -118,7 +118,6 @@ public class Pack
     
     private final static int COUNT_MASK = 0xA0000000;
     
-
     final Pager pager;
     
     /**
@@ -141,11 +140,11 @@ public class Pack
     {
         final PageRecorder pageRecorder = new PageRecorder();
         final MoveList listOfMoves = new MoveList(pageRecorder, pager.getMoveList());
-        return listOfMoves.mutate(new Returnable<Mutator>()
+        return listOfMoves.mutate(new GuardedReturnable<Mutator>()
         {
-            public Mutator run()
+            public Mutator run(List<MoveLatch> listOfMoveLatches)
             {
-                MoveNode moveNode = new MoveNode(new Move(0, 0));
+                MoveNode moveNode = new MoveNode();
                 DirtyPageMap dirtyPages = new DirtyPageMap(pager, 16);
                 Journal journal = new Journal(pager, pageRecorder, moveNode, dirtyPages);
                 return new Mutator(pager, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
@@ -1400,11 +1399,11 @@ public class Pack
                 {
                     final PageRecorder pageRecorder = new PageRecorder();
                     final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
-                    Mutator mutator = listOfMoves.mutate(new Returnable<Mutator>()
+                    Mutator mutator = listOfMoves.mutate(new GuardedReturnable<Mutator>()
                     {
-                        public Mutator run()
+                        public Mutator run(List<MoveLatch> listOfMoveLatches)
                         {
-                            MoveNode moveNode = new MoveNode(new Move(0, 0));
+                            MoveNode moveNode = new MoveNode();
                             DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
                             Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
                             return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
@@ -2747,12 +2746,15 @@ public class Pack
         
         public int getSize(long address)
         {
-            ByteBuffer bytes = getRawPage().getByteBuffer();
-            if (seek(bytes, address))
+            synchronized (getRawPage())
             {
-                return getBlockSize(bytes);
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seek(bytes, address))
+                {
+                    return getBlockSize(bytes);
+                }
             }
-            throw new IllegalStateException();
+            throw new IllegalArgumentException();
         }
 
         public List<Long> getAddresses()
@@ -2789,6 +2791,11 @@ public class Pack
          */
         public void allocate(long address, int blockSize, DirtyPageMap dirtyPages)
         {
+            if (blockSize < BLOCK_HEADER_SIZE)
+            {
+                throw new IllegalArgumentException();
+            }
+
             synchronized (getRawPage())
             {
                 if (mirror != 0)
@@ -2921,6 +2928,8 @@ public class Pack
             }
         }
 
+        // FIXME Why is this boolean. We should never ask for an address that 
+        // does not exist.
         public boolean read(long address, ByteBuffer dst)
         {
             synchronized (getRawPage())
@@ -3177,17 +3186,6 @@ public class Pack
                     bytes.limit(bytes.capacity());
                 }
             }
-        }
-
-        public Page recover(RawPage rawPage, Recovery recovery)
-        {
-            if (verifyChecksum(rawPage, recovery))
-            {
-                load(rawPage);
-                return this;
-            }
-            
-            return null;
         }
 
         public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
@@ -3975,7 +3973,7 @@ public class Pack
         public MoveList()
         {
             this.recorder = new NullMoveRecorder();
-            this.headOfMoves = new MoveLatch(new Move(0, 0), null);
+            this.headOfMoves = new MoveLatch(false);
             this.readWriteLock = new ReentrantReadWriteLock();
         }
 
@@ -3986,7 +3984,7 @@ public class Pack
             this.readWriteLock = listOfMoves.readWriteLock;
         }
         
-        public void add(MoveLatch move)
+        public void add(MoveLatch next)
         {
             readWriteLock.writeLock().lock();
             try
@@ -3996,7 +3994,7 @@ public class Pack
                 {
                     iterator = iterator.getNext();
                 }
-                iterator.extend(move);
+                iterator.extend(next);
                 
                 headOfMoves = iterator;
             }
@@ -4006,69 +4004,126 @@ public class Pack
             }
         }
         
-        public <T> T mutate(Returnable<T> returnable)
+        public <T> T mutate(final GuardedReturnable<T> guarded)
         {
-            for (;;)
+            boolean wasUser = false;
+            boolean wasLocked = false;
+            List<MoveLatch> listOfMoveLatches = new ArrayList<MoveLatch>();
+            readWriteLock.readLock().lock();
+            try
             {
-                readWriteLock.readLock().lock();
-                try
+                for (;;)
                 {
                     if (headOfMoves.next == null)
                     {
-                        return returnable.run();
+                        return guarded.run(listOfMoveLatches);
                     }
                     else
                     {
-                        headOfMoves = headOfMoves.next;
-                        if (recorder.contains(headOfMoves.getMove().getFrom()))
-                        {
-                            headOfMoves.getLock().lock();
-                            headOfMoves.getLock().unlock();
-                            recorder.record(headOfMoves.getMove());
-                        }
+                        wasLocked = advance(wasUser, wasLocked, listOfMoveLatches);
                     }
                 }
-                finally
-                {
-                    readWriteLock.readLock().unlock();
-                }
+            }
+            finally
+            {
+                readWriteLock.readLock().unlock();
             }
         }
         
-        public void mutate(Runnable runnable)
+        public void mutate(Guarded guarded)
         {
-            for (;;)
+            boolean wasUser = false;
+            boolean wasLocked = false;
+            List<MoveLatch> listOfMoveLatches = new ArrayList<MoveLatch>();
+            readWriteLock.readLock().lock();
+            try
             {
-                readWriteLock.readLock().lock();
-                try
+                for (;;)
                 {
                     if (headOfMoves.next == null)
                     {
-                        runnable.run();
+                        guarded.run(listOfMoveLatches);
                         break;
                     }
                     else
                     {
-                        headOfMoves = headOfMoves.next;
-                        if (recorder.contains(headOfMoves.getMove().getFrom()))
-                        {
-                            headOfMoves.getLock().lock();
-                            headOfMoves.getLock().unlock();
-                            recorder.record(headOfMoves.getMove());
-                        }
+                        wasLocked = advance(wasUser, wasLocked, listOfMoveLatches);
                     }
                 }
-                finally
+            }
+            finally
+            {
+                readWriteLock.readLock().unlock();
+            }
+        }
+
+        private boolean advance(boolean wasUser, boolean wasLocked, List<MoveLatch> listOfMoveLatches)
+        {
+            headOfMoves = headOfMoves.next;
+            if (headOfMoves.isTerminal())
+            {
+                if (headOfMoves.isUser())
                 {
-                    readWriteLock.readLock().unlock();
+                    if (wasLocked)
+                    {
+                        throw new IllegalStateException();
+                    }
+                }
+                listOfMoveLatches.clear();
+                wasUser = true;
+            }
+            else
+            {
+                wasUser = false;
+            }
+            if (recorder.contains(headOfMoves.getMove().getFrom()))
+            {
+                if (headOfMoves.enter())
+                {
+                    if (headOfMoves.isUser())
+                    {
+                        wasLocked = true;
+                    }
+                }
+                recorder.record(headOfMoves.getMove());
+            }
+            else
+            {
+                if (headOfMoves.isUser())
+                {
+                    if (headOfMoves.isLocked())
+                    {
+                        wasLocked = true;
+                    }
+                    listOfMoveLatches.add(headOfMoves);
                 }
             }
+            return wasLocked;
         }
     }
     
-    interface Returnable<T>
+    static class Guarded
     {
-        public T run();
+        public void run(List<MoveLatch> listOfMoveLatches)
+        {
+        }
+        
+        public void run(BlockPage blocks)
+        {
+        }
+    }
+    
+    static class GuardedReturnable<T>
+    {
+        public T run(List<MoveLatch> listOfMoveLatches)
+        {
+            return null;
+        }
+        
+        public T run(BlockPage blocks)
+        {
+            return null;
+        }
     }
    
     static final class Move
@@ -4079,8 +4134,10 @@ public class Pack
         
         public Move(long from, long to)
         {
-            assert from != to || from == 0;
-            assert (from == 0 && to == 0) || !(from == 0 || to == 0);
+            if (from == to || from == 0 || to == 0)
+            {
+                throw new IllegalArgumentException();
+            }
 
             this.from = from;
             this.to = to;
@@ -4099,25 +4156,67 @@ public class Pack
 
     static final class MoveLatch
     {
-        private Move move;
+        private final boolean terminal;
+        
+        private final boolean user;
 
-        private Lock lock;
+        private final Move move;
+
+        private boolean locked;
         
         private MoveLatch next;
-
-        public MoveLatch(Move move, MoveLatch next)
+        
+        public MoveLatch(boolean user)
         {
-            Lock lock = new ReentrantLock();
-            lock.lock();
-            
-            this.move = move;
-            this.lock = lock;
-            this.next = next;
+            this.terminal = true;
+            this.user = user;
+            this.locked = false;
+            this.move = null;
         }
 
-        public Lock getLock()
+        public MoveLatch(Move move, boolean user)
         {
-            return lock;
+            this.move = move;
+            this.locked = true;
+            this.user = user;
+            this.terminal = false;
+        }
+
+        public boolean isTerminal()
+        {
+            return terminal;
+        }
+        
+        public boolean isUser()
+        {
+            return user;
+        }
+
+        public synchronized boolean isLocked()
+        {
+            return locked;
+        }
+        
+        public synchronized void unlatch()
+        {
+            locked = false;
+            notifyAll();
+        }
+        
+        public synchronized boolean enter()
+        {
+            boolean wasLocked = locked;
+            while (locked)
+            {
+                try
+                {
+                    wait();
+                }
+                catch (InterruptedException e)
+                {
+                }
+            }
+            return wasLocked;
         }
 
         public Move getMove()
@@ -4140,7 +4239,7 @@ public class Pack
         public MoveLatch getLast()
         {
             MoveLatch iterator = this;
-            while (iterator.next == null)
+            while (iterator.next != null)
             {
                 iterator = iterator.next;
             }
@@ -4154,6 +4253,11 @@ public class Pack
         
         private MoveNode next;
         
+        public MoveNode()
+        {
+            this.move = null;
+        }
+ 
         public MoveNode(Move move)
         {
             this.move = move;
@@ -4933,13 +5037,16 @@ public class Pack
     {
         private long address;
         
+        private long position;
+        
         public Free()
         {
         }
 
-        public Free(long address)
+        public Free(long address, long position)
         {
             this.address = address;
+            this.position = position;
         }
 
         @Override
@@ -4947,39 +5054,15 @@ public class Pack
         {
             Pager pager = player.getPager();
             AddressPage addresses = pager.getPage(address, new AddressPage());
-            long lastPosition = 0L;
-            for (;;)
-            {
-                long actual = addresses.dereference(address);
-                if (actual == 0L || actual == Long.MAX_VALUE)
-                {
-                    throw new Danger(ERROR_READ_FREE_ADDRESS);
-                }
-
-                if (actual != lastPosition)
-                {
-                    BlockPage blocks = pager.getPage(actual, new BlockPage(false));
-                    synchronized (blocks.getRawPage())
-                    {
-                        if (blocks.free(address, player.getDirtyPages()))
-                        {
-                            addresses.free(address, player.getDirtyPages());
-                            break;
-                        }
-                    }
-                    lastPosition = actual;
-                }
-                else
-                {
-                    throw new IllegalStateException();
-                }
-            }
+            addresses.free(address, player.getDirtyPages());
+            BlockPage blocks = pager.getPage(player.adjust(position), new BlockPage(false));
+            blocks.free(address, player.getDirtyPages());
         }
 
         @Override
         public int length()
         {
-            return FLAG_SIZE + ADDRESS_SIZE;
+            return FLAG_SIZE + ADDRESS_SIZE + POSITION_SIZE;
         }
 
         @Override
@@ -4987,12 +5070,14 @@ public class Pack
         {
             bytes.putShort(FREE);
             bytes.putLong(address);
+            bytes.putLong(position);
         }
 
         @Override
         public void read(ByteBuffer bytes)
         {
             address = bytes.getLong();
+            position = bytes.getLong();
         }
     }
 
@@ -5116,7 +5201,7 @@ public class Pack
 
     public final static class Mutator
     {
-        private final Pager pager;
+        final Pager pager;
         
         private final Journal journal;
 
@@ -5182,9 +5267,9 @@ public class Pack
                     
             final int fullSize = blockSize + BLOCK_HEADER_SIZE;
            
-            return listOfMoves.mutate(new Returnable<Long>()
+            return listOfMoves.mutate(new GuardedReturnable<Long>()
             {
-                public Long run()
+                public Long run(List<MoveLatch> listOfMoves)
                 {
                     
                     // This is unimplemented: Creating a linked list of blocks
@@ -5226,55 +5311,44 @@ public class Pack
             });
         }
 
+        private BlockPage dereference(long address, List<MoveLatch> listOfMoveLatches)
+        {
+            AddressPage addresses = pager.getPage(address, new AddressPage());
+
+            long position = addresses.dereference(address);
+            if (position == 0L || position == Long.MAX_VALUE)
+            {
+                throw new Danger(ERROR_FREED_FREE_ADDRESS);
+            }
+            
+            for (MoveLatch latch: listOfMoveLatches)
+            {
+                if (latch.getMove().getFrom() == position)
+                {
+                    latch.enter();
+                    position = latch.getMove().getTo();
+                }
+            }
+        
+            return pager.getPage(position, new BlockPage(false));
+        }
+
         public void write(final long address, final ByteBuffer src)
         {
-            listOfMoves.mutate(new Runnable()
+            listOfMoves.mutate(new Guarded()
             {
-                public void run()
+                public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     // For now, the first test will write to an allocated block, so
                     // the write buffer is already there.
-                    ByteBuffer copy = null;
                     BlockPage interimPage = null;
                     MovablePosition position = mapOfAddresses.get(address);
                     if (position == null)
                     {
-                        int blockSize = 0;
-                        AddressPage addresses = pager.getPage(address, new AddressPage());
-                        long lastPosition = 0L;
-                        for (;;)
-                        {
-                            long actual = addresses.dereference(address);
-                            if (actual == 0L || actual == Long.MAX_VALUE)
-                            {
-                                throw new Danger(ERROR_READ_FREE_ADDRESS);
-                            }
-
-                            if (actual != lastPosition)
-                            {
-                                BlockPage blocks = pager.getPage(actual, new BlockPage(false));
-                                synchronized (blocks.getRawPage())
-                                {
-                                    if (blocks.contains(address))
-                                    {
-                                        pageRecorder.getUserPageSet().add(actual);
-                                        blockSize = blocks.getSize(address);
-                                        if (blockSize < src.remaining() + BLOCK_HEADER_SIZE)
-                                        {
-                                            copy = ByteBuffer.allocateDirect(blockSize - BLOCK_HEADER_SIZE);
-                                            blocks.read(address, copy);
-                                        }
-                                        break;
-                                    }
-                                }
-                                lastPosition = actual;
-                            }
-                            else
-                            {
-                                throw new IllegalStateException();
-                            }
-                        }
-                        
+                        BlockPage blocks = dereference(address, listOfMoveLatches);
+                        int blockSize = blocks.getSize(address);
+                       
+                        // FIXME Rename variables.
                         long interim = writePagesBySize.bestFit(blockSize);
                         if (interim == 0L)
                         {
@@ -5288,12 +5362,17 @@ public class Pack
                         
                         interimPage.allocate(address, blockSize, dirtyPages);
                         
-                        if (copy != null)
+                        if (blockSize < src.remaining() + BLOCK_HEADER_SIZE)
                         {
+                            ByteBuffer copy = ByteBuffer.allocateDirect(blockSize - BLOCK_HEADER_SIZE);
+                            if (!blocks.read(address, copy))
+                            {
+                                throw new IllegalStateException();
+                            }
                             copy.flip();
                             interimPage.write(address, copy, dirtyPages);
                         }
-                        
+
                         position = new MovablePosition(moveRecorder.getMoveNode(), interimPage.getRawPage().getPosition());
                         mapOfAddresses.put(address, position);
                     }
@@ -5317,9 +5396,9 @@ public class Pack
 
         public void read(final long address, final ByteBuffer bytes)
         {
-            listOfMoves.mutate(new Runnable()
+            listOfMoves.mutate(new Guarded()
             {
-                public void run()
+                public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     MovablePosition position = mapOfAddresses.get(address);
                     if (position == null)
@@ -5364,38 +5443,14 @@ public class Pack
             {
                 throw new Danger(ERROR_FREED_STATIC_ADDRESS);
             }
-            listOfMoves.mutate(new Runnable()
+            listOfMoves.mutate(new Guarded()
             {
-                public void run()
+                public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    AddressPage addressPage = pager.getPage(address, new AddressPage());
-                    long lastPosition = 0L;
-                    for (;;)
-                    {
-                        long actual = addressPage.dereference(address);
-                        if (actual == 0L || actual == Long.MAX_VALUE)
-                        {
-                            throw new Danger(ERROR_FREED_FREE_ADDRESS);
-                        }
-
-                        if (actual != lastPosition)
-                        {
-                            BlockPage page = pager.getPage(actual, new BlockPage(false));
-                            synchronized (page.getRawPage())
-                            {
-                                if (page.contains(address))
-                                {
-                                    journal.write(new Free(address));
-                                    break;
-                                }
-                            }
-                            lastPosition = actual;
-                        }
-                        else
-                        {
-                            throw new IllegalStateException();
-                        }
-                    }
+                    BlockPage blocks = dereference(address, listOfMoveLatches);
+                    long position = blocks.getRawPage().getPosition();
+                    journal.write(new Free(address, position));
+                    pageRecorder.getUserPageSet().add(position);
                 }
             });
         }
@@ -5559,7 +5614,7 @@ public class Pack
                 // will skip the first move in the linked list of moves for this
                 // mutator.
 
-                mapOfPages.put(addresses ? -from : from, new SkippingMovablePosition(moveRecorder.getMoveNode(), position));
+                mapOfPages.put(addresses ? from : from, new SkippingMovablePosition(moveRecorder.getMoveNode(), position));
 
                 // Add this page to the set of new data pages.
                 
@@ -5613,7 +5668,7 @@ public class Pack
                 // Now we can let anyone who is waiting on this interim page
                 // through.
                 
-                head.getLock().unlock();
+                head.unlatch();
                 
                 // Onto the next page.
                 
@@ -5621,36 +5676,26 @@ public class Pack
             }  
         }
 
-        private MoveLatch appendToMoveList(Map<Long, MovablePosition> mapOfInUse, CommitMoveRecorder commit, MoveLatch head)
+        private void addUserMovesToMoveList(Map<Long, MovablePosition> mapOfInUse, CommitMoveRecorder commit, MoveLatch head)
         {
             // For the set of pages in use, add the page to the move list.
       
             Iterator<Map.Entry<Long, MovablePosition>> inUse = mapOfInUse.entrySet().iterator();
       
-            // Append of the rest of the moves and latches to the list. 
+            // Append of the rest of the moves and latches to the list.
       
             while (inUse.hasNext())
             {
                 Map.Entry<Long, MovablePosition> entry = inUse.next();
-                long from = - entry.getKey();
+                long from = entry.getKey();
                 long to = entry.getValue().getValue(pager);
-                head = new MoveLatch(new Move(from, to), head);
+                head.getLast().extend(new MoveLatch(new Move(from, to), true));
             }
-      
-            // This will append the moves to the move list.
-            if (head != null)
-            {
-                pager.getMoveList().add(head);
-            }
-      
-            return head;
         }
 
-        private MoveLatch appendToMoveList(SortedSet<Long> setOfInUse)
+        private void appendToMoveList(SortedSet<Long> setOfInUse, MoveLatch head)
         {
             // For the set of pages in use, add the page to the move list.
-      
-            MoveLatch head = null;  // Head of the list.
       
             Iterator<Long> inUse = setOfInUse.iterator();
       
@@ -5664,16 +5709,8 @@ public class Pack
                 {
                     throw new IllegalStateException();
                 }
-                head = new MoveLatch(new Move(from, to), head);
+                head.getLast().extend(new MoveLatch(new Move(from, to), true));
             }
-      
-            // This will 
-            if (head != null)
-            {
-                pager.getMoveList().add(head);
-            }
-      
-            return head;
         }
 
         private void tryMove(CommitMoveRecorder commit, boolean addresses)
@@ -5683,6 +5720,8 @@ public class Pack
         
             // Gather the interim pages that will become data pages, moving the
             // data to interim boundary.
+            
+            // FIXME This is all that needs to be guarded by the move lock.
         
             gatherPages(pageRecorder.getAllocationPageSet(),
                         commit.getDataPageSet(),
@@ -5690,19 +5729,28 @@ public class Pack
                         setOfInUse,
                         setOfGathered, addresses);
             
+            // FIXME We then flush here.
+            
             // If we have interim pages in use, move them.
         
             if (setOfInUse.size() != 0)
             {
-                MoveLatch head = appendToMoveList(setOfInUse);
-                         
-                // At this point, no one else is moving because we have a
-                // monitor that only allows one mutator to move at once. Other
-                // mutators may be referencing pages that are moved. Appending
-                // to the move list blocked referencing mutators with a latch on
-                // each move. We are clear to move the pages that are in use.
-        
-                moveAndUnlatch(head);
+                MoveLatch head = new MoveLatch(false);
+                
+                appendToMoveList(setOfInUse, head);
+                
+                if (head.getNext() != null)
+                {
+                    pager.getMoveList().add(head.getNext());
+                    
+                    // At this point, no one else is moving because we have a
+                    // monitor that only allows one mutator to move at once. Other
+                    // mutators may be referencing pages that are moved. Appending
+                    // to the move list blocked referencing mutators with a latch on
+                    // each move. We are clear to move the pages that are in use.
+                    
+                    moveAndUnlatch(head.getNext());
+                }
             }
         
             // At this point we have guarded these pages in this way. No one
@@ -5867,9 +5915,9 @@ public class Pack
             if (pageRecorder.getAllocationPageSet().size() != 0)
             {
                 // First we mate the interim data pages with 
-                listOfMoves.mutate(new Runnable()
+                listOfMoves.mutate(new Guarded()
                 {
-                    public void run()
+                    public void run(List<MoveLatch> listOfMoveLatches)
                     {
                         // Consolidate pages by using existing, partially filled
                         // pages to store our new block allocations.
@@ -5885,8 +5933,6 @@ public class Pack
                 });
             }
         
-            MoveLatch addressMoves = null;
-            
             final boolean addresses = setOfInUseAddressPages.size() != 0;
         
             // If more pages are needed, then we need to extend the user area of
@@ -5902,9 +5948,9 @@ public class Pack
                     // not. It will ensure that the relocatable references are
                     // all up to date before we try to move.
         
-                    new MoveList(commit, listOfMoves).mutate(new Runnable()
+                    new MoveList(commit, listOfMoves).mutate(new Guarded()
                     {
-                        public void run()
+                        public void run(List<MoveLatch> listOfMoveLatches)
                         {
                         }
                     });
@@ -5912,17 +5958,19 @@ public class Pack
                     // Now we can try to move the pages.
         
                     tryMove(commit, addresses);
-                    
-                    if (addresses)
-                    {
-                        addressMoves = appendToMoveList(commit.getVacuumMap(), commit, addressMoves);
-                        addressMoves = appendToMoveList(commit.getEmptyMap(), commit, addressMoves);
-                    }
                 }
                 finally
                 {
                     pager.getExpandLock().unlock();
                 }
+            }
+            
+            MoveLatch addressMoves = new MoveLatch(false);
+  
+            if (addresses)
+            {
+                addUserMovesToMoveList(commit.getVacuumMap(), commit, addressMoves);
+                addUserMovesToMoveList(commit.getEmptyMap(), commit, addressMoves);
             }
             
             // FIXME Work what you know to be true into this strategy.
@@ -5934,9 +5982,9 @@ public class Pack
             // for someone else to move those user pages. Only one mutator
             // at a time may expand the addresses.
             
-            new MoveList(commit, listOfMoves).mutate(new Runnable()
+            new MoveList(commit, listOfMoves).mutate(new Guarded()
             {
-                public void run()
+                public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     // Write a terminate to end the playback loop. This
                     // terminate is the true end of the journal.
@@ -6076,9 +6124,9 @@ public class Pack
                 }
             });
             
-            while (addressMoves != null)
+            while (addressMoves.getNext() != null)
             {
-                addressMoves.getLock().unlock();
+                addressMoves.getNext().unlatch();
                 addressMoves = addressMoves.getNext();
             }
         }
