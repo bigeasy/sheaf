@@ -802,7 +802,7 @@ public class Pack
             // Definitely keep a set of failed checksums.
             Pager pager = recovery.getPager();
             
-            long position = (pager.getDataBoundary().getPosition() - 1) / pager.getPageSize() * pager.getPageSize();
+            long position = (pager.getUserBoundary().getPosition() - 1) / pager.getPageSize() * pager.getPageSize();
             
             RawPage rawPage = new RawPage(pager, position);
             if (isBlockPage(rawPage, recovery))
@@ -851,7 +851,7 @@ public class Pack
                     }
                 }
                 position += recovery.getPager().getPageSize();
-                pager.getDataBoundary().increment();
+                pager.getUserBoundary().increment();
                 pager.getInterimBoundary().increment();
             }
 
@@ -974,7 +974,7 @@ public class Pack
 
         private final ReferenceQueue<RawPage> queue;
 
-        private final Boundary dataBoundary;
+        private final Boundary userBoundary;
         
         private final Boundary interimBoundary;
             
@@ -984,9 +984,9 @@ public class Pack
         
         private final Set<Long> setOfReturningAddressPages;
         
-        public final BySizeTable pagesBySize;
+        public final BySizeTable pagesBySize_;
 
-        private final SortedSet<Long> setOfFreeUserPages;
+        private final FreeSet setOfFreeUserPages;
 
         /**
          * A sorted set of of free interim pages sorted in descending order so
@@ -1010,7 +1010,7 @@ public class Pack
          * Remember: Only one mutator can move pages in the interim area at a
          * time.
          */
-        private final SortedSet<Long> setOfFreeInterimPages;
+        private final FreeSet setOfFreeInterimPages;
         
         /**
          * A read/write lock that coordinates rewind of area boundaries and the
@@ -1036,13 +1036,13 @@ public class Pack
             this.header = header;
             this.alignment = header.getAlignment();
             this.pageSize = header.getPageSize();
-            this.dataBoundary = new Boundary(pageSize, dataBoundary);
+            this.userBoundary = new Boundary(pageSize, dataBoundary);
             this.interimBoundary = new Boundary(pageSize, interimBoundary);
             this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
-            this.pagesBySize = new BySizeTable(pageSize, alignment);
+            this.pagesBySize_ = new BySizeTable(pageSize, alignment);
             this.mapOfStaticPages = mapOfStaticPages;
-            this.setOfFreeUserPages = new TreeSet<Long>();
-            this.setOfFreeInterimPages = new TreeSet<Long>(new Reverse<Long>());
+            this.setOfFreeUserPages = new FreeSet();
+            this.setOfFreeInterimPages = new FreeSet();
             this.queue = new ReferenceQueue<RawPage>();
             this.compactLock = new ReentrantReadWriteLock();
             this.expandLock = new ReentrantLock();
@@ -1098,9 +1098,9 @@ public class Pack
         }
 
         // FIXME Rename.
-        public Boundary getDataBoundary()
+        public Boundary getUserBoundary()
         {
-            return dataBoundary;
+            return userBoundary;
         }
 
         public Boundary getInterimBoundary()
@@ -1111,6 +1111,21 @@ public class Pack
         public MoveList getMoveList()
         {
             return listOfMoves;
+        }
+        
+        public BySizeTable getFreePageBySize()
+        {
+            return pagesBySize_;
+        }
+        
+        public FreeSet getFreeUserPages()
+        {
+            return setOfFreeUserPages;
+        }
+        
+        public FreeSet getFreeInterimPages()
+        {
+            return setOfFreeInterimPages;
         }
 
         public Lock getExpandLock()
@@ -1179,20 +1194,6 @@ public class Pack
             return position;
         }
 
-        private long popFreeInterimPage()
-        {
-            long position = 0L;
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.size() > 0)
-                {
-                    position = setOfFreeInterimPages.last();
-                    setOfFreeInterimPages.remove(position);
-                }
-            }
-            return position;
-        }
-
         private void addPageByPosition(RawPage page)
         {
             PageReference intended = new PageReference(page, queue);
@@ -1232,7 +1233,7 @@ public class Pack
             // from the front of the interim page space, if we want to rewind
             // the interim page space and shrink the file more frequently.
         
-            long position = popFreeInterimPage();
+            long position = getFreeInterimPages().allocate();
         
             // If we do not have a free interim page available, we will obtain
             // create one out of the wilderness.
@@ -1259,7 +1260,7 @@ public class Pack
          * <p>
          * Question: How do we ensure that free interim pages do not slip into
          * the user data page section? That is, how do we ensure that we're
-         * not moving an interium page to a spot that also needs to move?
+         * not moving an interim page to a spot that also needs to move?
          * <p>
          * Simple. We gather all the pages that need to move first. Then we
          * assign blank pages only to the pages that are in use and need to
@@ -1270,7 +1271,7 @@ public class Pack
          */
         public long newBlankInterimPage()
         {
-            long position = popFreeInterimPage();
+            long position = getFreeInterimPages().allocate();
             if (position == 0L)
             {
                 position = fromWilderness();
@@ -1278,36 +1279,6 @@ public class Pack
             return position;
         }
 
-        /**
-         * Remove the interim page from the set of free interim pages if the
-         * page is in the set of free interim pages. Returns true if the page
-         * was in the set of free interim pages.
-         * <p>
-         * This method can only be called while holding the expand lock in the
-         * pager class.
-         *
-         * @param position The position of the iterim free page.
-         */
-        public boolean removeInterimPageIfFree(long position)
-        {
-            synchronized (setOfFreeInterimPages)
-            {
-                if (setOfFreeInterimPages.contains(position))
-                {
-                    setOfFreeInterimPages.remove(position);
-                    return true;
-                }
-            }
-            return false;
-        }
-        
-        public void returnInterimPage(long position)
-        {
-            synchronized (setOfFreeInterimPages)
-            {
-                setOfFreeInterimPages.add(position);
-            }
-        }
 
         private RawPage getPageByPosition(long position)
         {
@@ -1492,52 +1463,36 @@ public class Pack
             }
         }
 
-        public void newUserPages(Set<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
+        public void newUserPages(SortedSet<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
         {
-            synchronized (setOfFreeUserPages)
+            while (setOfSourcePages.size() != 0)
             {
-                while (setOfFreeUserPages.size() != 0 && setOfSourcePages.size() != 0)
+                long position = setOfFreeUserPages.allocate();
+                if (position == 0L)
                 {
-                    Iterator<Long> pages = setOfSourcePages.iterator();
-                    Iterator<Long> freeUserPages = setOfFreeUserPages.iterator();
-                    long position = freeUserPages.next();
-                    setOfDataPages.add(position);
-                    mapOfPages.put(pages.next(), new Movable(moveNode, position, 0));
-                    pages.remove();
-                    freeUserPages.remove();
+                    break;
                 }
+                setOfDataPages.add(position);
+                long source = setOfSourcePages.first();
+                setOfSourcePages.remove(source);
+                mapOfPages.put(source, new Movable(moveNode, position, 0));
             }
         }
 
-        public void returnUserPage(BlockPage blockPage)
+        public void returnUserPage(BlockPage blocks)
         {
             // FIXME Is it not the case that the block changes can mutated
             // by virtue of a deallocation operation?
-            if (blockPage.getCount() == 0)
+            if (blocks.getCount() == 0)
             {
-                synchronized (setOfFreeUserPages)
-                {
-                    setOfFreeUserPages.add(blockPage.getRawPage().getPosition());
-                }
+                setOfFreeUserPages.free(blocks.getRawPage().getPosition());
             }
-            else if (blockPage.getRemaining() > getAlignment())
+            else if (blocks.getRemaining() > getAlignment())
             {
-                pagesBySize.add(blockPage);
+                getFreePageBySize().add(blocks);
             }
         }
 
-        public boolean removeUserPageIfFree(long position)
-        {
-            synchronized (setOfFreeUserPages)
-            {
-                if (setOfFreeUserPages.contains(position))
-                {
-                    setOfFreeUserPages.remove(position);
-                    return true;
-                }
-            }
-            return false;
-        }
         private RawPage removePageByPosition(long position)
         {
             PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
@@ -1609,7 +1564,7 @@ public class Pack
                 int size = 0;
                 
                 size += COUNT_SIZE + setOfAddressPages.size() * POSITION_SIZE;
-                size += COUNT_SIZE + (setOfFreeUserPages.size() + pagesBySize.getSize()) * POSITION_SIZE;
+                size += COUNT_SIZE + (setOfFreeUserPages.size() + getFreePageBySize().getSize()) * POSITION_SIZE;
                 
                 ByteBuffer reopen = ByteBuffer.allocateDirect(size);
                 
@@ -1619,12 +1574,12 @@ public class Pack
                     reopen.putLong(position);
                 }
                
-                reopen.putInt(setOfFreeUserPages.size() + pagesBySize.getSize());
+                reopen.putInt(setOfFreeUserPages.size() + getFreePageBySize().getSize());
                 for (long position: setOfFreeUserPages)
                 {
                     reopen.putLong(position);
                 }
-                for (long position: pagesBySize)
+                for (long position: getFreePageBySize())
                 {
                     reopen.putLong(position);
                 }
@@ -1649,7 +1604,7 @@ public class Pack
                     throw new Danger(ERROR_IO_TRUNCATE, e);
                 }
                 
-                header.setDataBoundary(dataBoundary.getPosition());
+                header.setDataBoundary(getUserBoundary().getPosition());
                 header.setOpenBoundary(getInterimBoundary().getPosition());
         
                 header.setShutdown(SOFT_SHUTDOWN);
@@ -3254,7 +3209,7 @@ public class Pack
                     block++;
                     long address = getAddress(bytes);
                     if (address < pager.getFirstAddressPageStart() + ADDRESS_PAGE_HEADER_SIZE
-                        || address >= pager.getDataBoundary().getPosition())
+                        || address >= pager.getUserBoundary().getPosition())
                     {
                         recovery.badUserAddress(getRawPage().getPosition(), address);
                         copacetic = false;
@@ -3681,12 +3636,79 @@ public class Pack
             notify();
         }
     }
+    
+    final static class FreeSet
+    implements Iterable<Long>
+    {
+        private final SortedSet<Long> setOfPositions;
+        
+        private final SortedSet<Long> setToIgnore;
+        
+        public FreeSet()
+        {
+            this.setOfPositions = new TreeSet<Long>();
+            this.setToIgnore = new TreeSet<Long>();
+        }
+        
+        public synchronized int size()
+        {
+            return setOfPositions.size();
+        }
+        
+        public Iterator<Long> iterator()
+        {
+            return setOfPositions.iterator();
+        }
+        
+        /**
+         * Remove the interim page from the set of free interim pages if the
+         * page is in the set of free interim pages. Returns true if the page
+         * was in the set of free interim pages.
+         *
+         * @param position The position of the interim free page.
+         */
+        public synchronized boolean reserve(long position)
+        {
+            if (setOfPositions.remove(position))
+            {
+                return true;
+            }
+            setToIgnore.add(position);
+            return false;
+        }
+        
+        public synchronized void release(Set<Long> setToRelease)
+        {
+            setToIgnore.removeAll(setToRelease);
+        }
+        
+        public synchronized long allocate()
+        {
+            if (setOfPositions.size() != 0)
+            {
+                long position = setOfPositions.first();
+                setOfPositions.remove(position);
+                return position;
+            }
+            return 0L;
+        }
+        
+        public synchronized void free(long position)
+        {
+            if (!setToIgnore.contains(position))
+            {
+                setOfPositions.add(position);
+            }
+        }
+    }
 
     final static class BySizeTable implements Iterable<Long>
     {
         private final int alignment;
 
         private final List<LinkedList<Long>> listOfListsOfSizes;
+        
+        private final SortedSet<Long> setToIgnore;
 
         public BySizeTable(int pageSize, int alignment)
         {
@@ -3701,6 +3723,7 @@ public class Pack
 
             this.alignment = alignment;
             this.listOfListsOfSizes = listOfListsOfSizes;
+            this.setToIgnore = new TreeSet<Long>();
         }
         
         public int getSize()
@@ -3725,25 +3748,44 @@ public class Pack
         
         public synchronized void add(long position, int remaning)
         {
-            // Maybe don't round down if exact.
-            int aligned = ((remaning | alignment - 1) + 1) - alignment;
-            if (aligned != 0)
+            if (!setToIgnore.contains(position))
             {
-                listOfListsOfSizes.get(aligned / alignment).addFirst(position);
+                // Maybe don't round down if exact.
+                int aligned = ((remaning | alignment - 1) + 1) - alignment;
+                if (aligned != 0)
+                {
+                    listOfListsOfSizes.get(aligned / alignment).addFirst(position);
+                }
             }
         }
         
-        public synchronized void remove(BlockPage blocks)
+        private boolean remove(BlockPage blocks)
         {
             // Maybe don't round down if exact.
             int aligned = ((blocks.getRemaining() | alignment - 1) + 1) - alignment;
             if (aligned != 0)
             {
                 LinkedList<Long> listOfPositions = listOfListsOfSizes.get(aligned / alignment);
-                listOfPositions.remove(blocks.getRawPage().getPosition());
+                return listOfPositions.remove(blocks.getRawPage().getPosition());
             }
+            return false;
         }
 
+        public synchronized boolean reserve(BlockPage blocks)
+        {
+            if (remove(blocks))
+            {
+                return true;
+            }
+            setToIgnore.add(blocks.getRawPage().getPosition());
+            return false;
+        }
+        
+        public synchronized void release(Set<Long> setToRelease)
+        {
+            setToIgnore.removeAll(setToRelease);
+        }
+        
         /**
          * Return the page with the least amount of space remaining that will
          * fit the full block size. The block specified block size must
@@ -5468,10 +5510,11 @@ public class Pack
         private int getUserPageCount()
         {
             long userPageSize = pager.getInterimBoundary().getPosition()
-                              - pager.getDataBoundary().getPosition();
+                              - pager.getUserBoundary().getPosition();
             return (int) (userPageSize / pager.getPageSize());
         }
         
+        // FIXME Remove try from these methods. It's confusing.
         private void tryExpandUser(MoveList listOfMoves, Commit commit, MoveLatch userMoves, int count)
         {
             // This invocation is to flush the move list for the current
@@ -5566,8 +5609,24 @@ public class Pack
 
             for (int i = 0; i < count; i++)
             {
-                commit.getAddressSet().add(pager.getDataBoundary().getPosition());
-                pager.getDataBoundary().increment();
+                long position = pager.getUserBoundary().getPosition();
+                commit.getAddressSet().add(position);
+                if (!setOfGathered.contains(position))
+                {
+                    BlockPage blocks = pager.getPage(position, new BlockPage(false));
+                    if (!pager.getFreePageBySize().reserve(blocks))
+                    {
+                        if (!pager.getFreeUserPages().reserve(position))
+                        {
+                            commit.getInUseAddressSet().add(position);
+                        }
+                    }
+                    else
+                    {
+                        pager.getFreeUserPages().reserve(position);
+                    }
+                }
+                pager.getUserBoundary().increment();
             }
 
             // To move a data page to make space for an address page, we simply
@@ -5587,15 +5646,6 @@ public class Pack
             // it is a block page we've just created the
             // page does not have to be moved.
 
-            for (long position : commit.getAddressSet())
-            {
-                if (!setOfGathered.contains(position)
-                    && !pager.removeUserPageIfFree(position))
-                {
-                    commit.getInUseAddressSet().add(position);
-                }
-            }
-            
             listOfMoves.mutate(new Guarded()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -5665,7 +5715,7 @@ public class Pack
                 // If it is not in the set of free pages it needs to be moved,
                 // so we add it to the set of in use.
                 
-                if (!pager.removeInterimPageIfFree(soonToBeCreatedUser))
+                if (!pager.getFreeInterimPages().reserve(soonToBeCreatedUser))
                 {
                     setOfInUse.add(soonToBeCreatedUser);
                 }
@@ -5750,7 +5800,7 @@ public class Pack
                 
                 pager.relocate(head.getMove().getFrom(), head.getMove().getTo());
 
-                pager.setPage(head.getMove().getFrom(), new BlockPage(true), dirtyPages, false);
+                pager.setPage(head.getMove().getFrom(), new BlockPage(false), dirtyPages, false);
 
                 // Now we can let anyone who is waiting on this interim page
                 // through.
@@ -5896,7 +5946,7 @@ public class Pack
                         // Consolidate pages by using existing, partially filled
                         // pages to store our new block allocations.
         
-                        pager.pagesBySize.join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getVacuumMap(), moveNodeRecorder.getMoveNode());
+                        pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getVacuumMap(), moveNodeRecorder.getMoveNode());
                         setOfUnassigned.removeAll(commit.getVacuumMap().keySet());
                         
                         // Use free data pages to store the interim pages whose
@@ -6059,7 +6109,7 @@ public class Pack
                     {
                         setOfMirroredBlockPages.clear();
                     }
-                    
+
                     // Then do everything else.
                     player.commit();
 
@@ -6069,12 +6119,12 @@ public class Pack
                     {
                         for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                         {
-                            pager.returnInterimPage(entry.getKey());
+                            pager.getFreeInterimPages().free(entry.getKey());
 //                            pager.returnUserPage(pager.getPage(entry.getValue().getValue(pager), new BlockPage(false)));
                         }
                         for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
                         {
-                            pager.returnInterimPage(entry.getKey());
+                            pager.getFreeInterimPages().free(entry.getKey());
                             pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
                         }
                     }
@@ -6085,12 +6135,12 @@ public class Pack
                     
                     for (long position: pageRecorder.getJournalPageSet())
                     {
-                        pager.returnInterimPage(position);
+                        pager.getFreeInterimPages().free(position);
                     }
                     
                     for (long position: pageRecorder.getWritePageSet())
                     {
-                        pager.returnInterimPage(position);
+                        pager.getFreeInterimPages().free(position);
                     }
                 }
             });
