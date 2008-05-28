@@ -4790,6 +4790,10 @@ public class Pack
         public void commit(Player player)
         {
         }
+        
+        public void rollback(Player player)
+        {
+        }
 
         public JournalPage getJournalPage(Player player, JournalPage journalPage)
         {
