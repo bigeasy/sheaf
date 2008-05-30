@@ -2312,9 +2312,16 @@ public class Pack
             {
                 ByteBuffer bytes = rawPage.getByteBuffer();
                 int offset = (int) (address - rawPage.getPosition());
-                bytes.putLong(offset, 0L);
-                getRawPage().invalidate(offset, POSITION_SIZE);
-                dirtyPages.add(getRawPage());
+                long position = bytes.getLong(offset);
+                if (position != 0L)
+                {
+                    bytes.putLong(offset, 0L);
+                    
+                    getRawPage().invalidate(offset, POSITION_SIZE);
+                    dirtyPages.add(getRawPage());
+                    
+                    freeCount++;
+                }
             }
         }
 
@@ -4790,10 +4797,6 @@ public class Pack
         public void commit(Player player)
         {
         }
-        
-        public void rollback(Player player)
-        {
-        }
 
         public JournalPage getJournalPage(Player player, JournalPage journalPage)
         {
@@ -5190,9 +5193,9 @@ public class Pack
         @Override
         public void commit(Player player)
         {
-            BlockPage interimPage = player.getPager().getPage(from, new BlockPage(true));
-            BlockPage userPage = player.getPager().getPage(to, new BlockPage(false));
-            interimPage.commit(address, userPage, player.getDirtyPages());
+            BlockPage interim = player.getPager().getPage(from, new BlockPage(true));
+            BlockPage user = player.getPager().getPage(to, new BlockPage(false));
+            interim.commit(address, user, player.getDirtyPages());
         }
 
         @Override
@@ -5256,7 +5259,7 @@ public class Pack
         
         private final BySizeTable writePagesBySize;
 
-        private final Map<Long, Movable> mapOfAddresses;
+        private final SortedMap<Long, Movable> mapOfAddresses;
 
         private final DirtyPageMap dirtyPages;
         
@@ -5280,7 +5283,7 @@ public class Pack
             this.allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
             this.writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
             this.dirtyPages = dirtyPages;
-            this.mapOfAddresses = new HashMap<Long, Movable>();
+            this.mapOfAddresses = new TreeMap<Long, Movable>();
             this.moveNodeRecorder = moveNodeRecorder;
             this.listOfMoves = new MoveList(moveRecorder, listOfMoves);
             this.pageRecorder = pageRecorder;
@@ -5356,7 +5359,7 @@ public class Pack
                     
                     allocPagesBySize.add(interim);
                     
-                    mapOfAddresses.put(address, new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
+                    mapOfAddresses.put(-address, new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
                     
                     return address;
                 }
@@ -5395,6 +5398,10 @@ public class Pack
                     // the write buffer is already there.
                     BlockPage interim = null;
                     Movable position = mapOfAddresses.get(address);
+                    if (position == null)
+                    {
+                        position = mapOfAddresses.get(-address);
+                    }
                     if (position == null)
                     {
                         BlockPage blocks = dereference(address, listOfMoveLatches);
@@ -5454,6 +5461,10 @@ public class Pack
                     Movable movable = mapOfAddresses.get(address);
                     if (movable == null)
                     {
+                        movable = mapOfAddresses.get(-address);
+                    }
+                    if (movable == null)
+                    {
                         AddressPage addresses = pager.getPage(address, new AddressPage());
                         long lastPosition = 0L;
                         for (;;)
@@ -5506,9 +5517,44 @@ public class Pack
             });
         }
         
+        private void tryRollback()
+        {
+            for (long address : mapOfAddresses.keySet())
+            {
+                if (address > 0)
+                {
+                    break;
+                }
+                AddressPage addresses = pager.getPage(-address, new AddressPage());
+                addresses.free(-address, dirtyPages);
+                dirtyPages.flushIfAtCapacity();
+            }
+            
+            dirtyPages.flush();
+            
+            pager.getFreeInterimPages().release(pageRecorder.getAllocationPageSet());
+            pager.getFreeInterimPages().release(pageRecorder.getWritePageSet());
+            pager.getFreeInterimPages().release(pageRecorder.getJournalPageSet());
+        }
+  
         public void rollback()
         {
-            throw new UnsupportedOperationException();
+            pager.getCompactLock().readLock().lock();
+            try
+            {
+                listOfMoves.mutate(new Guarded()
+                {
+                    @Override
+                    public void run(List<MoveLatch> listOfMoveLatches)
+                    {
+                        tryRollback();
+                    }
+                });
+            }
+            finally
+            {
+                pager.getCompactLock().readLock().unlock();
+            }
         }
         
         private int getUserPageCount()

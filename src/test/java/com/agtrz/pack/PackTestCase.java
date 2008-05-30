@@ -727,6 +727,22 @@ public class PackTestCase
         mutator.commit();
         pack.close();
     }
+    
+    @Test public void rollback() 
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.rollback();
+        pack.close();
+        new Pack.Opener().open(file).close();
+        pack = new Pack.Creator().create(file);
+        mutator = pack.mutate();
+        assertEquals(address, mutator.allocate(64));
+        mutator.rollback();
+        pack.close();
+    }
 }
 
 /* vim: set et sw=4 ts=4 ai tw=78 nowrap: */
