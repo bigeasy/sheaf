@@ -777,7 +777,7 @@ public class PackTestCase
         pack.close();
     }
     
-    @Test public void vacuum()
+    @Ignore @Test public void vacuum()
     {
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
