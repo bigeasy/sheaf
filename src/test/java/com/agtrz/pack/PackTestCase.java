@@ -559,6 +559,39 @@ public class PackTestCase
 
         pack.close();
     }
+
+    @Test public void freeAndClose()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        
+        pack.close();
+        pack = new Pack.Opener().open(file);
+        
+        mutator = pack.mutate();
+        mutator.free(address);
+        mutator.commit();
+
+        boolean thrown = false;
+        mutator = pack.mutate();
+        try
+        {
+            mutator.read(address, ByteBuffer.allocateDirect(64));
+        }
+        catch (Pack.Danger e)
+        {
+            thrown = true;
+            assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
+        }
+        assertTrue(thrown);
+        mutator.commit();
+
+        pack.close();
+    }
     
     @Test public void freeWithContext()
     {
@@ -737,10 +770,29 @@ public class PackTestCase
         mutator.rollback();
         pack.close();
         new Pack.Opener().open(file).close();
-        pack = new Pack.Creator().create(file);
+        pack = new Pack.Opener().open(file);
         mutator = pack.mutate();
         assertEquals(address, mutator.allocate(64));
         mutator.rollback();
+        pack.close();
+    }
+    
+    @Test public void vacuum()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        long address = mutator.allocate(64);
+        mutator.commit();
+        rewrite(pack, 4);
+        pack.close();
+        pack = new Pack.Opener().open(file);
+        mutator = pack.mutate();
+        mutator.free(address);
+        mutator.commit();
+        mutator = pack.mutate();
+        assertEquals(address, mutator.allocate(64));
+        mutator.commit();
         pack.close();
     }
 }

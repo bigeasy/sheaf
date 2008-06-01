@@ -13,6 +13,7 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,6 +35,8 @@ import java.util.zip.Checksum;
 
 public class Pack
 {
+    public final static long NULL_ADDRESS = 0L;
+
     public final static int ERROR_FREED_FREE_ADDRESS = 300;
     
     public final static int ERROR_FREED_STATIC_ADDRESS = 301;
@@ -82,7 +85,7 @@ public class Pack
 
     private final static int CHECKSUM_SIZE = 8;
 
-    private final static int ADDRESS_SIZE = 8;
+    public final static int ADDRESS_SIZE = Long.SIZE / Byte.SIZE;
 
     private final static int FILE_HEADER_SIZE = COUNT_SIZE * 5 + ADDRESS_SIZE * 4;
 
@@ -585,6 +588,11 @@ public class Pack
         public Opener()
         {
             this.disk = new Disk();
+        }
+        
+        public Set<Long> getTemporaryBlocks()
+        {
+            return Collections.emptySet();
         }
         
         public void setDisk(Disk disk)
@@ -3700,6 +3708,14 @@ public class Pack
             return 0L;
         }
         
+        public synchronized void free(Set<Long> setOfPositions)
+        {
+            for (long position : setOfPositions)
+            {
+                free(position);
+            }
+        }
+
         public synchronized void free(long position)
         {
             if (!setToIgnore.contains(position))
@@ -3715,7 +3731,7 @@ public class Pack
 
         private final List<LinkedList<Long>> listOfListsOfSizes;
         
-        private final SortedSet<Long> setToIgnore;
+        private final SortedMap<Long, Integer> setToIgnore;
 
         public BySizeTable(int pageSize, int alignment)
         {
@@ -3730,7 +3746,7 @@ public class Pack
 
             this.alignment = alignment;
             this.listOfListsOfSizes = listOfListsOfSizes;
-            this.setToIgnore = new TreeSet<Long>();
+            this.setToIgnore = new TreeMap<Long, Integer>();
         }
         
         public int getSize()
@@ -3755,7 +3771,7 @@ public class Pack
         
         public synchronized void add(long position, int remaning)
         {
-            if (!setToIgnore.contains(position))
+            if (!setToIgnore.containsKey(position))
             {
                 // Maybe don't round down if exact.
                 int aligned = ((remaning | alignment - 1) + 1) - alignment;
@@ -3784,13 +3800,27 @@ public class Pack
             {
                 return true;
             }
-            setToIgnore.add(blocks.getRawPage().getPosition());
+            long position = blocks.getRawPage().getPosition();
+            Integer count = setToIgnore.get(position);
+            setToIgnore.put(position, count == null ? 1 : count + 1);
             return false;
         }
         
-        public synchronized void release(Set<Long> setToRelease)
+        public synchronized void release(long position)
         {
-            setToIgnore.removeAll(setToRelease);
+            Integer count = setToIgnore.get(position);
+            if (count != null)
+            {
+                setToIgnore.put(position, count - 1);
+            }
+        }
+
+        public void release(Set<Long> setToRelease)
+        {
+            for (long position : setToRelease)
+            {
+                release(position);
+            }
         }
         
         /**
@@ -3832,7 +3862,10 @@ public class Pack
                 List<Long> listOfSizes = pagesBySize.listOfListsOfSizes.get(i);
                 for (long size: listOfSizes)
                 {
-                    long found = bestFit((i + 1) * alignment);
+                    int alignedRemaining = i * alignment;
+                    int pageSize = listOfListsOfSizes.size() * alignment;
+                    int needed = pageSize - BLOCK_PAGE_HEADER_SIZE - alignedRemaining;
+                    long found = bestFit(needed);
                     if (found != 0L)
                     {
                         setOfDataPages.add(found);
@@ -4854,16 +4887,17 @@ public class Pack
         @Override
         public int length()
         {
-            return FLAG_SIZE + POSITION_SIZE * 3;
+            return FLAG_SIZE + POSITION_SIZE * 3 + COUNT_SIZE;
         }
         
         @Override
         public void write(ByteBuffer bytes)
         {
-            bytes.putShort(VACUUM);
+            bytes.putShort(ADD_VACUUM);
             bytes.putLong(from);
             bytes.putLong(to);
             bytes.putLong(checksum);
+            bytes.putInt(offset);
         }
         
         @Override
@@ -4872,6 +4906,7 @@ public class Pack
             this.from = bytes.getLong();
             this.to = bytes.getLong();
             this.checksum = bytes.getLong();
+            this.offset = bytes.getInt();
         }
     }
 
@@ -5106,7 +5141,10 @@ public class Pack
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
             BlockPage blocks = pager.getPage(player.adjust(position), new BlockPage(false));
+            pager.getFreePageBySize().reserve(blocks);
             blocks.free(address, player.getDirtyPages());
+            pager.getFreePageBySize().release(blocks.getRawPage().getPosition());
+            pager.returnUserPage(blocks);
         }
 
         @Override
@@ -5289,9 +5327,15 @@ public class Pack
             this.pageRecorder = pageRecorder;
         }
         
+        // FIXME Make part of pack and not mutator.
         public long getStaticPageAddress(URI uri)
         {
             return pager.getStaticPageAddress(uri);
+        }
+        
+        public long temporary(int blockSize)
+        {
+            throw new UnsupportedOperationException();
         }
         
         /**
@@ -5532,9 +5576,9 @@ public class Pack
             
             dirtyPages.flush();
             
-            pager.getFreeInterimPages().release(pageRecorder.getAllocationPageSet());
-            pager.getFreeInterimPages().release(pageRecorder.getWritePageSet());
-            pager.getFreeInterimPages().release(pageRecorder.getJournalPageSet());
+            pager.getFreeInterimPages().free(pageRecorder.getAllocationPageSet());
+            pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
+            pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
         }
   
         public void rollback()
@@ -6167,14 +6211,14 @@ public class Pack
                     
                     if (!commit.isAddressExpansion())
                     {
+                        pager.getFreeInterimPages().free(commit.getVacuumMap().keySet());
+                        pager.getFreeInterimPages().free(commit.getEmptyMap().keySet());
                         for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                         {
-                            pager.getFreeInterimPages().free(entry.getKey());
-//                            pager.returnUserPage(pager.getPage(entry.getValue().getValue(pager), new BlockPage(false)));
+                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
                         }
                         for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
                         {
-                            pager.getFreeInterimPages().free(entry.getKey());
                             pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
                         }
                     }
@@ -6183,15 +6227,8 @@ public class Pack
                         // FIXME Do I return user pages here?
                     }
                     
-                    for (long position: pageRecorder.getJournalPageSet())
-                    {
-                        pager.getFreeInterimPages().free(position);
-                    }
-                    
-                    for (long position: pageRecorder.getWritePageSet())
-                    {
-                        pager.getFreeInterimPages().free(position);
-                    }
+                    pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
+                    pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
                 }
             });
             
