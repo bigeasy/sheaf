@@ -5,5 +5,9 @@
   <classpathentry kind="output" path="target/classes"/>
   <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
   <classpathentry kind="var" path="M2_REPO/args4j/args4j/2.0.8/args4j-2.0.8.jar" sourcepath="M2_REPO/args4j/args4j/2.0.8/args4j-2.0.8-sources.jar"/>
-  <classpathentry kind="var" path="M2_REPO/junit/junit/4.4/junit-4.4.jar" sourcepath="M2_REPO/junit/junit/4.4/junit-4.4-sources.jar"/>
+  <classpathentry kind="var" path="M2_REPO/junit/junit/4.4/junit-4.4.jar" sourcepath="M2_REPO/junit/junit/4.4/junit-4.4-sources.jar">
+    <attributes>
+      <attribute value="jar:file:/Users/alan/.m2/repository/junit/junit/4.4/junit-4.4-javadoc.jar!/" name="javadoc_location"/>
+    </attributes>
+  </classpathentry>
 </classpath>
