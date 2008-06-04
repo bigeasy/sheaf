@@ -14,7 +14,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -2995,7 +2994,11 @@ public class Pack
                         {
                             throw new IllegalStateException();
                         }
-                        if (offset != -1)
+                        if (offset == -1)
+                        {
+                            advance(bytes, size);
+                        }
+                        else
                         {
                             if (mirrored == null)
                             {
@@ -3022,9 +3025,9 @@ public class Pack
                     long checksum = getChecksum(dirtyPages.getChecksum());
                     return new Mirror(mirrored, offset, checksum);
                 }
-                
-                return null;
             }
+            
+            return null;
         }
         
         public boolean free(long address, DirtyPageMap dirtyPages)
@@ -3058,8 +3061,8 @@ public class Pack
                     dirtyPages.add(getRawPage());
                     return true;
                 }
-                return false;
             }
+            return false;
         }
 
         public void compact(BlockPage user, DirtyPageMap dirtyPages, int offset, long checksum)
@@ -3078,6 +3081,7 @@ public class Pack
                     throw new IllegalStateException();
                 }
                 advance(bytes, blockSize);
+                block++;
             }
             if (user.count - block != count)
             {
@@ -3823,6 +3827,7 @@ public class Pack
 
         public synchronized boolean reserve(BlockPage blocks)
         {
+            // FIXME Reserve should now add to the set to ignore always.
             if (remove(blocks))
             {
                 return true;
@@ -3947,14 +3952,6 @@ public class Pack
         public void remove()
         {
             throw new UnsupportedOperationException();
-        }
-    }
-
-    final static class Reverse<T extends Comparable<T>> implements Comparator<T>
-    {
-        public int compare(T left, T right)
-        {
-            return right.compareTo(left);
         }
     }
 

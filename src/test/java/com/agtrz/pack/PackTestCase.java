@@ -766,6 +766,9 @@ public class PackTestCase
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
         Pack.Mutator mutator = pack.mutate();
+        mutator.allocate(64);
+        mutator.commit();
+        mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.rollback();
         pack.close();
@@ -782,6 +785,7 @@ public class PackTestCase
         File file = newFile();
         Pack pack = new Pack.Creator().create(file);
         Pack.Mutator mutator = pack.mutate();
+        mutator.allocate(64);
         long address = mutator.allocate(64);
         mutator.commit();
         rewrite(pack, 4);
