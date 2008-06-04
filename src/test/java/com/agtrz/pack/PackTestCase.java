@@ -799,6 +799,15 @@ public class PackTestCase
         mutator.commit();
         pack.close();
     }
+    
+    @Test
+    public void guarded()
+    {
+        new Pack.Guarded().run((List<Pack.MoveLatch>) null);
+        new Pack.Guarded().run((Pack.BlockPage) null);
+        new Pack.GuardedReturnable<Object>().run((List<Pack.MoveLatch>) null);
+        new Pack.GuardedReturnable<Object>().run((Pack.BlockPage) null);
+    }
 }
 
 /* vim: set et sw=4 ts=4 ai tw=78 nowrap: */
