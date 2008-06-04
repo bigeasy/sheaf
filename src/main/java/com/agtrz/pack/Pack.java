@@ -2646,9 +2646,9 @@ public class Pack
             return bytes.getLong(bytes.position() + COUNT_SIZE);
         }
         
-        private void advance(ByteBuffer bytes, int size)
+        private void advance(ByteBuffer bytes, int blockSize)
         {
-            bytes.position(bytes.position() + Math.abs(size));
+            bytes.position(bytes.position() + Math.abs(blockSize));
         }
 
         /**
@@ -3064,7 +3064,34 @@ public class Pack
 
         public void compact(BlockPage user, DirtyPageMap dirtyPages, int offset, long checksum)
         {
-            throw new UnsupportedOperationException();
+            if (offset > user.count)
+            {
+                throw new IllegalStateException();
+            }
+            ByteBuffer bytes = user.getBlockRange();
+            int block = 0;
+            while (block < offset)
+            {
+                int blockSize = getBlockSize(bytes);
+                if (blockSize < 0)
+                {
+                    throw new IllegalStateException();
+                }
+                advance(bytes, blockSize);
+            }
+            if (user.count - block != count)
+            {
+                throw new IllegalStateException();
+            }
+            user.count = block;
+            for (long address : getAddresses())
+            {
+                commit(address, user, dirtyPages);
+            }
+            if (checksum != user.getChecksum(dirtyPages.getChecksum()))
+            {
+                throw new IllegalStateException();
+            }
         }
         
         public void commit(long address, ByteBuffer block, DirtyPageMap dirtyPages, long caller)
@@ -3132,7 +3159,7 @@ public class Pack
             }
         }
 
-        public void commit(long address, BlockPage page, DirtyPageMap dirtyPages)
+        public void commit(long address, BlockPage user, DirtyPageMap dirtyPages)
         {
             // FIXME Locking a lot. Going to deadlock?
             synchronized (getRawPage())
@@ -3147,7 +3174,7 @@ public class Pack
                     bytes.position(offset + BLOCK_HEADER_SIZE);
                     bytes.limit(offset + blockSize);
 
-                    page.commit(address, bytes.slice(), dirtyPages, getRawPage().getPosition());
+                    user.commit(address, bytes.slice(), dirtyPages, getRawPage().getPosition());
 
                     bytes.limit(bytes.capacity());
                 }
