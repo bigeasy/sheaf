@@ -86,12 +86,14 @@ public class Pack
 
     public final static int ADDRESS_SIZE = Long.SIZE / Byte.SIZE;
 
-    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 5 + ADDRESS_SIZE * 4;
+    private final static int FILE_HEADER_SIZE = COUNT_SIZE * 5 + ADDRESS_SIZE * 5;
 
     private final static int BLOCK_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
 
     private final static int BLOCK_HEADER_SIZE = POSITION_SIZE + COUNT_SIZE;
-
+    
+    private final static int TEMPORARY_SIZE = ADDRESS_SIZE * 32;
+    
     private final static short ADD_VACUUM = 1;
 
     private final static short VACUUM = 2;
@@ -111,6 +113,8 @@ public class Pack
     private final static short COPY = 9;
 
     private final static short TERMINATE = 10;
+    
+    private final static short TEMPORARY = 11;
 
     private final static int NEXT_PAGE_SIZE = FLAG_SIZE + ADDRESS_SIZE;
 
@@ -517,9 +521,11 @@ public class Pack
 
             Map<URI, Long> mapOfStaticPages = new HashMap<URI, Long>();
 
+            Map<Long, ByteBuffer> mapOfTemporaryArrays = new HashMap<Long, ByteBuffer>();
+            
             SortedSet<Long> setOfAddressPages = new TreeSet<Long>();
             setOfAddressPages.add(offsets.getFirstAddressPage());
-            Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getDataBoundary(), header.getDataBoundary());
+            Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getDataBoundary(), header.getDataBoundary(), mapOfTemporaryArrays);
             
             long user = pager.getInterimBoundary().getPosition();
             pager.getInterimBoundary().increment();
@@ -533,14 +539,24 @@ public class Pack
             pager.returnUserPage(blocks);
             
             Pack pack = new Pack(pager);
-
+            
+            Mutator mutator = pack.mutate();
+            
+            header.setTemporaries(mutator.allocate(TEMPORARY_SIZE));
+            ByteBuffer temporaries = mutator.read(header.getTemporaries());
+            while (temporaries.remaining() != 0)
+            {
+                temporaries.putLong(0L);
+            }
+            temporaries.flip();
+            mutator.write(header.getTemporaries(), temporaries);
+            
             ByteBuffer statics = ByteBuffer.allocateDirect(getStaticPagesMapSize());
             
             statics.putInt(mapOfStaticPageSizes.size());
             
             if (mapOfStaticPageSizes.size() != 0)
             {
-                Mutator mutator = pack.mutate();
                 for (Map.Entry<URI, Integer> entry: mapOfStaticPageSizes.entrySet())
                 {
                     String uri = entry.getKey().toString();
@@ -553,14 +569,24 @@ public class Pack
                     }
                     statics.putLong(address);
                 }
-                mutator.commit();
             }
             
+            mutator.commit();
+
             statics.flip();
             
             try
             {
                 disk.write(fileChannel, statics, header.getStaticPagesStart());
+            }
+            catch (IOException e)
+            {
+                throw new Danger(ERROR_IO_WRITE, e);
+            }
+            
+            try
+            {
+                header.write(disk, fileChannel);
             }
             catch (IOException e)
             {
@@ -729,7 +755,14 @@ public class Pack
                 setOfAddressPages.add(reopen.getLong());
             }
             
-            Pager pager = new Pager(file, fileChannel, disk, header, mapOfStaticPages, setOfAddressPages, header.getDataBoundary(), header.getOpenBoundary());
+            Map<Long, ByteBuffer> mapOfTemporaryArrays = new HashMap<Long, ByteBuffer>();
+            
+            Pager pager = new Pager(file, fileChannel, disk, header,
+                                    mapOfStaticPages,
+                                    setOfAddressPages,
+                                    header.getDataBoundary(),
+                                    header.getOpenBoundary(),
+                                    mapOfTemporaryArrays);
             
             int blockPageCount = reopen.getInt();
             for (int i = 0; i < blockPageCount; i++)
@@ -748,6 +781,7 @@ public class Pack
                 throw new Danger(ERROR_IO_TRUNCATE, e);
             }
             
+            long openBoundary = header.getOpenBoundary();
             header.setShutdown(HARD_SHUTDOWN);
             header.setOpenBoundary(0L);
 
@@ -769,6 +803,26 @@ public class Pack
                 throw new Danger(ERROR_IO_FORCE, e);
             }
 
+            Pack pack = new Pack(pager);
+            Pack.Mutator mutator = pack.mutate();
+            
+            long temporaries = header.getTemporaries();
+            do
+            {
+                ByteBuffer array = mutator.read(temporaries);
+                mapOfTemporaryArrays.put(temporaries, array);
+                array.clear();
+                temporaries = array.getLong();
+            }
+            while (temporaries != 0L);
+
+            pager = new Pager(file, fileChannel, disk, header,
+                              mapOfStaticPages,
+                              setOfAddressPages,
+                              header.getDataBoundary(),
+                              openBoundary,
+                              mapOfTemporaryArrays);
+            
             return new Pack(pager);
         }
         
@@ -949,7 +1003,13 @@ public class Pack
             // First see if we can get to the data section cleanly.We're not
             // going to anything but checksum.
             
-            Pager pager = new Pager(file, fileChannel, disk, header, new HashMap<URI, Long>(), new TreeSet<Long>(), offsets.getDataBoundary(), offsets.getDataBoundary());
+            Map<Long, ByteBuffer> mapOfTemporaryArrays = new HashMap<Long, ByteBuffer>();
+            Pager pager = new Pager(file, fileChannel, disk, header,
+                                    new HashMap<URI, Long>(),
+                                    new TreeSet<Long>(),
+                                    offsets.getDataBoundary(),
+                                    offsets.getDataBoundary(),
+                                    mapOfTemporaryArrays);
             if (listOfAddressJournals.size() == 0 && listOfUserJournals.size() == 0)
             {
                 return addressRecover(new Recovery(pager, fileSize, true));
@@ -992,6 +1052,10 @@ public class Pack
         private final Set<Long> setOfReturningAddressPages;
         
         public final BySizeTable pagesBySize_;
+        
+        private final Map<Long, ByteBuffer> mapOfTemporaryArrays;
+        
+        private final Map<Long, Long> mapOfTemporaries;
 
         private final FreeSet setOfFreeUserPages;
 
@@ -1035,7 +1099,7 @@ public class Pack
          */
         private final Lock expandLock;
         
-        public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long dataBoundary, long interimBoundary)
+        public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryArrays)
         {
             this.file = file;
             this.fileChannel = fileChannel;
@@ -1057,6 +1121,28 @@ public class Pack
             this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, header.getInternalJournalCount());
             this.setOfAddressPages = setOfAddressPages;
             this.setOfReturningAddressPages = new HashSet<Long>();
+            this.mapOfTemporaryArrays = mapOfTemporaryArrays;
+            this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryArrays);
+        }
+        
+        private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryArrays)
+        {
+            Map<Long, Long> mapOfTemporaries = new HashMap<Long, Long>();
+            for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryArrays.entrySet())
+            {
+                ByteBuffer bytes = entry.getValue();
+                bytes.clear();
+                bytes.getLong();
+                while (bytes.remaining() != 0)
+                {
+                    long address = bytes.getLong();
+                    if (address != 0)
+                    {
+                        mapOfTemporaries.put(address, entry.getKey());
+                    }
+                }
+            }
+            return mapOfTemporaries;
         }
         
         public File getFile()
@@ -1470,6 +1556,121 @@ public class Pack
             }
         }
 
+        public Temporary getTemporary(long address)
+        {
+            Temporary temporary = null;
+            synchronized (mapOfTemporaryArrays)
+            {
+                BUFFERS: for (;;)
+                {
+                    Map.Entry<Long, ByteBuffer> last = null;
+                    for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryArrays.entrySet())
+                    {
+                        ByteBuffer bytes = entry.getValue();
+                        bytes.clear();
+                        if (bytes.getLong() == 0L)
+                        {
+                            last = entry;
+                        }
+                        int offset = 1;
+                        while (bytes.remaining() != 0)
+                        {
+                            if (bytes.getLong() == 0L)
+                            {
+                                mapOfTemporaries.put(address, entry.getKey());
+                                bytes.putLong(offset * ADDRESS_SIZE, Long.MAX_VALUE);
+                                temporary = new Temporary(address, entry.getKey(), offset);
+                                break BUFFERS;
+                            }
+                            offset++;
+                        }
+                    }
+                    final PageRecorder pageRecorder = new PageRecorder();
+                    final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
+                    Mutator mutator = listOfMoves.mutate(new GuardedReturnable<Mutator>()
+                    {
+                        public Mutator run(List<MoveLatch> listOfMoveLatches)
+                        {
+                            MoveNode moveNode = new MoveNode();
+                            DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
+                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
+                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                        }
+                    });
+                    
+                    long next = mutator.allocate(32 * ADDRESS_SIZE);
+                    
+                    ByteBuffer bytes = mutator.read(next);
+                    while (bytes.remaining() != 0)
+                    {
+                        bytes.putLong(0L);
+                    }
+                    bytes.flip();
+                    
+                    mutator.write(next, bytes);
+
+                    last.getValue().flip();
+                    last.getValue().putLong(address);
+                    last.getValue().flip();
+                    
+                    mutator.write(last.getKey(), last.getValue());
+                    
+                    mutator.commit();
+                    
+                    mapOfTemporaryArrays.put(next, bytes);
+                }
+            }
+            return temporary;
+        }
+        
+        public void setTemporary(long address, long array, int offset, DirtyPageMap dirtyPages)
+        {
+            synchronized (mapOfTemporaryArrays)
+            {
+                ByteBuffer bytes = mapOfTemporaryArrays.get(array);
+                bytes.putLong(ADDRESS_SIZE * offset, address);
+                bytes.clear();
+                BlockPage blocks = getPage(array, new BlockPage(false));
+                blocks.write(address, bytes, dirtyPages);
+            }
+        }
+
+        public void freeTemporary(long address, DirtyPageMap dirtyPages)
+        {
+            synchronized (mapOfTemporaryArrays)
+            {
+                Long array = mapOfTemporaries.get(address);
+                if (array != null)
+                {
+                    ByteBuffer bytes = mapOfTemporaryArrays.get(array);
+                    bytes.clear();
+                    bytes.getLong();
+                    while (bytes.remaining() != 0)
+                    {
+                        if (bytes.getLong() == address)
+                        {
+                            bytes.putLong(bytes.position() - ADDRESS_SIZE, 0L);
+                            bytes.clear();
+                            BlockPage blocks = getPage(array, new BlockPage(false));
+                            blocks.write(address, bytes, dirtyPages);
+                            break;
+                        }
+                    }
+                    mapOfTemporaries.remove(address);
+                }
+            }
+        }
+
+        public void freeTemporary(long address, long array, int offset)
+        {
+            synchronized (mapOfTemporaryArrays)
+            {
+                mapOfTemporaries.remove(address);
+                ByteBuffer bytes = mapOfTemporaryArrays.get(array);
+                bytes.putLong(ADDRESS_SIZE * offset, 0L);
+            }
+        }
+
         public void newUserPages(SortedSet<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
         {
             while (setOfSourcePages.size() != 0)
@@ -1846,6 +2047,17 @@ public class Pack
         {
             bytes.putLong(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, openBoundary);
             invalidate(CHECKSUM_SIZE * 3 + COUNT_SIZE * 5, ADDRESS_SIZE);
+        }
+        
+        public long getTemporaries()
+        {
+            return bytes.getLong(CHECKSUM_SIZE * 4 + COUNT_SIZE * 5);
+        }
+        
+        public void setTemporaries(long temporaries)
+        {
+            bytes.putLong(CHECKSUM_SIZE * 4 + COUNT_SIZE * 5, temporaries);
+            invalidate(CHECKSUM_SIZE * 4 + COUNT_SIZE * 5, ADDRESS_SIZE);
         }
     }
 
@@ -2710,7 +2922,7 @@ public class Pack
             return unmoved() && seek(getRawPage().getByteBuffer(), address);
         }
         
-        public int getSize(long address)
+        public int getBlockSize(long address)
         {
             synchronized (getRawPage())
             {
@@ -2896,13 +3108,17 @@ public class Pack
 
         // FIXME Why is this boolean. We should never ask for an address that 
         // does not exist.
-        public boolean read(long address, ByteBuffer dst)
+        public ByteBuffer read(long address, ByteBuffer dst)
         {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getRawPage().getByteBuffer();
                 if (seek(bytes, address))
                 {
+                    if (dst == null)
+                    {
+                        dst = ByteBuffer.allocateDirect(getBlockSize(address) - BLOCK_HEADER_SIZE);
+                    }
                     int offset = bytes.position();
                     int size = bytes.getInt();
                     if (bytes.getLong() != address)
@@ -2912,10 +3128,10 @@ public class Pack
                     bytes.limit(offset + size);
                     dst.put(bytes);
                     bytes.limit(bytes.capacity());
-                    return true;
+                    return dst;
                 }
             }
-            return false;
+            return null;
         }
         
         // Note that this must be called in a synchronized block.
@@ -5161,7 +5377,10 @@ public class Pack
         @Override
         public void commit(Player player)
         {
+            // FIXME Someone else can allocate the address and even the block
+            // now that it is free and the replay ruins it. 
             Pager pager = player.getPager();
+            pager.freeTemporary(address, player.getDirtyPages());
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
             BlockPage blocks = pager.getPage(player.adjust(position), new BlockPage(false));
@@ -5229,6 +5448,57 @@ public class Pack
         public void read(ByteBuffer bytes)
         {
             position = bytes.getLong();
+        }
+    }
+    
+    private final static class Temporary
+    extends Operation
+    {
+        private long address;
+        
+        private long array;
+        
+        private int offset;
+        
+        public Temporary(long address, long array, int offset)
+        {
+            this.address = address;
+            this.array = array;
+            this.offset = offset;
+        }
+        
+        @Override
+        public void commit(Player player)
+        {
+            player.getPager().setTemporary(address, array, offset, player.getDirtyPages());
+        }
+        
+        public void rollback(Pager pager)
+        {
+            pager.freeTemporary(address, array, offset);
+        }
+
+        @Override
+        public int length()
+        {
+            return FLAG_SIZE + ADDRESS_SIZE + COUNT_SIZE;
+        }
+        
+        @Override
+        public void write(ByteBuffer bytes)
+        {
+            bytes.putShort(TEMPORARY);
+            bytes.putLong(address);
+            bytes.putLong(array);
+            bytes.putInt(offset);
+        }
+        
+        @Override
+        public void read(ByteBuffer bytes)
+        {
+            address = bytes.getLong();
+            array = bytes.getLong();
+            offset = bytes.getInt();
         }
     }
 
@@ -5331,8 +5601,10 @@ public class Pack
         
         private final MoveList listOfMoves;
         
+        private final List<Temporary> listOfTemporaries;
+        
         private long lastPointerPage;
-
+        
         public Mutator(Pager pager, MoveList listOfMoves, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
         {
             MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder(moveNode);
@@ -5349,6 +5621,7 @@ public class Pack
             this.moveNodeRecorder = moveNodeRecorder;
             this.listOfMoves = new MoveList(moveRecorder, listOfMoves);
             this.pageRecorder = pageRecorder;
+            this.listOfTemporaries = new ArrayList<Temporary>();
         }
         
         // FIXME Make part of pack and not mutator.
@@ -5359,7 +5632,15 @@ public class Pack
         
         public long temporary(int blockSize)
         {
-            throw new UnsupportedOperationException();
+            long address = allocate(blockSize);
+                
+            Temporary temporary = pager.getTemporary(address);
+            
+            journal.write(temporary);
+
+            listOfTemporaries.add(temporary);
+            
+            return address;
         }
         
         /**
@@ -5368,8 +5649,7 @@ public class Pack
          * and return the address of the block. The block will not be visible
          * to other mutators until the mutator commits it's changes.
          * 
-         * @param blockSize
-         *            The size of the block to allocate.
+         * @param blockSize The size of the block to allocate.
          * @return The address of the block.
          */
         public long allocate(int blockSize)
@@ -5456,6 +5736,7 @@ public class Pack
             return pager.getPage(position, new BlockPage(false));
         }
 
+        // FIXME Write at offset.
         public void write(final long address, final ByteBuffer src)
         {
             listOfMoves.mutate(new Guarded()
@@ -5465,15 +5746,15 @@ public class Pack
                     // For now, the first test will write to an allocated block, so
                     // the write buffer is already there.
                     BlockPage interim = null;
-                    Movable position = mapOfAddresses.get(address);
-                    if (position == null)
+                    Movable movable = mapOfAddresses.get(address);
+                    if (movable == null)
                     {
-                        position = mapOfAddresses.get(-address);
+                        movable = mapOfAddresses.get(-address);
                     }
-                    if (position == null)
+                    if (movable == null)
                     {
                         BlockPage blocks = dereference(address, listOfMoveLatches);
-                        int blockSize = blocks.getSize(address);
+                        int blockSize = blocks.getBlockSize(address);
                        
                         long bestFit = writePagesBySize.bestFit(blockSize);
                         if (bestFit == 0L)
@@ -5491,7 +5772,7 @@ public class Pack
                         if (blockSize < src.remaining() + BLOCK_HEADER_SIZE)
                         {
                             ByteBuffer copy = ByteBuffer.allocateDirect(blockSize - BLOCK_HEADER_SIZE);
-                            if (!blocks.read(address, copy))
+                            if (blocks.read(address, copy) == null)
                             {
                                 throw new IllegalStateException();
                             }
@@ -5499,12 +5780,12 @@ public class Pack
                             interim.write(address, copy, dirtyPages);
                         }
 
-                        position = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
-                        mapOfAddresses.put(address, position);
+                        movable = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
+                        mapOfAddresses.put(address, movable);
                     }
                     else
                     {
-                        interim = pager.getPage(position.getPosition(pager), new BlockPage(true));
+                        interim = pager.getPage(movable.getPosition(pager), new BlockPage(true));
                     }
         
                     if (!interim.write(address, src, dirtyPages))
@@ -5515,17 +5796,25 @@ public class Pack
             });
         }
         
-        public ByteBuffer read(final long address)
+        public ByteBuffer read(long address)
         {
-            throw new UnsupportedOperationException();
+            ByteBuffer bytes = tryRead(address, null);
+            bytes.flip();
+            return bytes;
+        }
+        
+        public void read(long address, ByteBuffer bytes)
+        {
+            tryRead(address, bytes);
         }
 
-        public void read(final long address, final ByteBuffer bytes)
+        public ByteBuffer tryRead(final long address, final ByteBuffer bytes)
         {
-            listOfMoves.mutate(new Guarded()
+            return listOfMoves.mutate(new GuardedReturnable<ByteBuffer>()
             {
-                public void run(List<MoveLatch> listOfMoveLatches)
+                public ByteBuffer run(List<MoveLatch> listOfMoveLatches)
                 {
+                    ByteBuffer out = null;
                     Movable movable = mapOfAddresses.get(address);
                     if (movable == null)
                     {
@@ -5546,7 +5835,8 @@ public class Pack
                             if (actual != lastPosition)
                             {
                                 BlockPage blocks = pager.getPage(actual, new BlockPage(false));
-                                if (blocks.read(address, bytes))
+                                out = blocks.read(address, bytes);
+                                if (out != null)
                                 {
                                     break;
                                 }
@@ -5561,8 +5851,10 @@ public class Pack
                     else
                     {
                         BlockPage blocks = pager.getPage(movable.getPosition(pager), new BlockPage(true));
-                        blocks.read(address, bytes);
+                        out = blocks.read(address, bytes);
                     }
+
+                    return out;
                 }
             });
         }
@@ -5596,6 +5888,11 @@ public class Pack
                 AddressPage addresses = pager.getPage(-address, new AddressPage());
                 addresses.free(-address, dirtyPages);
                 dirtyPages.flushIfAtCapacity();
+            }
+            
+            for (Temporary temporary : listOfTemporaries)
+            {
+                temporary.rollback(pager);
             }
             
             dirtyPages.flush();
