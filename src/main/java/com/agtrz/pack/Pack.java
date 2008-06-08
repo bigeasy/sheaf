@@ -531,8 +531,8 @@ public class Pack
             pager.getInterimBoundary().increment();
             
             DirtyPageMap dirtyPages = new DirtyPageMap(pager, 0);
-            pager.setPage(user, new BlockPage(false), dirtyPages, false);
-            BlockPage blocks = pager.getPage(user, new BlockPage(false));
+            pager.setPage(user, new UserPage(), dirtyPages, false);
+            BlockPage blocks = pager.getPage(user, new UserPage());
             blocks.getRawPage().invalidate(0, pageSize);
             dirtyPages.flush();
             
@@ -768,7 +768,7 @@ public class Pack
             for (int i = 0; i < blockPageCount; i++)
             {
                 long position = reopen.getLong();
-                BlockPage blockPage = pager.getPage(position, new BlockPage(false));
+                BlockPage blockPage = pager.getPage(position, new UserPage());
                 pager.returnUserPage(blockPage);
             }
             
@@ -886,7 +886,7 @@ public class Pack
             while (position < recovery.getFileSize())
             {
                 rawPage = new RawPage(pager, position);
-                BlockPage test = new BlockPage(false);
+                BlockPage test = new UserPage();
                 test.verifyChecksum(rawPage, recovery);
                 if (isBlockPage(rawPage, recovery))
                 {
@@ -919,7 +919,7 @@ public class Pack
             for (;;)
             {
                 pager.getInterimBoundary().increment();
-                BlockPage blocks = new BlockPage(false);
+                BlockPage blocks = new UserPage();
                 if (blocks.verifyChecksum(rawPage, recovery))
                 {
                     blocks = pager.getPage(position, blocks);
@@ -1637,8 +1637,8 @@ public class Pack
                 ByteBuffer bytes = mapOfTemporaryArrays.get(array);
                 bytes.putLong(ADDRESS_SIZE * offset, address);
                 bytes.clear();
-                BlockPage blocks = getPage(array, new BlockPage(false));
-                blocks.write(address, bytes, dirtyPages);
+                UserPage user = getPage(array, new UserPage());
+                user.write(address, bytes, dirtyPages);
             }
         }
 
@@ -1658,8 +1658,8 @@ public class Pack
                         {
                             bytes.putLong(bytes.position() - ADDRESS_SIZE, 0L);
                             bytes.clear();
-                            BlockPage blocks = getPage(array, new BlockPage(false));
-                            blocks.write(address, bytes, dirtyPages);
+                            UserPage user = getPage(array, new UserPage());
+                            user.write(address, bytes, dirtyPages);
                             break;
                         }
                     }
@@ -2603,7 +2603,7 @@ public class Pack
                 else
                 {
                     RawPage rawPage = new RawPage(getRawPage().getPager(), position);
-                    BlockPage blocks = new BlockPage(false);
+                    BlockPage blocks = new UserPage();
                     if (!blocks.verifyChecksum(rawPage, recovery)
                         || !pager.getPage(position, blocks).contains(address))
                     {
@@ -2809,33 +2809,20 @@ public class Pack
      * will ever vacuum a data page, because only one mutator at a time can
      * use a data page for block allocation.
      */
-    static final class BlockPage
+    static abstract class BlockPage
     extends RelocatablePage
     {
-        private boolean interim;
+        protected int count;
 
-        /**
-         * True if the page is in the midst of a vacuum and should not be written to.
-         */
-        private boolean mirrored;
+        protected int remaining;
 
-        private int count;
-
-        private int remaining;
-
-        public BlockPage(boolean interim)
+        public BlockPage()
         {
-            this.interim = interim;
         }
         
-        private int getDiskCount()
-        {
-            if (interim)
-            {
-                return count;
-            }
-            return count | COUNT_MASK;
-        }
+        protected abstract int getDiskCount();
+        
+        protected abstract int getDiskCount(int count);
 
         public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
@@ -2880,40 +2867,8 @@ public class Pack
             bytes.clear();
             bytes.getLong();
 
-            count = bytes.getInt();
-
-            if ((count & COUNT_MASK) != 0)
-            {
-                if (interim)
-                {
-                    throw new IllegalStateException();
-                }
-                count = count & ~COUNT_MASK;
-            }
-            else if (!interim)
-            {
-                throw new IllegalStateException();
-            }
-
+            this.count = getDiskCount(bytes.getInt());
             this.remaining = getRawPage().getPager().getPageSize() - getConsumed();
-        }
-
-        /**
-         * Called in two peculiar places. Before free and before write. Hidden
-         * in the code. Not called for copies.
-         */
-        public synchronized void waitOnMirrored()
-        {
-            while (mirrored)
-            {
-                try
-                {
-                    wait();
-                }
-                catch (InterruptedException e)
-                {
-                }
-            }
         }
         
         public int getCount()
@@ -2940,7 +2895,7 @@ public class Pack
             getRawPage().invalidate(0, CHECKSUM_SIZE);
         }
 
-        private int getBlockSize(ByteBuffer bytes)
+        protected int getBlockSize(ByteBuffer bytes)
         {
             int size = bytes.getInt(bytes.position());
             if (Math.abs(size) > bytes.remaining())
@@ -2950,12 +2905,12 @@ public class Pack
             return size;
         }
 
-        private long getAddress(ByteBuffer bytes)
+        protected long getAddress(ByteBuffer bytes)
         {
             return bytes.getLong(bytes.position() + COUNT_SIZE);
         }
         
-        private void advance(ByteBuffer bytes, int blockSize)
+        protected void advance(ByteBuffer bytes, int blockSize)
         {
             bytes.position(bytes.position() + Math.abs(blockSize));
         }
@@ -2972,7 +2927,7 @@ public class Pack
             return bytes;
         }
 
-        private ByteBuffer getBlockRange()
+        protected ByteBuffer getBlockRange()
         {
             return getBlockRange(getRawPage().getByteBuffer());
         }
@@ -2994,7 +2949,7 @@ public class Pack
          *            The address to seek.
          * @return True if the address is found, false if not found.
          */
-        private boolean seek(ByteBuffer bytes, long address)
+        protected boolean seek(ByteBuffer bytes, long address)
         {
             bytes = getBlockRange(bytes);
             int block = 0;
@@ -3051,110 +3006,6 @@ public class Pack
                 }
             }
             return listOfAddresses;
-        }
-
-        /**
-         * Allocate a block that is referenced by the specified address.
-         * 
-         * @param address
-         *            The address that will reference the newly allocated block.
-         * @param blockSize
-         *            The full block size including the block header.
-         * @param dirtyPages
-         *            A dirty page map to record the block page if it changes.
-         * @return True if the allocation is successful.
-         */
-        public void allocate(long address, int blockSize, DirtyPageMap dirtyPages)
-        {
-            if (blockSize < BLOCK_HEADER_SIZE)
-            {
-                throw new IllegalArgumentException();
-            }
-
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getBlockRange();
-                boolean found = false;
-                int block = 0;
-                // FIXME Not finding anymore. That's taken care of in commit.
-                while (block != count && !found)
-                {
-                    int size = getBlockSize(bytes);
-                    if (size > 0)
-                    {
-                        block++;
-                        if(getAddress(bytes) == address)
-                        {
-                            found = true;
-                        }
-                    }
-                    bytes.position(bytes.position() + Math.abs(size));
-                }
-        
-                if (!found)
-                {
-                    getRawPage().invalidate(bytes.position(), blockSize);
-        
-                    bytes.putInt(blockSize);
-                    bytes.putLong(address);
-        
-                    count++;
-                    remaining -= blockSize;
-        
-                    bytes.clear();
-                    bytes.putInt(CHECKSUM_SIZE, interim ? count : count | COUNT_MASK);
-                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
-        
-                    dirtyPages.add(getRawPage());
-                }
-            }
-        }
-        
-        public void write(long address, DirtyPageMap dirtyPages)
-        {
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seek(bytes, address))
-                {
-                    int blockSize = getBlockSize(bytes);
-                    bytes.limit(bytes.position() + blockSize);
-                    bytes.position(bytes.position() + BLOCK_HEADER_SIZE);
-                    
-
-                    Pager pager = getRawPage().getPager();
-                    AddressPage addresses = pager.getPage(address, new AddressPage());
-                    long lastPosition = 0L;
-                    for (;;)
-                    {
-                        long actual = addresses.dereference(address);
-                        if (actual == 0L || actual == Long.MAX_VALUE)
-                        {
-                            throw new Danger(ERROR_READ_FREE_ADDRESS);
-                        }
-                        
-                        if (actual != lastPosition)
-                        {
-                            BlockPage blocks = pager.getPage(actual, new BlockPage(false));
-                            blocks.waitOnMirrored();
-                            synchronized (blocks.getRawPage())
-                            {
-                                if (blocks.write(address, bytes, dirtyPages))
-                                {
-                                    break;
-                                }
-                            }
-                            lastPosition = actual;
-                        }
-                        else
-                        {
-                            throw new IllegalStateException();
-                        }
-                    }
-
-                    bytes.limit(bytes.capacity());
-                }
-            }
         }
 
         public boolean write(long address, ByteBuffer data, DirtyPageMap dirtyPages)
@@ -3242,237 +3093,6 @@ public class Pack
             }
             
             return checksum.getValue();
-        }
-
-        /**
-         * Mirror the page excluding freed blocks.
-         * <p>
-         * For a time, this method would copy starting after the first free
-         * block with the intention of making vacuum more efficient. However,
-         * copying over the entire page makes recovery more certain. Generating
-         * a checksum for the expected page.
-         * 
-         * @param pager
-         * @param dirtyPages
-         * @param force
-         * @return
-         */
-        public synchronized Mirror mirror(Pager pager, BlockPage copy, boolean force, DirtyPageMap dirtyPages)
-        {
-            int offset = force ? 0 : -1;
-            
-            Mirror mirror = null;
-            
-            assert ! mirrored;
-            
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getBlockRange();
-                int block = 0;
-                while (block != count)
-                {
-                    int size = getBlockSize(bytes);
-                    if (size < 0)
-                    {
-                        offset = block;
-                        advance(bytes, size);
-                    }
-                    else
-                    {
-                        block++;
-                        if (size > remaining)
-                        {
-                            throw new IllegalStateException();
-                        }
-                        if (offset == -1)
-                        {
-                            advance(bytes, size);
-                        }
-                        else
-                        {
-                            if (copy == null)
-                            {
-                                copy = pager.newInterimPage(new BlockPage(true), dirtyPages);
-                            }
-
-                            int blockSize = bytes.getInt();
-                            long address = bytes.getLong();
-                            
-                            copy.allocate(address, blockSize, dirtyPages);
-
-                            int userSize = blockSize - BLOCK_HEADER_SIZE;
-
-                            bytes.limit(bytes.position() + userSize);
-                            copy.write(address, bytes, dirtyPages);
-                            bytes.limit(bytes.capacity());
-                        }
-                    } 
-                }
-                
-                if (copy != null)
-                {
-                    long checksum = getChecksum(dirtyPages.getChecksum());
-                    mirror = new Mirror(copy, offset, checksum);
-                }
-            }
-            
-            mirrored = mirror != null;
-
-            return mirror;
-        }
-        
-        public synchronized void unmirror()
-        {
-            
-        }
-        
-        public boolean free(long address, DirtyPageMap dirtyPages)
-        {
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seek(bytes, address))
-                {
-                    int offset = bytes.position();
-
-                    int size = bytes.getInt();
-                    if (size > 0)
-                    {
-                        size = -size;
-                    }
-
-                    getRawPage().invalidate(offset, COUNT_SIZE);
-                    bytes.putInt(offset, size);
-                    
-                    count--;
-                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
-                    bytes.putInt(CHECKSUM_SIZE, interim ? count : count | COUNT_MASK);
-
-                    dirtyPages.add(getRawPage());
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        public void vacuum(BlockPage user, DirtyPageMap dirtyPages, int offset, long checksum)
-        {
-            if (offset > user.count)
-            {
-                throw new IllegalStateException();
-            }
-            ByteBuffer bytes = user.getBlockRange();
-            int block = 0;
-            while (block < offset)
-            {
-                int blockSize = user.getBlockSize(bytes);
-                if (blockSize < 0)
-                {
-                    throw new IllegalStateException();
-                }
-                user.advance(bytes, blockSize);
-                block++;
-            }
-            if (user.count - block != count)
-            {
-                throw new IllegalStateException();
-            }
-            user.count = block;
-            for (long address : getAddresses())
-            {
-                commit(address, user, dirtyPages);
-            }
-            if (checksum != user.getChecksum(dirtyPages.getChecksum()))
-            {
-                throw new IllegalStateException();
-            }
-        }
-        
-        public void commit(long address, ByteBuffer block, DirtyPageMap dirtyPages, long caller)
-        {
-            synchronized (getRawPage())
-            {
-                RawPage rawPage = getRawPage();
-                Pager pager = rawPage.getPager();
-                AddressPage addresses = pager.getPage(address, new AddressPage());
-                long position = addresses.dereference(address);
-                if (position != getRawPage().getPosition())
-                {
-                    if (position == 0L)
-                    {
-                        throw new IllegalStateException();
-                    }
-                    if (position != Long.MAX_VALUE)
-                    {
-                        BlockPage blocks = pager.getPage(position, new BlockPage(false));
-                        blocks.free(address, dirtyPages);
-                    }
-                    addresses.set(address, getRawPage().getPosition(), dirtyPages);
-                }
-                
-                ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seek(bytes, address))
-                {
-                    int size = bytes.getInt();
-                    
-                    if (size != block.remaining() + BLOCK_HEADER_SIZE)
-                    {
-                        throw new IllegalStateException();
-                    }
-                    
-                    if (bytes.getLong() != address)
-                    {
-                        throw new IllegalStateException();
-                    }
-                    
-                    getRawPage().invalidate(bytes.position(), block.remaining());
-                    bytes.put(block);
-                }
-                else
-                {
-                    if (block.remaining() + BLOCK_HEADER_SIZE > bytes.remaining())
-                    {
-                        throw new IllegalStateException();
-                    }
-                    
-                    getRawPage().invalidate(bytes.position(), block.remaining() + BLOCK_HEADER_SIZE);
-                    
-                    remaining -= block.remaining() + BLOCK_HEADER_SIZE;
-                    
-                    bytes.putInt(block.remaining() + BLOCK_HEADER_SIZE);
-                    bytes.putLong(address);
-                    bytes.put(block);
-                    
-                    count++;
-                    
-                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
-                    bytes.putInt(CHECKSUM_SIZE, interim ? count : count | COUNT_MASK);
-                }
-
-                dirtyPages.add(getRawPage());
-            }
-        }
-
-        public void commit(long address, BlockPage user, DirtyPageMap dirtyPages)
-        {
-            // FIXME Locking a lot. Going to deadlock?
-            synchronized (getRawPage())
-            {
-                ByteBuffer bytes = getRawPage().getByteBuffer();
-                if (seek(bytes, address))
-                {
-                    int offset = bytes.position();
-                    
-                    int blockSize = bytes.getInt();
-
-                    bytes.position(offset + BLOCK_HEADER_SIZE);
-                    bytes.limit(offset + blockSize);
-
-                    user.commit(address, bytes.slice(), dirtyPages, getRawPage().getPosition());
-
-                    bytes.limit(bytes.capacity());
-                }
-            }
         }
 
         public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
@@ -3566,6 +3186,399 @@ public class Pack
         }
     }
     
+    final static class UserPage extends BlockPage
+    {
+        /**
+         * True if the page is in the midst of a vacuum and should not be written to.
+         */
+        private boolean mirrored;
+
+        protected int getDiskCount()
+        {
+            return count | COUNT_MASK;
+        }
+        
+        protected int getDiskCount(int count)
+        {
+            if ((count & COUNT_MASK) == 0)
+            {
+                throw new Danger(ERROR_CORRUPT);
+            }
+            return count & ~COUNT_MASK;
+        }
+
+        /**
+         * Called in two peculiar places. Before free and before write. Hidden
+         * in the code. Not called for copies.
+         */
+        public synchronized void waitOnMirrored()
+        {
+            while (mirrored)
+            {
+                try
+                {
+                    wait();
+                }
+                catch (InterruptedException e)
+                {
+                }
+            }
+        }
+
+        /**
+         * Mirror the page excluding freed blocks.
+         * <p>
+         * For a time, this method would copy starting after the first free
+         * block with the intention of making vacuum more efficient. However,
+         * copying over the entire page makes recovery more certain. Generating
+         * a checksum for the expected page.
+         * 
+         * @param pager
+         * @param dirtyPages
+         * @param force
+         * @return
+         */
+        public synchronized Mirror mirror(Pager pager, InterimPage interim, boolean force, DirtyPageMap dirtyPages)
+        {
+            int offset = force ? 0 : -1;
+            
+            Mirror mirror = null;
+            
+            assert ! mirrored;
+            
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getBlockRange();
+                int block = 0;
+                while (block != count)
+                {
+                    int size = getBlockSize(bytes);
+                    if (size < 0)
+                    {
+                        offset = block;
+                        advance(bytes, size);
+                    }
+                    else
+                    {
+                        block++;
+                        if (size > remaining)
+                        {
+                            throw new IllegalStateException();
+                        }
+                        if (offset == -1)
+                        {
+                            advance(bytes, size);
+                        }
+                        else
+                        {
+                            if (interim == null)
+                            {
+                                interim = pager.newInterimPage(new InterimPage(), dirtyPages);
+                            }
+
+                            int blockSize = bytes.getInt();
+                            long address = bytes.getLong();
+                            
+                            interim.allocate(address, blockSize, dirtyPages);
+
+                            int userSize = blockSize - BLOCK_HEADER_SIZE;
+
+                            bytes.limit(bytes.position() + userSize);
+                            interim.write(address, bytes, dirtyPages);
+                            bytes.limit(bytes.capacity());
+                        }
+                    } 
+                }
+                
+                if (interim != null)
+                {
+                    long checksum = getChecksum(dirtyPages.getChecksum());
+                    mirror = new Mirror(interim, offset, checksum);
+                }
+            }
+            
+            mirrored = mirror != null;
+
+            return mirror;
+        }
+        
+        public synchronized void unmirror()
+        {
+            mirrored = false;
+            notifyAll();
+        }
+        
+        public void copy(long address, ByteBuffer block, DirtyPageMap dirtyPages)
+        {
+            synchronized (getRawPage())
+            {
+                RawPage rawPage = getRawPage();
+                Pager pager = rawPage.getPager();
+                AddressPage addresses = pager.getPage(address, new AddressPage());
+                long position = addresses.dereference(address);
+                if (position != getRawPage().getPosition())
+                {
+                    if (position == 0L)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    if (position != Long.MAX_VALUE)
+                    {
+                        UserPage blocks = pager.getPage(position, new UserPage());
+                        blocks.free(address, dirtyPages);
+                    }
+                    addresses.set(address, getRawPage().getPosition(), dirtyPages);
+                }
+                
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seek(bytes, address))
+                {
+                    int size = bytes.getInt();
+                    
+                    if (size != block.remaining() + BLOCK_HEADER_SIZE)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    
+                    if (bytes.getLong() != address)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    
+                    getRawPage().invalidate(bytes.position(), block.remaining());
+                    bytes.put(block);
+                }
+                else
+                {
+                    if (block.remaining() + BLOCK_HEADER_SIZE > bytes.remaining())
+                    {
+                        throw new IllegalStateException();
+                    }
+                    
+                    getRawPage().invalidate(bytes.position(), block.remaining() + BLOCK_HEADER_SIZE);
+                    
+                    remaining -= block.remaining() + BLOCK_HEADER_SIZE;
+                    
+                    bytes.putInt(block.remaining() + BLOCK_HEADER_SIZE);
+                    bytes.putLong(address);
+                    bytes.put(block);
+                    
+                    count++;
+                    
+                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+                    bytes.putInt(CHECKSUM_SIZE, getDiskCount());
+                }
+
+                dirtyPages.add(getRawPage());
+            }
+        }
+        
+        public boolean free(long address, DirtyPageMap dirtyPages)
+        {
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seek(bytes, address))
+                {
+                    int offset = bytes.position();
+
+                    int size = bytes.getInt();
+                    if (size > 0)
+                    {
+                        size = -size;
+                    }
+
+                    getRawPage().invalidate(offset, COUNT_SIZE);
+                    bytes.putInt(offset, size);
+                    
+                    count--;
+                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+                    bytes.putInt(CHECKSUM_SIZE, getDiskCount());
+
+                    dirtyPages.add(getRawPage());
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+     
+    final static class InterimPage extends BlockPage
+    {
+        protected int getDiskCount()
+        {
+            return count;
+        }
+        
+        protected int getDiskCount(int count)
+        {
+            if ((count & COUNT_MASK) != 0)
+            {
+                throw new Danger(ERROR_CORRUPT);
+            }
+            return count;
+        }
+
+        /**
+         * Allocate a block that is referenced by the specified address.
+         * 
+         * @param address
+         *            The address that will reference the newly allocated block.
+         * @param blockSize
+         *            The full block size including the block header.
+         * @param dirtyPages
+         *            A dirty page map to record the block page if it changes.
+         * @return True if the allocation is successful.
+         */
+        public void allocate(long address, int blockSize, DirtyPageMap dirtyPages)
+        {
+            if (blockSize < BLOCK_HEADER_SIZE)
+            {
+                throw new IllegalArgumentException();
+            }
+
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getBlockRange();
+                boolean found = false;
+                int block = 0;
+                // FIXME Not finding anymore. That's taken care of in commit.
+                while (block != count && !found)
+                {
+                    int size = getBlockSize(bytes);
+                    if (size > 0)
+                    {
+                        block++;
+                        if(getAddress(bytes) == address)
+                        {
+                            found = true;
+                        }
+                    }
+                    bytes.position(bytes.position() + Math.abs(size));
+                }
+        
+                if (!found)
+                {
+                    getRawPage().invalidate(bytes.position(), blockSize);
+        
+                    bytes.putInt(blockSize);
+                    bytes.putLong(address);
+        
+                    count++;
+                    remaining -= blockSize;
+        
+                    bytes.clear();
+                    bytes.putInt(CHECKSUM_SIZE, getDiskCount());
+                    getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+        
+                    dirtyPages.add(getRawPage());
+                }
+            }
+        }
+
+        public void vacuum(UserPage user, DirtyPageMap dirtyPages, int offset, long checksum)
+        {
+            if (offset > user.count)
+            {
+                throw new IllegalStateException();
+            }
+            ByteBuffer bytes = user.getBlockRange();
+            int block = 0;
+            while (block < offset)
+            {
+                int blockSize = user.getBlockSize(bytes);
+                if (blockSize < 0)
+                {
+                    throw new IllegalStateException();
+                }
+                user.advance(bytes, blockSize);
+                block++;
+            }
+            if (user.count - block != count)
+            {
+                throw new IllegalStateException();
+            }
+            user.count = block;
+            for (long address : getAddresses())
+            {
+                copy(address, user, dirtyPages);
+            }
+            if (checksum != user.getChecksum(dirtyPages.getChecksum()))
+            {
+                throw new IllegalStateException();
+            }
+        }
+
+        public void copy(long address, UserPage user, DirtyPageMap dirtyPages)
+        {
+            // FIXME Locking a lot. Going to deadlock?
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seek(bytes, address))
+                {
+                    int offset = bytes.position();
+                    
+                    int blockSize = bytes.getInt();
+
+                    bytes.position(offset + BLOCK_HEADER_SIZE);
+                    bytes.limit(offset + blockSize);
+
+                    user.copy(address, bytes.slice(), dirtyPages);
+
+                    bytes.limit(bytes.capacity());
+                }
+            }
+        }
+        
+        public void write(long address, DirtyPageMap dirtyPages)
+        {
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getRawPage().getByteBuffer();
+                if (seek(bytes, address))
+                {
+                    int blockSize = getBlockSize(bytes);
+                    bytes.limit(bytes.position() + blockSize);
+                    bytes.position(bytes.position() + BLOCK_HEADER_SIZE);
+                    
+
+                    Pager pager = getRawPage().getPager();
+                    AddressPage addresses = pager.getPage(address, new AddressPage());
+                    long lastPosition = 0L;
+                    for (;;)
+                    {
+                        long actual = addresses.dereference(address);
+                        if (actual == 0L || actual == Long.MAX_VALUE)
+                        {
+                            throw new Danger(ERROR_READ_FREE_ADDRESS);
+                        }
+                        
+                        if (actual != lastPosition)
+                        {
+                            UserPage user = pager.getPage(actual, new UserPage());
+                            user.waitOnMirrored();
+                            synchronized (user.getRawPage())
+                            {
+                                if (user.write(address, bytes, dirtyPages))
+                                {
+                                    break;
+                                }
+                            }
+                            lastPosition = actual;
+                        }
+                        else
+                        {
+                            throw new IllegalStateException();
+                        }
+                    }
+
+                    bytes.limit(bytes.capacity());
+                }
+            }
+        }
+    }
+
     final static class Mirror
     {
         private final BlockPage mirrored;
@@ -4830,6 +4843,8 @@ public class Pack
         {
             if (contains(move.getFrom()))
             {
+                remove(move.getFrom());
+                add(move.getTo());
                 moved = true;
             }
             if (contains(-move.getFrom()))
@@ -5196,8 +5211,8 @@ public class Pack
         
         public void vacuum(Player player)
         {
-            BlockPage mirrored = player.getPager().getPage(from, new BlockPage(false));
-            BlockPage user = player.getPager().getPage(to, new BlockPage(false));
+            InterimPage mirrored = player.getPager().getPage(from, new InterimPage());
+            UserPage user = player.getPager().getPage(to, new UserPage());
             mirrored.vacuum(user, player.getDirtyPages(), offset, checksum);
         }
 
@@ -5414,7 +5429,7 @@ public class Pack
         public void commit(Player player)
         {
             Pager pager = player.getPager();
-            BlockPage interim = pager.getPage(from, new BlockPage(true));
+            InterimPage interim = pager.getPage(from, new InterimPage());
             interim.write(address, player.getDirtyPages());
         }
         
@@ -5467,12 +5482,12 @@ public class Pack
             pager.freeTemporary(address, player.getDirtyPages());
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
-            BlockPage blocks = pager.getPage(player.adjust(position), new BlockPage(false));
-            blocks.waitOnMirrored();
-            pager.getFreePageBySize().reserve(blocks);
-            blocks.free(address, player.getDirtyPages());
-            pager.getFreePageBySize().release(blocks.getRawPage().getPosition());
-            pager.returnUserPage(blocks);
+            UserPage user = pager.getPage(player.adjust(position), new UserPage());
+            user.waitOnMirrored();
+            pager.getFreePageBySize().reserve(user);
+            user.free(address, player.getDirtyPages());
+            pager.getFreePageBySize().release(user.getRawPage().getPosition());
+            pager.returnUserPage(user);
         }
 
         @Override
@@ -5624,9 +5639,9 @@ public class Pack
         {
             Pager pager = player.getPager();
             pager.getAddressLocker().bide(address);
-            BlockPage interim = pager.getPage(from, new BlockPage(true));
-            BlockPage user = pager.getPage(to, new BlockPage(false));
-            interim.commit(address, user, player.getDirtyPages());
+            InterimPage interim = pager.getPage(from, new InterimPage());
+            UserPage user = pager.getPage(to, new UserPage());
+            interim.copy(address, user, player.getDirtyPages());
         }
 
         @Override
@@ -5788,16 +5803,16 @@ public class Pack
                     // the block, use that page. Otherwise, allocate a new
                     // wilderness data page for allocation.
                     
-                    BlockPage interim = null;
+                    InterimPage interim = null;
                     long bestFit = allocPagesBySize.bestFit(fullSize);
                     if (bestFit == 0L)
                     {
-                        interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                        interim = pager.newInterimPage(new InterimPage(), dirtyPages);
                         pageRecorder.getAllocationPageSet().add(interim.getRawPage().getPosition());
                     }
                     else
                     {
-                        interim = pager.getPage(bestFit, new BlockPage(true));
+                        interim = pager.getPage(bestFit, new InterimPage());
                     }
                     
                     // Allocate a block from the wilderness data page.
@@ -5813,7 +5828,7 @@ public class Pack
             });
         }
 
-        private BlockPage dereference(long address, List<MoveLatch> listOfMoveLatches)
+        private UserPage dereference(long address, List<MoveLatch> listOfMoveLatches)
         {
             AddressPage addresses = pager.getPage(address, new AddressPage());
 
@@ -5832,7 +5847,7 @@ public class Pack
                 }
             }
         
-            return pager.getPage(position, new BlockPage(false));
+            return pager.getPage(position, new UserPage());
         }
 
         // FIXME Write at offset.
@@ -5844,7 +5859,7 @@ public class Pack
                 {
                     // For now, the first test will write to an allocated block, so
                     // the write buffer is already there.
-                    BlockPage interim = null;
+                    InterimPage interim = null;
                     Movable movable = mapOfAddresses.get(address);
                     if (movable == null)
                     {
@@ -5858,12 +5873,12 @@ public class Pack
                         long bestFit = writePagesBySize.bestFit(blockSize);
                         if (bestFit == 0L)
                         {
-                            interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                            interim = pager.newInterimPage(new InterimPage(), dirtyPages);
                             pageRecorder.getWritePageSet().add(interim.getRawPage().getPosition());
                         }
                         else
                         {
-                            interim = pager.getPage(bestFit, new BlockPage(true));
+                            interim = pager.getPage(bestFit, new InterimPage());
                         }
                         
                         interim.allocate(address, blockSize, dirtyPages);
@@ -5884,7 +5899,7 @@ public class Pack
                     }
                     else
                     {
-                        interim = pager.getPage(movable.getPosition(pager), new BlockPage(true));
+                        interim = pager.getPage(movable.getPosition(pager), new InterimPage());
                     }
         
                     if (!interim.write(address, src, dirtyPages))
@@ -5933,8 +5948,8 @@ public class Pack
 
                             if (actual != lastPosition)
                             {
-                                BlockPage blocks = pager.getPage(actual, new BlockPage(false));
-                                out = blocks.read(address, bytes);
+                                UserPage user = pager.getPage(actual, new UserPage());
+                                out = user.read(address, bytes);
                                 if (out != null)
                                 {
                                     break;
@@ -5949,8 +5964,8 @@ public class Pack
                     }
                     else
                     {
-                        BlockPage blocks = pager.getPage(movable.getPosition(pager), new BlockPage(true));
-                        out = blocks.read(address, bytes);
+                        InterimPage interim = pager.getPage(movable.getPosition(pager), new InterimPage());
+                        out = interim.read(address, bytes);
                     }
 
                     return out;
@@ -6029,7 +6044,7 @@ public class Pack
         }
         
         // FIXME Remove try from these methods. It's confusing.
-        private void tryExpandUser(MoveList listOfMoves, Commit commit, MoveLatch userMoves, int count)
+        private void tryExpandUser(MoveList listOfMoves, Commit commit, MoveLatch userMoves, int count, SortedSet<Long> setOfInUse)
         {
             // This invocation is to flush the move list for the current
             // mutator. You may think that this is pointless, but it's
@@ -6045,16 +6060,15 @@ public class Pack
                 {
                 }
             });
-            
-            SortedSet<Long> setOfInUse = new TreeSet<Long>();
 
             // Gather the interim pages that will become data pages, moving the
             // data to interim boundary.
             
             gatherPages(count, setOfInUse, commit.getGatheredSet());
-            
-            // If we have interim pages in use, move them.
-        
+        }
+
+        private void appendMove(MoveList listOfMoves, MoveLatch userMoves, SortedSet<Long> setOfInUse)
+        {
             if (setOfInUse.size() != 0)
             {
                 appendToMoveList(setOfInUse, userMoves);
@@ -6067,11 +6081,11 @@ public class Pack
         {
             for (long position: commit.getInUseAddressSet())
             {
-                BlockPage blocks = pager.getPage(position, new BlockPage(false));
-                BlockPage interim = pager.newInterimPage(new BlockPage(true), dirtyPages);
-                allocPagesBySize.add(interim.getRawPage().getPosition(), blocks.getRemaining());
+                UserPage user = pager.getPage(position, new UserPage());
+                InterimPage interim = pager.newInterimPage(new InterimPage(), dirtyPages);
+                allocPagesBySize.add(interim.getRawPage().getPosition(), user.getRemaining());
                 pageRecorder.getAllocationPageSet().add(interim.getRawPage().getPosition());
-                commit.getAddressMirrorMap().put(blocks.getRawPage().getPosition(), new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
+                commit.getAddressMirrorMap().put(user.getRawPage().getPosition(), new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
             }
         }
 
@@ -6089,13 +6103,15 @@ public class Pack
                 
                 int userPageCount = getUserPageCount();
                 if (userPageCount < count)
-                {
+                {            
+                    SortedSet<Long> setOfInUse = new TreeSet<Long>();
                     // Now we can try to move the pages.
                     tryExpandUser(listOfMoves,
                                   commit,
                                   userMoves,
-                                  count - userPageCount);
-                }
+                                  count - userPageCount, setOfInUse);
+                    appendMove(listOfMoves, userMoves, setOfInUse);
+                 }
             }
             finally
             {
@@ -6127,8 +6143,8 @@ public class Pack
                 commit.getAddressSet().add(position);
                 if (!setOfGathered.contains(position))
                 {
-                    BlockPage blocks = pager.getPage(position, new BlockPage(false));
-                    if (!pager.getFreePageBySize().reserve(blocks))
+                    UserPage user = pager.getPage(position, new UserPage());
+                    if (!pager.getFreePageBySize().reserve(user))
                     {
                         if (!pager.getFreeUserPages().reserve(position))
                         {
@@ -6254,14 +6270,14 @@ public class Pack
             }
         }
         
-        private Map<Long, Long> associate(Commit commit, SortedSet<Long> setOfUnassigned)
+        private Map<Long, Long> associate(Commit commit)
         {
             SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getGatheredSet());
             Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
-            while (setOfUnassigned.size() != 0)
+            while (commit.getUnassignedSet().size() != 0)
             {
-                long interimAllocation = setOfUnassigned.first();
-                setOfUnassigned.remove(interimAllocation);
+                long interimAllocation = commit.getUnassignedSet().first();
+                commit.getUnassignedSet().remove(interimAllocation);
                 
                 long soonToBeCreatedUser = setOfGathered.first();
                 setOfGathered.remove(soonToBeCreatedUser);
@@ -6314,7 +6330,7 @@ public class Pack
                 
                 pager.relocate(head.getMove().getFrom(), head.getMove().getTo());
 
-                pager.setPage(head.getMove().getFrom(), new BlockPage(false), dirtyPages, false);
+                pager.setPage(head.getMove().getFrom(), new UserPage(), dirtyPages, false);
 
                 // Now we can let anyone who is waiting on this interim page
                 // through.
@@ -6343,9 +6359,9 @@ public class Pack
             }
         }
 
-        private void asssignAllocations(Commit commit, SortedSet<Long> setOfUnassigned)
+        private void asssignAllocations(Commit commit)
         {
-            Map<Long, Long> mapOfCopies = associate(commit, setOfUnassigned);
+            Map<Long, Long> mapOfCopies = associate(commit);
             
             for (Map.Entry<Long, Long> copy: mapOfCopies.entrySet())
             {
@@ -6408,7 +6424,7 @@ public class Pack
             }
         }
 
-        private void mirrorUsers(Commit commit, Set<BlockPage> setOfMirroredCopyPages)
+        private void mirrorUsers(Commit commit, Set<UserPage> setOfMirroredCopyPages)
         {
             for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
             {
@@ -6425,12 +6441,12 @@ public class Pack
                     throw new IllegalStateException();
                 }
                 
-                BlockPage mirrored = pager.getPage(allocation, new BlockPage(false));
+                InterimPage mirrored = pager.getPage(allocation, new InterimPage());
                 
-                BlockPage blocks = pager.getPage(soonToBeCreatedAddress, new BlockPage(true));
-                blocks.mirror(pager, mirrored, true, dirtyPages);
+                UserPage user = pager.getPage(soonToBeCreatedAddress, new UserPage());
+                user.mirror(pager, mirrored, true, dirtyPages);
 
-                setOfMirroredCopyPages.add(blocks);
+                setOfMirroredCopyPages.add(user);
             }
         }
 
@@ -6438,7 +6454,7 @@ public class Pack
         {
             for (Map.Entry<Long, Movable> entry: mapOfCommits.entrySet())
             {
-                BlockPage interim = pager.getPage(entry.getKey(), new BlockPage(true));
+                InterimPage interim = pager.getPage(entry.getKey(), new InterimPage());
                 for (long address: interim.getAddresses())
                 {
                     journal.write(new Copy(address, entry.getKey(), entry.getValue().getPosition(pager)));
@@ -6446,20 +6462,20 @@ public class Pack
             }
         }
         
-        private void unlockMirrored(Set<BlockPage> setOfMirroredPages)
+        private void unlockMirrored(Set<UserPage> setOfMirroredPages)
         {
-            for (BlockPage blocks : setOfMirroredPages)
+            for (UserPage user : setOfMirroredPages)
             {
-                blocks.unmirror();
+                user.unmirror();
             }
             setOfMirroredPages.clear();
         }
 
         private void tryCommit(MoveList listOfMoves, final Commit commit)
         {
-            final SortedSet<Long> setOfUnassigned = new TreeSet<Long>(pageRecorder.getAllocationPageSet());
+            commit.getUnassignedSet().addAll(pageRecorder.getAllocationPageSet());
 
-            if (setOfUnassigned.size() != 0)
+            if (commit.getUnassignedSet().size() != 0)
             {
                 // First we mate the interim data pages with 
                 listOfMoves.mutate(new Guarded()
@@ -6470,12 +6486,12 @@ public class Pack
                         // pages to store our new block allocations.
         
                         pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getVacuumMap(), moveNodeRecorder.getMoveNode());
-                        setOfUnassigned.removeAll(commit.getVacuumMap().keySet());
+                        commit.getUnassignedSet().removeAll(commit.getVacuumMap().keySet());
                         
                         // Use free data pages to store the interim pages whose
                         // blocks would not fit on an existing page.
                         
-                        pager.newUserPages(setOfUnassigned, pageRecorder.getUserPageSet(), commit.getEmptyMap(), moveNodeRecorder.getMoveNode());
+                        pager.newUserPages(commit.getUnassignedSet(), pageRecorder.getUserPageSet(), commit.getEmptyMap(), moveNodeRecorder.getMoveNode());
                     }
                 });
             }
@@ -6485,17 +6501,21 @@ public class Pack
             
             final MoveLatch userMoves = new MoveLatch(false);
         
-            if (setOfUnassigned.size() != 0)
+            if (commit.getUnassignedSet().size() != 0)
             {
                 pager.getExpandLock().lock();
                 try
                 {
+                    SortedSet<Long> setOfInUse = new TreeSet<Long>();
                     // Now we can try to move the pages.
                     tryExpandUser(listOfMoves,
                                   commit,
                                   userMoves,
-                                  setOfUnassigned.size());
-                    asssignAllocations(commit, setOfUnassigned);
+                                  commit.getUnassignedSet().size(),
+                                  setOfInUse);
+                    // If we have interim pages in use, move them.
+                    appendMove(listOfMoves, userMoves, setOfInUse);
+                    asssignAllocations(commit);
                 }
                 finally
                 {
@@ -6524,7 +6544,7 @@ public class Pack
                     @Override
                     public void run(List<MoveLatch> listOfMoveLatches)
                     {
-                        tryExpandAddress(commit,addressMoves);
+                        tryExpandAddress(commit, addressMoves);
                     }
                 });
 
@@ -6547,7 +6567,7 @@ public class Pack
                     long beforeVacuum = journal.getJournalPosition();
                     
                     // Create a vacuum operation for all the vacuums.
-                    Set<BlockPage> setOfMirroredVacuumPages = new HashSet<BlockPage>();
+                    Set<UserPage> setOfMirroredVacuumPages = new HashSet<UserPage>();
                     
                     // FIXME Do I make sure that mirroring in included before 
                     // vacuum in recovery as well?
@@ -6555,12 +6575,12 @@ public class Pack
 
                     for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                     {
-                        BlockPage page = pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false));
-                        Mirror mirror = page.mirror(pager, null, false, dirtyPages);
+                        UserPage user = pager.getPage(entry.getValue().getPosition(pager), new UserPage());
+                        Mirror mirror = user.mirror(pager, null, false, dirtyPages);
                         if (mirror != null)
                         {
-                            journal.write(new AddVacuum(mirror, page));
-                            setOfMirroredVacuumPages.add(page);
+                            journal.write(new AddVacuum(mirror, user));
+                            setOfMirroredVacuumPages.add(user);
                         }
                     }
                     
@@ -6586,7 +6606,7 @@ public class Pack
                     journal.write(new Terminate());
                     
                     // Create a vacuum operation for all the vacuums.
-                    Set<BlockPage> setOfMirroredCopyPages = new HashSet<BlockPage>();
+                    Set<UserPage> setOfMirroredCopyPages = new HashSet<UserPage>();
                     mirrorUsers(commit, setOfMirroredCopyPages);
 
                     journalCommits(commit.getVacuumMap());
@@ -6594,8 +6614,8 @@ public class Pack
                    
                     for (long position: pageRecorder.getWritePageSet())
                     {
-                        BlockPage page = pager.getPage(position, new BlockPage(true));
-                        for (long address: page.getAddresses())
+                        InterimPage interim = pager.getPage(position, new InterimPage());
+                        for (long address: interim.getAddresses())
                         {
                             journal.write(new Write(address, position));
                         }
@@ -6644,11 +6664,11 @@ public class Pack
                         pager.getFreeInterimPages().free(commit.getEmptyMap().keySet());
                         for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                         {
-                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
+                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new UserPage()));
                         }
                         for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
                         {
-                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new BlockPage(false)));
+                            pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new UserPage()));
                         }
                     }
                     else
@@ -6697,6 +6717,8 @@ public class Pack
         
         private final SortedSet<Long> setOfInUseAddressPages;
         
+        private final SetRecorder setOfUnassigned;
+        
         private final SortedMap<Long, Movable> mapOfAddressMirrors;
         
         public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
@@ -6705,6 +6727,7 @@ public class Pack
             this.setOfGatheredPages = new TreeSet<Long>();
             this.setOfInUseAddressPages = new TreeSet<Long>();
             this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
+            add(setOfUnassigned = new SetRecorder());
             add(pageRecorder);
             add(mapOfVaccums = new MapRecorder());
             add(mapOfEmpties = new MapRecorder());
@@ -6744,6 +6767,11 @@ public class Pack
             return setOfInUseAddressPages;
         }
         
+        public SortedSet<Long> getUnassignedSet()
+        {
+            return setOfUnassigned;
+        }
+
         public SortedMap<Long, Movable> getVacuumMap()
         {
             return mapOfVaccums;
