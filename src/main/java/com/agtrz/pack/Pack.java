@@ -2899,9 +2899,9 @@ public class Pack
         }
 
         /**
-           * Called in two peculiar places. Before free and before write. Hidden
-           * in the code. Not called for copies. 
-           */
+         * Called in two peculiar places. Before free and before write. Hidden
+         * in the code. Not called for copies.
+         */
         public synchronized void waitOnMirrored()
         {
             while (mirrored)
@@ -6408,7 +6408,7 @@ public class Pack
             }
         }
 
-        private void mirrorUsers(Commit commit, Set<BlockPage> setOfMirroredBlockPages)
+        private void mirrorUsers(Commit commit, Set<BlockPage> setOfMirroredCopyPages)
         {
             for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
             {
@@ -6430,7 +6430,7 @@ public class Pack
                 BlockPage blocks = pager.getPage(soonToBeCreatedAddress, new BlockPage(true));
                 blocks.mirror(pager, mirrored, true, dirtyPages);
 
-                setOfMirroredBlockPages.add(blocks);
+                setOfMirroredCopyPages.add(blocks);
             }
         }
 
@@ -6444,6 +6444,15 @@ public class Pack
                     journal.write(new Copy(address, entry.getKey(), entry.getValue().getPosition(pager)));
                 }
             }
+        }
+        
+        private void unlockMirrored(Set<BlockPage> setOfMirroredPages)
+        {
+            for (BlockPage blocks : setOfMirroredPages)
+            {
+                blocks.unmirror();
+            }
+            setOfMirroredPages.clear();
         }
 
         private void tryCommit(MoveList listOfMoves, final Commit commit)
@@ -6538,7 +6547,7 @@ public class Pack
                     long beforeVacuum = journal.getJournalPosition();
                     
                     // Create a vacuum operation for all the vacuums.
-                    Set<BlockPage> setOfMirroredBlockPages = new HashSet<BlockPage>();
+                    Set<BlockPage> setOfMirroredVacuumPages = new HashSet<BlockPage>();
                     
                     // FIXME Do I make sure that mirroring in included before 
                     // vacuum in recovery as well?
@@ -6551,7 +6560,7 @@ public class Pack
                         if (mirror != null)
                         {
                             journal.write(new AddVacuum(mirror, page));
-                            setOfMirroredBlockPages.add(page);
+                            setOfMirroredVacuumPages.add(page);
                         }
                     }
                     
@@ -6576,7 +6585,9 @@ public class Pack
                     
                     journal.write(new Terminate());
                     
-                    mirrorUsers(commit, setOfMirroredBlockPages);
+                    // Create a vacuum operation for all the vacuums.
+                    Set<BlockPage> setOfMirroredCopyPages = new HashSet<BlockPage>();
+                    mirrorUsers(commit, setOfMirroredCopyPages);
 
                     journalCommits(commit.getVacuumMap());
                     journalCommits(commit.getEmptyMap());
@@ -6619,17 +6630,13 @@ public class Pack
                     // First do the vacuums.
                     player.vacuum();
                     
-                    if (!commit.isAddressExpansion())
-                    {
-                        setOfMirroredBlockPages.clear();
-                    }
+                    unlockMirrored(setOfMirroredVacuumPages);
 
                     // Then do everything else.
                     player.commit();
-                    
-                    pager.getAddressLocker().unlock(player.getAddressSet());
 
-                    setOfMirroredBlockPages.clear();
+                    unlockMirrored(setOfMirroredCopyPages);
+                    pager.getAddressLocker().unlock(player.getAddressSet());
                     
                     if (!commit.isAddressExpansion())
                     {
