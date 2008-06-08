@@ -3355,7 +3355,7 @@ public class Pack
             return false;
         }
 
-        public void compact(BlockPage user, DirtyPageMap dirtyPages, int offset, long checksum)
+        public void vacuum(BlockPage user, DirtyPageMap dirtyPages, int offset, long checksum)
         {
             if (offset > user.count)
             {
@@ -3365,12 +3365,12 @@ public class Pack
             int block = 0;
             while (block < offset)
             {
-                int blockSize = getBlockSize(bytes);
+                int blockSize = user.getBlockSize(bytes);
                 if (blockSize < 0)
                 {
                     throw new IllegalStateException();
                 }
-                advance(bytes, blockSize);
+                user.advance(bytes, blockSize);
                 block++;
             }
             if (user.count - block != count)
@@ -5198,7 +5198,7 @@ public class Pack
         {
             BlockPage mirrored = player.getPager().getPage(from, new BlockPage(false));
             BlockPage user = player.getPager().getPage(to, new BlockPage(false));
-            mirrored.compact(user, player.getDirtyPages(), offset, checksum);
+            mirrored.vacuum(user, player.getDirtyPages(), offset, checksum);
         }
 
         @Override
