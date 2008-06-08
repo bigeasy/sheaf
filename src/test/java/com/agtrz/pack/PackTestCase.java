@@ -808,6 +808,28 @@ public class PackTestCase
         new Pack.GuardedReturnable<Object>().run((List<Pack.MoveLatch>) null);
         new Pack.GuardedReturnable<Object>().run((Pack.BlockPage) null);
     }
+
+    @Test public void temporary()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        mutator.temporary(64);
+        mutator.commit();
+        pack.close();
+        Pack.Opener opener = new Pack.Opener();
+        pack = opener.open(file);
+        mutator = pack.mutate();
+        for (long address : opener.getTemporaryBlocks())
+        {
+            mutator.free(address);
+        }
+        mutator.commit();
+        pack.close();
+        opener = new Pack.Opener();
+        pack = opener.open(file);
+        assertEquals(0, opener.getTemporaryBlocks().size());
+    }
 }
 
 /* vim: set et sw=4 ts=4 ai tw=78 nowrap: */

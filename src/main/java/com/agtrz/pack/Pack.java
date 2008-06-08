@@ -13,7 +13,6 @@ import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -91,8 +90,6 @@ public class Pack
     private final static int BLOCK_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
 
     private final static int BLOCK_HEADER_SIZE = POSITION_SIZE + COUNT_SIZE;
-    
-    private final static int TEMPORARY_SIZE = ADDRESS_SIZE * 32;
     
     private final static short ADD_VACUUM = 1;
 
@@ -542,7 +539,7 @@ public class Pack
             
             Mutator mutator = pack.mutate();
             
-            header.setTemporaries(mutator.allocate(TEMPORARY_SIZE));
+            header.setTemporaries(mutator.allocate(ADDRESS_SIZE * 2));
             ByteBuffer temporaries = mutator.read(header.getTemporaries());
             while (temporaries.remaining() != 0)
             {
@@ -613,14 +610,17 @@ public class Pack
     {
         private Disk disk;
         
+        private final Set<Long> setOfTemporaryBlocks;
+        
         public Opener()
         {
             this.disk = new Disk();
+            this.setOfTemporaryBlocks = new HashSet<Long>();
         }
         
         public Set<Long> getTemporaryBlocks()
         {
-            return Collections.emptySet();
+            return setOfTemporaryBlocks;
         }
         
         public void setDisk(Disk disk)
@@ -812,10 +812,14 @@ public class Pack
             long temporaries = header.getTemporaries();
             do
             {
-                ByteBuffer array = mutator.read(temporaries);
-                mapOfTemporaryArrays.put(temporaries, array);
-                array.clear();
-                temporaries = array.getLong();
+                ByteBuffer node = mutator.read(temporaries);
+                mapOfTemporaryArrays.put(temporaries, node);
+                long address = node.getLong(0);
+                if (address != 0L)
+                {
+                    setOfTemporaryBlocks.add(address);
+                }
+                temporaries = node.getLong(ADDRESS_SIZE);
             }
             while (temporaries != 0L);
 
@@ -1058,7 +1062,7 @@ public class Pack
         
         public final BySizeTable pagesBySize_;
         
-        private final Map<Long, ByteBuffer> mapOfTemporaryArrays;
+        private final Map<Long, ByteBuffer> mapOfTemporaryNodes;
         
         private final Map<Long, Long> mapOfTemporaries;
 
@@ -1104,7 +1108,7 @@ public class Pack
          */
         private final Lock expandLock;
         
-        public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryArrays)
+        public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryNodes)
         {
             this.file = file;
             this.fileChannel = fileChannel;
@@ -1126,26 +1130,21 @@ public class Pack
             this.setOfJournalHeaders = new PositionSet(FILE_HEADER_SIZE, header.getInternalJournalCount());
             this.setOfAddressPages = setOfAddressPages;
             this.setOfReturningAddressPages = new HashSet<Long>();
-            this.mapOfTemporaryArrays = mapOfTemporaryArrays;
-            this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryArrays);
+            this.mapOfTemporaryNodes = mapOfTemporaryNodes;
+            this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryNodes);
             this.addressLocker = new AddressPageAddressLocker();
         }
         
-        private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryArrays)
+        private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryNodes)
         {
             Map<Long, Long> mapOfTemporaries = new HashMap<Long, Long>();
-            for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryArrays.entrySet())
+            for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryNodes.entrySet())
             {
                 ByteBuffer bytes = entry.getValue();
-                bytes.clear();
-                bytes.getLong();
-                while (bytes.remaining() != 0)
+                long address = bytes.getLong();
+                if (address != 0L)
                 {
-                    long address = bytes.getLong();
-                    if (address != 0)
-                    {
-                        mapOfTemporaries.put(address, entry.getKey());
-                    }
+                    mapOfTemporaries.put(address, entry.getKey());
                 }
             }
             return mapOfTemporaries;
@@ -1569,32 +1568,27 @@ public class Pack
         public Temporary getTemporary(long address)
         {
             Temporary temporary = null;
-            synchronized (mapOfTemporaryArrays)
+            synchronized (mapOfTemporaryNodes)
             {
                 BUFFERS: for (;;)
                 {
                     Map.Entry<Long, ByteBuffer> last = null;
-                    for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryArrays.entrySet())
+                    for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryNodes.entrySet())
                     {
                         ByteBuffer bytes = entry.getValue();
-                        bytes.clear();
-                        if (bytes.getLong() == 0L)
+                        if (bytes.getLong(ADDRESS_SIZE) == 0L)
                         {
                             last = entry;
                         }
-                        int offset = 1;
-                        while (bytes.remaining() != 0)
+                        else if (bytes.getLong(0) == 0L)
                         {
-                            if (bytes.getLong() == 0L)
-                            {
-                                mapOfTemporaries.put(address, entry.getKey());
-                                bytes.putLong(offset * ADDRESS_SIZE, Long.MAX_VALUE);
-                                temporary = new Temporary(address, entry.getKey(), offset);
-                                break BUFFERS;
-                            }
-                            offset++;
+                            mapOfTemporaries.put(address, entry.getKey());
+                            bytes.putLong(0, Long.MAX_VALUE);
+                            temporary = new Temporary(address, entry.getKey());
+                            break BUFFERS;
                         }
                     }
+
                     final PageRecorder pageRecorder = new PageRecorder();
                     final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
                     Mutator mutator = listOfMoves.mutate(new GuardedReturnable<Mutator>()
@@ -1608,7 +1602,7 @@ public class Pack
                         }
                     });
                     
-                    long next = mutator.allocate(32 * ADDRESS_SIZE);
+                    long next = mutator.allocate(ADDRESS_SIZE * 2);
                     
                     ByteBuffer bytes = mutator.read(next);
                     while (bytes.remaining() != 0)
@@ -1619,65 +1613,67 @@ public class Pack
                     
                     mutator.write(next, bytes);
 
-                    last.getValue().flip();
-                    last.getValue().putLong(address);
-                    last.getValue().flip();
+                    last.getValue().clear();
+                    last.getValue().putLong(ADDRESS_SIZE, next);
                     
                     mutator.write(last.getKey(), last.getValue());
                     
                     mutator.commit();
                     
-                    mapOfTemporaryArrays.put(next, bytes);
+                    mapOfTemporaryNodes.put(next, bytes);
                 }
             }
+
             return temporary;
         }
         
-        public void setTemporary(long address, long array, int offset, DirtyPageMap dirtyPages)
+        public void setTemporary(long address, long temporary, DirtyPageMap dirtyPages)
         {
-            synchronized (mapOfTemporaryArrays)
+            synchronized (mapOfTemporaryNodes)
             {
-                ByteBuffer bytes = mapOfTemporaryArrays.get(array);
-                bytes.putLong(ADDRESS_SIZE * offset, address);
+                ByteBuffer bytes = mapOfTemporaryNodes.get(temporary);
+                bytes.putLong(0, address);
                 bytes.clear();
-                UserPage user = getPage(array, new UserPage());
-                user.write(address, bytes, dirtyPages);
+                AddressPage addresses = getPage(temporary, new AddressPage());
+                long lastPosition = 0L;
+                for (;;)
+                {
+                    long position = addresses.dereference(temporary);
+                    if (lastPosition == position)
+                    {
+                        throw new IllegalStateException();
+                    }
+                    UserPage user = getPage(position, new UserPage());
+                    synchronized (user.getRawPage())
+                    {
+                        if (user.write(temporary, bytes, dirtyPages))
+                        {
+                            break;
+                        }
+                    }
+                    lastPosition = position;
+                }
             }
         }
 
         public void freeTemporary(long address, DirtyPageMap dirtyPages)
         {
-            synchronized (mapOfTemporaryArrays)
+            synchronized (mapOfTemporaryNodes)
             {
-                Long array = mapOfTemporaries.get(address);
-                if (array != null)
+                Long temporary = mapOfTemporaries.get(address);
+                if (temporary != null)
                 {
-                    ByteBuffer bytes = mapOfTemporaryArrays.get(array);
-                    bytes.clear();
-                    bytes.getLong();
-                    while (bytes.remaining() != 0)
-                    {
-                        if (bytes.getLong() == address)
-                        {
-                            bytes.putLong(bytes.position() - ADDRESS_SIZE, 0L);
-                            bytes.clear();
-                            UserPage user = getPage(array, new UserPage());
-                            user.write(address, bytes, dirtyPages);
-                            break;
-                        }
-                    }
-                    mapOfTemporaries.remove(address);
+                    setTemporary(0L, temporary, dirtyPages);
                 }
             }
         }
 
-        public void freeTemporary(long address, long array, int offset)
+        public void freeTemporary(long address, long temporary)
         {
-            synchronized (mapOfTemporaryArrays)
+            synchronized (mapOfTemporaryNodes)
             {
                 mapOfTemporaries.remove(address);
-                ByteBuffer bytes = mapOfTemporaryArrays.get(array);
-                bytes.putLong(ADDRESS_SIZE * offset, 0L);
+                mapOfTemporaryNodes.get(temporary).putLong(0, 0L);
             }
         }
 
@@ -3729,6 +3725,8 @@ public class Pack
                     return new Copy();
                 case TERMINATE:
                     return new Terminate();
+                case TEMPORARY:
+                    return new Temporary();
             }
             throw new IllegalStateException("Invalid type: " + type);
         }
@@ -5475,6 +5473,8 @@ public class Pack
             // now that it is free and the replay ruins it. 
             Pager pager = player.getPager();
             pager.getAddressLocker().lock(player.getAddressSet(), address);
+            // FIXME Same problem with addresses as with temporary headers,
+            // someone can reuse when we're scheduled to release.
             pager.freeTemporary(address, player.getDirtyPages());
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
@@ -5552,32 +5552,33 @@ public class Pack
     {
         private long address;
         
-        private long array;
+        private long temporary;
         
-        private int offset;
+        public Temporary()
+        {
+        }
         
-        public Temporary(long address, long array, int offset)
+        public Temporary(long address, long temporary)
         {
             this.address = address;
-            this.array = array;
-            this.offset = offset;
+            this.temporary = temporary;
         }
         
         @Override
         public void commit(Player player)
         {
-            player.getPager().setTemporary(address, array, offset, player.getDirtyPages());
+            player.getPager().setTemporary(address, temporary, player.getDirtyPages());
         }
         
         public void rollback(Pager pager)
         {
-            pager.freeTemporary(address, array, offset);
+            pager.freeTemporary(address, temporary);
         }
 
         @Override
         public int length()
         {
-            return FLAG_SIZE + ADDRESS_SIZE + COUNT_SIZE;
+            return FLAG_SIZE + ADDRESS_SIZE * 2;
         }
         
         @Override
@@ -5585,16 +5586,14 @@ public class Pack
         {
             bytes.putShort(TEMPORARY);
             bytes.putLong(address);
-            bytes.putLong(array);
-            bytes.putInt(offset);
+            bytes.putLong(temporary);
         }
         
         @Override
         public void read(ByteBuffer bytes)
         {
             address = bytes.getLong();
-            array = bytes.getLong();
-            offset = bytes.getInt();
+            temporary = bytes.getLong();
         }
     }
 
