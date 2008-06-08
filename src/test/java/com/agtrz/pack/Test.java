@@ -334,6 +334,7 @@ public class Test
             listOfRollbackOperations.clear();
             setOfAllocations.clear();
             mutator.rollback();
+            mutator = environment.pack.mutate();
         }
 
         public void reopen()

@@ -3264,10 +3264,6 @@ public class Pack
                     else
                     {
                         block++;
-                        if (size > remaining)
-                        {
-                            throw new IllegalStateException();
-                        }
                         if (offset == -1)
                         {
                             advance(bytes, size);
@@ -3278,6 +3274,8 @@ public class Pack
                             {
                                 interim = pager.newInterimPage(new InterimPage(), dirtyPages);
                             }
+
+                            assert size <= interim.getRemaining();
 
                             int blockSize = bytes.getInt();
                             long address = bytes.getLong();
