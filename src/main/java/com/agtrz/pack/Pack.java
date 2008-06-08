@@ -1051,6 +1051,8 @@ public class Pack
         
         private final Set<Long> setOfReturningAddressPages;
         
+        private final AddressLocker addressLocker;
+        
         public final BySizeTable pagesBySize_;
         
         private final Map<Long, ByteBuffer> mapOfTemporaryArrays;
@@ -1123,6 +1125,7 @@ public class Pack
             this.setOfReturningAddressPages = new HashSet<Long>();
             this.mapOfTemporaryArrays = mapOfTemporaryArrays;
             this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryArrays);
+            this.addressLocker = new AddressPageAddressLocker();
         }
         
         private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryArrays)
@@ -1190,7 +1193,6 @@ public class Pack
             return header.getFirstAddressPageStart();
         }
 
-        // FIXME Rename.
         public Boundary getUserBoundary()
         {
             return userBoundary;
@@ -1204,6 +1206,11 @@ public class Pack
         public MoveList getMoveList()
         {
             return listOfMoves;
+        }
+        
+        public AddressLocker getAddressLocker()
+        {
+            return addressLocker;
         }
         
         public BySizeTable getFreePageBySize()
@@ -2610,6 +2617,79 @@ public class Pack
         }
     }
     
+    /**
+     * This is a sorted set because for one strategy where addresses are keys
+     * and reused, we only need to track a minimum and maximum. With little
+     * consideration, the sorted set is helpful in that implementation.
+     */
+    public interface AddressLocker
+    {
+        public void lock(SortedSet<Long> setOfAddresses, Long address);
+        
+        public void unlock(SortedSet<Long> setOfAddresses);
+
+        public void bide(Long address);
+    }
+
+    static class AddressPageAddressLocker
+    implements AddressLocker
+    {
+        private final List<Set<Long>> listOfSetsOfAddress;
+        
+        public AddressPageAddressLocker()
+        {
+            List<Set<Long>> listOfSetsOfAddressess = new ArrayList<Set<Long>>(37);
+            for (int i = 0; i < 37; i++)
+            {
+                listOfSetsOfAddressess.add(new HashSet<Long>());
+            }
+            this.listOfSetsOfAddress = listOfSetsOfAddressess;
+        }
+        
+        public void lock(SortedSet<Long> setOfAddresses, Long address)
+        {
+            Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
+            synchronized (setOfLockedAddresses)
+            {
+                assert ! setOfLockedAddresses.contains(address);
+                setOfLockedAddresses.add(address);
+            }
+            setOfAddresses.add(address);
+        }
+
+        public void unlock(SortedSet<Long> setOfAddresses)
+        {
+            for (Long address : setOfAddresses)
+            {
+                Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
+                synchronized (setOfLockedAddresses)
+                {
+                    assert setOfLockedAddresses.contains(address);
+                    setOfLockedAddresses.remove(address);
+                    setOfLockedAddresses.notifyAll();
+                }
+            }
+        }
+
+        public void bide(Long address)
+        {
+            Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
+            synchronized (setOfLockedAddresses)
+            {
+                while (setOfLockedAddresses.contains(address))
+                {
+                    try
+                    {
+                        setOfLockedAddresses.wait();
+                    }
+                    catch (InterruptedException e)
+                    {
+                    }
+                }
+            }
+        }
+    }
+    
     static class RelocatablePage
     implements Page
     {
@@ -2737,7 +2817,7 @@ public class Pack
         /**
          * True if the page is in the midst of a vacuum and should not be written to.
          */
-        private long mirror;
+        private boolean mirrored;
 
         private int count;
 
@@ -2816,6 +2896,20 @@ public class Pack
             }
 
             this.remaining = getRawPage().getPager().getPageSize() - getConsumed();
+        }
+        
+        public synchronized void waitOnMirrored()
+        {
+            while (mirrored)
+            {
+                try
+                {
+                    wait();
+                }
+                catch (InterruptedException e)
+                {
+                }
+            }
         }
         
         public int getCount()
@@ -2918,7 +3012,6 @@ public class Pack
         
         public boolean contains(long address)
         {
-            waitOnMirror(-1L);
             return unmoved() && seek(getRawPage().getByteBuffer(), address);
         }
         
@@ -2976,11 +3069,6 @@ public class Pack
 
             synchronized (getRawPage())
             {
-                if (mirror != 0)
-                {
-                    throw new IllegalStateException();
-                }
-        
                 ByteBuffer bytes = getBlockRange();
                 boolean found = false;
                 int block = 0;
@@ -3014,23 +3102,6 @@ public class Pack
                     getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
         
                     dirtyPages.add(getRawPage());
-                }
-            }
-        }
-        
-        private void waitOnMirror(long caller)
-        {
-            if (caller != mirror)
-            {
-                while (mirror != 0)
-                {
-                    try
-                    {
-                        getRawPage().wait();
-                    }
-                    catch (InterruptedException e)
-                    {
-                    }
                 }
             }
         }
@@ -3085,7 +3156,6 @@ public class Pack
         {
             synchronized (getRawPage())
             {
-                waitOnMirror(-1L); // Actually never invoked.
                 ByteBuffer bytes = getRawPage().getByteBuffer();
                 if (seek(bytes, address))
                 {
@@ -3182,17 +3252,16 @@ public class Pack
          * @param force
          * @return
          */
-        public Mirror mirror(Pager pager, BlockPage mirrored, boolean force, DirtyPageMap dirtyPages)
+        public synchronized Mirror mirror(Pager pager, BlockPage copy, boolean force, DirtyPageMap dirtyPages)
         {
             int offset = force ? 0 : -1;
             
+            Mirror mirror = null;
+            
+            assert ! mirrored;
+            
             synchronized (getRawPage())
             {
-                if (mirror != 0)
-                {
-                    throw new IllegalStateException();
-                }
-
                 ByteBuffer bytes = getBlockRange();
                 int block = 0;
                 while (block != count)
@@ -3216,34 +3285,40 @@ public class Pack
                         }
                         else
                         {
-                            if (mirrored == null)
+                            if (copy == null)
                             {
-                                mirrored = pager.newInterimPage(new BlockPage(true), dirtyPages);
+                                copy = pager.newInterimPage(new BlockPage(true), dirtyPages);
                             }
 
                             int blockSize = bytes.getInt();
                             long address = bytes.getLong();
                             
-                            mirrored.allocate(address, blockSize, dirtyPages);
+                            copy.allocate(address, blockSize, dirtyPages);
 
                             int userSize = blockSize - BLOCK_HEADER_SIZE;
 
                             bytes.limit(bytes.position() + userSize);
-                            mirrored.write(address, bytes, dirtyPages);
+                            copy.write(address, bytes, dirtyPages);
                             bytes.limit(bytes.capacity());
                         }
                     } 
                 }
                 
-                if (mirrored != null)
+                if (copy != null)
                 {
-                    mirror = mirrored.getRawPage().getPosition();
                     long checksum = getChecksum(dirtyPages.getChecksum());
-                    return new Mirror(mirrored, offset, checksum);
+                    mirror = new Mirror(copy, offset, checksum);
                 }
             }
             
-            return null;
+            mirrored = mirror != null;
+
+            return mirror;
+        }
+        
+        public synchronized void unmirror()
+        {
+            
         }
         
         public boolean free(long address, DirtyPageMap dirtyPages)
@@ -3255,7 +3330,6 @@ public class Pack
         {
             synchronized (getRawPage())
             {
-                waitOnMirror(caller);
                 ByteBuffer bytes = getRawPage().getByteBuffer();
                 if (seek(bytes, address))
                 {
@@ -4982,9 +5056,12 @@ public class Pack
 
         private final DirtyPageMap dirtyPages;
         
+        private final SortedSet<Long> setOfAddresses;
+        
         private final Set<AddVacuum> setOfVacuums; 
         
         private final LinkedList<Move> listOfMoves;
+        
         
         public Player(Pager pager, Pointer header, DirtyPageMap dirtyPages)
         {
@@ -4995,9 +5072,10 @@ public class Pack
             this.pager = pager;
             this.header = header;
             this.entryPosition = bytes.getLong();
-            this.listOfMoves = new LinkedList<Move>();
-            this.setOfVacuums = new HashSet<AddVacuum>();
             this.dirtyPages = dirtyPages;
+            this.setOfAddresses = new TreeSet<Long>();
+            this.setOfVacuums = new HashSet<AddVacuum>();
+            this.listOfMoves = new LinkedList<Move>();
         }
         
         public Pager getPager()
@@ -5015,14 +5093,19 @@ public class Pack
             return dirtyPages;
         }
         
-        public LinkedList<Move> getMoveList()
+        public SortedSet<Long> getAddressSet()
         {
-            return listOfMoves;
+            return setOfAddresses;
         }
         
         public Set<AddVacuum> getVacuumSet()
         {
             return setOfVacuums;
+        }
+        
+        public LinkedList<Move> getMoveList()
+        {
+            return listOfMoves;
         }
         
         public long adjust(long position)
@@ -5380,6 +5463,7 @@ public class Pack
             // FIXME Someone else can allocate the address and even the block
             // now that it is free and the replay ruins it. 
             Pager pager = player.getPager();
+            pager.getAddressLocker().lock(player.getAddressSet(), address);
             pager.freeTemporary(address, player.getDirtyPages());
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
@@ -5525,8 +5609,10 @@ public class Pack
         @Override
         public void commit(Player player)
         {
-            BlockPage interim = player.getPager().getPage(from, new BlockPage(true));
-            BlockPage user = player.getPager().getPage(to, new BlockPage(false));
+            Pager pager = player.getPager();
+            pager.getAddressLocker().bide(address);
+            BlockPage interim = pager.getPage(from, new BlockPage(true));
+            BlockPage user = pager.getPage(to, new BlockPage(false));
             interim.commit(address, user, player.getDirtyPages());
         }
 
@@ -6527,6 +6613,8 @@ public class Pack
 
                     // Then do everything else.
                     player.commit();
+                    
+                    pager.getAddressLocker().unlock(player.getAddressSet());
 
                     setOfMirroredBlockPages.clear();
                     
