@@ -2897,7 +2897,11 @@ public class Pack
 
             this.remaining = getRawPage().getPager().getPageSize() - getConsumed();
         }
-        
+
+        /**
+           * Called in two peculiar places. Before free and before write. Hidden
+           * in the code. Not called for copies. 
+           */
         public synchronized void waitOnMirrored()
         {
             while (mirrored)
@@ -3132,6 +3136,7 @@ public class Pack
                         if (actual != lastPosition)
                         {
                             BlockPage blocks = pager.getPage(actual, new BlockPage(false));
+                            blocks.waitOnMirrored();
                             synchronized (blocks.getRawPage())
                             {
                                 if (blocks.write(address, bytes, dirtyPages))
@@ -3323,11 +3328,6 @@ public class Pack
         
         public boolean free(long address, DirtyPageMap dirtyPages)
         {
-            return free(address, dirtyPages, -1L);
-        }
-
-        public boolean free(long address, DirtyPageMap dirtyPages, long caller)
-        {
             synchronized (getRawPage())
             {
                 ByteBuffer bytes = getRawPage().getByteBuffer();
@@ -3405,7 +3405,7 @@ public class Pack
                     if (position != Long.MAX_VALUE)
                     {
                         BlockPage blocks = pager.getPage(position, new BlockPage(false));
-                        blocks.free(address, dirtyPages, caller);
+                        blocks.free(address, dirtyPages);
                     }
                     addresses.set(address, getRawPage().getPosition(), dirtyPages);
                 }
@@ -5468,6 +5468,7 @@ public class Pack
             AddressPage addresses = pager.getPage(address, new AddressPage());
             addresses.free(address, player.getDirtyPages());
             BlockPage blocks = pager.getPage(player.adjust(position), new BlockPage(false));
+            blocks.waitOnMirrored();
             pager.getFreePageBySize().reserve(blocks);
             blocks.free(address, player.getDirtyPages());
             pager.getFreePageBySize().release(blocks.getRawPage().getPosition());
@@ -5586,6 +5587,18 @@ public class Pack
         }
     }
 
+    /**
+     * Copy does not wait on mirrored pages, since it is called only on 
+     * pages that it has vacuumed and mirrored. In the cases of address
+     * expansion, copy will be draining a mirrored page using free. Any
+     * writers or readers will block and when the block is not found, they
+     * will dereference the address page again, to determine the new location
+     * of the block.
+     * <p>
+     * This use means the mirror flag should block for address page relocation
+     * through the entire commit, whereas with an ordinary commit, we can
+     * allow concurrent writes after the vacuum commit.
+     */
     private final static class Copy
     extends Operation
     {
