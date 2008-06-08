@@ -260,14 +260,14 @@ public class Test
         public void read(long address)
         {
             ByteBuffer block = mutator.read(address);
-            block.flip();
             boolean forward = block.get() == 1;
             int count = block.remaining() / 4;
             if (forward)
             {
                 for (int i = 0; i < count; i++)
                 {
-                    if (block.getInt() != i)
+                    int got = block.getInt();
+                    if (got != i)
                     {
                         throw new IllegalStateException();
                     }
@@ -277,7 +277,8 @@ public class Test
             {
                 for (int i = count - 1; i > 0; i--)
                 {
-                    if (block.getInt() != i)
+                    int got = block.getInt();
+                    if (got != i)
                     {
                         throw new IllegalStateException();
                     }
@@ -288,21 +289,18 @@ public class Test
         public void write(long address)
         {
             ByteBuffer block = mutator.read(address);
-            block.flip();
             boolean forward = block.get() == 1;
             int count = block.remaining() / 4;
             if (forward)
             {
-                block.put((byte) 0);
-                for (int i = count - 1; i > 0; i--)
+                for (int i = 0; i < count; i++)
                 {
                     block.putInt(i);
                 }
             }
             else
             {
-                block.put((byte) 1);
-                for (int i = 0; i < count; i++)
+                for (int i = count - 1; i > 0; i--)
                 {
                     block.putInt(i);
                 }
