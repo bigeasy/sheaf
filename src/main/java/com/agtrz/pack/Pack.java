@@ -605,6 +605,9 @@ public class Pack
     
     /**
      * Opens pack files and performs recovery.
+     * 
+     * FIXME Pull Medic out of this class.
+     * FIXME Test temporary pages.
      */
     public final static class Opener
     {
@@ -4065,7 +4068,7 @@ public class Pack
 
         private final List<LinkedList<Long>> listOfListsOfSizes;
         
-        private final SortedMap<Long, Integer> setToIgnore;
+        private final SortedMap<Long, Integer> mapToIgnore;
 
         public BySizeTable(int pageSize, int alignment)
         {
@@ -4080,7 +4083,7 @@ public class Pack
 
             this.alignment = alignment;
             this.listOfListsOfSizes = listOfListsOfSizes;
-            this.setToIgnore = new TreeMap<Long, Integer>();
+            this.mapToIgnore = new TreeMap<Long, Integer>();
         }
         
         public int getSize()
@@ -4105,7 +4108,7 @@ public class Pack
         
         public synchronized void add(long position, int remaning)
         {
-            if (!setToIgnore.containsKey(position))
+            if (!mapToIgnore.containsKey(position))
             {
                 // Maybe don't round down if exact.
                 int aligned = ((remaning | alignment - 1) + 1) - alignment;
@@ -4116,37 +4119,32 @@ public class Pack
             }
         }
         
-        private boolean remove(BlockPage blocks)
+        private void remove(BlockPage blocks)
         {
             // Maybe don't round down if exact.
             int aligned = ((blocks.getRemaining() | alignment - 1) + 1) - alignment;
             if (aligned != 0)
             {
                 LinkedList<Long> listOfPositions = listOfListsOfSizes.get(aligned / alignment);
-                return listOfPositions.remove(blocks.getRawPage().getPosition());
+                listOfPositions.remove(blocks.getRawPage().getPosition());
             }
-            return false;
         }
 
         public synchronized boolean reserve(BlockPage blocks)
         {
-            // FIXME Reserve should now add to the set to ignore always.
-            if (remove(blocks))
-            {
-                return true;
-            }
+            remove(blocks);
             long position = blocks.getRawPage().getPosition();
-            Integer count = setToIgnore.get(position);
-            setToIgnore.put(position, count == null ? 1 : count + 1);
+            Integer count = mapToIgnore.get(position);
+            mapToIgnore.put(position, count == null ? 1 : count + 1);
             return false;
         }
         
         public synchronized void release(long position)
         {
-            Integer count = setToIgnore.get(position);
-            if (count != null)
+            Integer count = mapToIgnore.remove(position);
+            if (count != null && count != 1)
             {
-                setToIgnore.put(position, count - 1);
+                mapToIgnore.put(position, count - 1);
             }
         }
 
