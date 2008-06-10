@@ -147,10 +147,10 @@ public class Pack
         {
             public Mutator run(List<MoveLatch> listOfMoveLatches)
             {
-                MoveNode moveNode = new MoveNode();
+                MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
                 DirtyPageMap dirtyPages = new DirtyPageMap(pager, 16);
-                Journal journal = new Journal(pager, pageRecorder, moveNode, dirtyPages);
-                return new Mutator(pager, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                Journal journal = new Journal(pager, moveNodeRecorder, pageRecorder, dirtyPages);
+                return new Mutator(pager, listOfMoves, moveNodeRecorder, pageRecorder, journal, dirtyPages);
             }
         });
     }
@@ -1481,10 +1481,10 @@ public class Pack
                     {
                         public Mutator run(List<MoveLatch> listOfMoveLatches)
                         {
-                            MoveNode moveNode = new MoveNode();
+                            MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
                             DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
-                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
-                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                            Journal journal = new Journal(Pager.this, moveNodeRecorder, pageRecorder, dirtyPages);
+                            return new Mutator(Pager.this, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                         }
                     });
                     position = mutator.newAddressPage().first();
@@ -1595,10 +1595,10 @@ public class Pack
                     {
                         public Mutator run(List<MoveLatch> listOfMoveLatches)
                         {
-                            MoveNode moveNode = new MoveNode();
+                            MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
                             DirtyPageMap dirtyPages = new DirtyPageMap(Pager.this, 16);
-                            Journal journal = new Journal(Pager.this, pageRecorder, moveNode, dirtyPages);
-                            return new Mutator(Pager.this, listOfMoves, pageRecorder, journal, moveNode, dirtyPages);
+                            Journal journal = new Journal(Pager.this, moveNodeRecorder, pageRecorder, dirtyPages);
+                            return new Mutator(Pager.this, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                         }
                     });
                     
@@ -3847,6 +3847,12 @@ public class Pack
                 throw new Danger(ERROR_IO_FORCE, e);
             }
         }
+        
+        public void clear()
+        {
+            mapOfByteBuffers.clear();
+            mapOfPages.clear();
+        }
     }
 
     static final class PageReference
@@ -4061,8 +4067,10 @@ public class Pack
     final static class BySizeTable implements Iterable<Long>
     {
         private final int alignment;
+        
+        private final Map<Long, Integer> mapOfPageToSize;
 
-        private final List<LinkedList<Long>> listOfListsOfSizes;
+        private final List<SortedSet<Long>> listOfSetsOfPages;
         
         private final SortedMap<Long, Integer> mapToIgnore;
 
@@ -4070,31 +4078,32 @@ public class Pack
         {
             assert pageSize % alignment == 0;
 
-            ArrayList<LinkedList<Long>> listOfListsOfSizes = new ArrayList<LinkedList<Long>>(pageSize / alignment);
+            ArrayList<SortedSet<Long>> listOfSetsOfPages = new ArrayList<SortedSet<Long>>(pageSize / alignment);
 
             for (int i = 0; i < pageSize / alignment; i++)
             {
-                listOfListsOfSizes.add(new LinkedList<Long>());
+                listOfSetsOfPages.add(new TreeSet<Long>());
             }
 
             this.alignment = alignment;
-            this.listOfListsOfSizes = listOfListsOfSizes;
+            this.listOfSetsOfPages = listOfSetsOfPages;
             this.mapToIgnore = new TreeMap<Long, Integer>();
+            this.mapOfPageToSize = new HashMap<Long, Integer>();
         }
         
         public int getSize()
         {
-            int size = 0;
-            for (List<Long> listOfSizes : listOfListsOfSizes)
-            {
-                size += listOfSizes.size();
-            }
-            return size;
+            return mapOfPageToSize.size();
+        }
+        
+        public boolean contains(long position)
+        {
+            return mapOfPageToSize.containsKey(position);
         }
         
         public Iterator<Long> iterator()
         {
-            return new BySizeTableIterator(listOfListsOfSizes);
+            return mapOfPageToSize.keySet().iterator();
         }
 
         public synchronized void add(BlockPage blocks)
@@ -4102,34 +4111,37 @@ public class Pack
             add(blocks.getRawPage().getPosition(), blocks.getRemaining());
         }
         
-        public synchronized void add(long position, int remaning)
+        public synchronized void add(long position, int remaining)
         {
             if (!mapToIgnore.containsKey(position))
             {
                 // Maybe don't round down if exact.
-                int aligned = ((remaning | alignment - 1) + 1) - alignment;
+                int aligned = remaining / alignment * alignment;
                 if (aligned != 0)
                 {
-                    listOfListsOfSizes.get(aligned / alignment).addFirst(position);
+                    mapOfPageToSize.put(position, remaining);
+                    listOfSetsOfPages.get(aligned / alignment).add(position);
                 }
             }
         }
         
-        private void remove(BlockPage blocks)
+        public int remove(long position)
         {
-            // Maybe don't round down if exact.
-            int aligned = ((blocks.getRemaining() | alignment - 1) + 1) - alignment;
-            if (aligned != 0)
+            Integer remaining = mapOfPageToSize.get(position);
+            if (remaining != null)
             {
-                LinkedList<Long> listOfPositions = listOfListsOfSizes.get(aligned / alignment);
-                listOfPositions.remove(blocks.getRawPage().getPosition());
+                mapOfPageToSize.remove(position);
+                int aligned = remaining / alignment * alignment;
+                Set<Long> listOfPositions = listOfSetsOfPages.get(aligned / alignment);
+                listOfPositions.remove(position);
+                return remaining;
             }
+            return 0;
         }
 
-        public synchronized boolean reserve(BlockPage blocks)
+        public synchronized boolean reserve(long position)
         {
-            remove(blocks);
-            long position = blocks.getRawPage().getPosition();
+            remove(position);
             Integer count = mapToIgnore.get(position);
             mapToIgnore.put(position, count == null ? 1 : count + 1);
             return false;
@@ -4172,76 +4184,83 @@ public class Pack
             int aligned = ((blockSize | alignment - 1) + 1); // Round up.
             if (aligned != 0)
             {
-                for (int i = aligned / alignment; bestFit == 0L && i < listOfListsOfSizes.size(); i++)
+                for (int i = aligned / alignment; bestFit == 0L && i < listOfSetsOfPages.size(); i++)
                 {
-                    if (!listOfListsOfSizes.get(i).isEmpty())
+                    if (!listOfSetsOfPages.get(i).isEmpty())
                     {
-                        bestFit = listOfListsOfSizes.get(i).removeFirst();
+                        bestFit = listOfSetsOfPages.get(i).first();
+                        listOfSetsOfPages.get(i).remove(bestFit);
+                        mapOfPageToSize.remove(bestFit);
                     }
                 }
             }
             return bestFit;
         }
 
+        // FIXME We can compact even further by joining vacuumed pages.
         public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
         {
-            // FIXME We can compact even further by joining vacuumed pages.
-            for (int i = 0; i < pagesBySize.listOfListsOfSizes.size(); i++)
+            int pageSize = listOfSetsOfPages.size() * alignment;
+            for (Map.Entry<Long, Integer> entry : pagesBySize.mapOfPageToSize.entrySet())
             {
-                List<Long> listOfSizes = pagesBySize.listOfListsOfSizes.get(i);
-                for (long size: listOfSizes)
+                int needed = pageSize - (BLOCK_PAGE_HEADER_SIZE + entry.getValue());
+                long found = bestFit(needed);
+                if (found != 0L)
                 {
-                    int alignedRemaining = i * alignment;
-                    int pageSize = listOfListsOfSizes.size() * alignment;
-                    int needed = pageSize - BLOCK_PAGE_HEADER_SIZE - alignedRemaining;
-                    long found = bestFit(needed);
-                    if (found != 0L)
-                    {
-                        setOfDataPages.add(found);
-                        mapOfPages.put(size, new Movable(moveNode, found, 0));
-                    }
+                    setOfDataPages.add(found);
+                    mapOfPages.put(entry.getKey(), new Movable(moveNode, found, 0));
                 }
             }
+        }
+        
+        public void clear()
+        {
+            for (SortedSet<Long> setOfPages : listOfSetsOfPages)
+            {
+                setOfPages.clear();
+            }
+            mapOfPageToSize.clear();
+            mapToIgnore.clear();
         }
     }
     
     final static class BySizeTableIterator implements Iterator<Long>
     {
-        private Iterator<LinkedList<Long>> listsOfSizes;
+        private Iterator<SortedSet<Long>> setsOfPages;
         
-        private Iterator<Long> sizes;
+        private Iterator<Long> pages;
         
-        public BySizeTableIterator(List<LinkedList<Long>> listOfListsOfSizes)
+        public BySizeTableIterator(List<SortedSet<Long>> listOfSetsOfPages)
         {
-            Iterator<LinkedList<Long>> listsOfSizes = listOfListsOfSizes.iterator();
-            Iterator<Long> sizes = listsOfSizes.next().iterator();
-            while (!sizes.hasNext() && listsOfSizes.hasNext())
+            Iterator<SortedSet<Long>> setsOfPages = listOfSetsOfPages.iterator();
+            Iterator<Long> pages = setsOfPages.next().iterator();
+            while (!pages.hasNext() && setsOfPages.hasNext())
             {
-                sizes = listsOfSizes.next().iterator();
+                pages = setsOfPages.next().iterator();
             }
-            this.listsOfSizes = listsOfSizes;
-            this.sizes = sizes;
+            this.setsOfPages = setsOfPages;
+            this.pages = pages;
         }
 
         public boolean hasNext()
         {
-            return sizes.hasNext() || listsOfSizes.hasNext();
+            return pages.hasNext() || setsOfPages.hasNext();
         }
         
         public Long next()
         {
-            while (!sizes.hasNext())
+            while (!pages.hasNext())
             {
-                if (!listsOfSizes.hasNext())
+                if (!setsOfPages.hasNext())
                 {
                     throw new ArrayIndexOutOfBoundsException();
                 }
-                sizes = listsOfSizes.next().iterator();
+                pages = setsOfPages.next().iterator();
             }
-            long size = sizes.next();
-            while (!sizes.hasNext() && listsOfSizes.hasNext())
+            long size = pages.next();
+            while (!pages.hasNext() && setsOfPages.hasNext())
             {
-                sizes = listsOfSizes.next().iterator();
+                pages = setsOfPages.next().iterator();
             }
             return size;
         }
@@ -4769,6 +4788,8 @@ public class Pack
         public boolean involves(long position);
 
         public boolean record(Move move, boolean moved);
+        
+        public void clear();
     }
      
     public final static class NullMoveRecorder
@@ -4782,6 +4803,10 @@ public class Pack
         public boolean record(Move move, boolean moved)
         {
             return moved;
+        }
+        
+        public void clear()
+        {
         }
     }
    
@@ -4819,6 +4844,14 @@ public class Pack
                 moved = recorder.record(move, moved);
             }
             return moved;
+        }
+        
+        public void clear()
+        {
+            for (MoveRecorder recorder: listOfMoveRecorders)
+            {
+                recorder.clear();
+            }
         }
     }
     
@@ -4922,6 +4955,43 @@ public class Pack
         {
             return setOfAllocationPages;
         }
+        
+        public void clear()
+        {
+            setOfAddressPages.clear();
+            super.clear();
+        }
+    }
+
+    final static class BySizeTableRecorder
+    implements MoveRecorder
+    {
+        private final BySizeTable bySizeTable;
+        
+        public BySizeTableRecorder(BySizeTable bySizeTable)
+        {
+            this.bySizeTable = bySizeTable;
+        }
+        
+        public boolean involves(long position)
+        {
+            return bySizeTable.contains(position);
+        }
+        
+        public boolean record(Move move, boolean moved)
+        {
+            int size = 0;
+            if ((size = bySizeTable.remove(move.getFrom())) != 0)
+            {
+                bySizeTable.add(move.getTo(), size);
+            }
+            return false;
+        }
+        
+        public void clear()
+        {
+            bySizeTable.clear();
+        }
     }
 
     final static class JournalRecorder
@@ -4948,19 +5018,23 @@ public class Pack
 
             return moved;
         }
+        
+        public void clear()
+        {
+            journal.reset();
+        }
     }
     
     final static class MoveNodeRecorder
     implements MoveRecorder
     {
-        private final MoveNode firstMoveNode;
+        private MoveNode firstMoveNode;
 
         private MoveNode moveNode;
         
-        public MoveNodeRecorder(MoveNode moveNode)
+        public MoveNodeRecorder()
         {
-            this.firstMoveNode = moveNode;
-            this.moveNode = moveNode;
+            firstMoveNode = moveNode = new MoveNode();
         }
 
         public MoveNode getFirstMoveNode()
@@ -4986,19 +5060,78 @@ public class Pack
             }
             return moved;
         }
+        
+        public void clear()
+        {
+            firstMoveNode = moveNode;
+        }
     }
     
-    private static class Journal
+    static class JournalWriter
     {
-        private final Pager pager;
+        protected final JournalPage journal;
+       
+        protected final Pager pager;
         
-        private final PageRecorder pageRecorder;
+        protected final DirtyPageMap dirtyPages;
+        
+        protected final PageRecorder pageRecorder;
+        
+        protected final Movable start;
+        
+        protected final MoveNodeRecorder moveNodeRecorder;
+        
+        public JournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, JournalPage journal, Movable start, DirtyPageMap dirtyPages)
+        {
+            this.pager = pager;
+            this.pageRecorder = pageRecorder;
+            this.journal = journal;
+            this.start = start;
+            this.dirtyPages = dirtyPages;
+            this.moveNodeRecorder = moveNodeRecorder;
+        }
+        
+        public Movable getJournalStart()
+        {
+            return start;
+        }
 
-        private final DirtyPageMap dirtyPages;
+        public long getJournalPosition()
+        {
+            return journal.getJournalPosition();
+        }
+        
+        public boolean write(Operation operation)
+        {
+            return journal.write(operation, NEXT_PAGE_SIZE, dirtyPages);
+        }
+        
+        public JournalWriter extend()
+        {
+            JournalPage nextJournal = pager.newInterimPage(new JournalPage(), dirtyPages);
+            journal.write(new NextOperation(nextJournal.getJournalPosition()), 0, dirtyPages);
+            pageRecorder.getJournalPageSet().add(journal.getRawPage().getPosition());
+            return new JournalWriter(pager, moveNodeRecorder, pageRecorder, nextJournal, start, dirtyPages);
+        }
+        
+        public JournalWriter reset()
+        {
+            return new NullJournalWriter(pager, moveNodeRecorder, pageRecorder, dirtyPages);
+        }
+    }
+    
+    static class NullJournalWriter
+    extends JournalWriter
+    {
+        public NullJournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageMap dirtyPages)
+        {
+            super(pager, moveNodeRecorder, pageRecorder, null, null, dirtyPages);
+        }
 
-        private final Movable journalStart;
-
-        private JournalPage journalPage;
+        public boolean write(Operation operation)
+        {
+            return false;
+        }
 
         /**
          * Create a new journal to record mutations. The dirty page map will
@@ -5022,36 +5155,45 @@ public class Pack
          *            A dirty page map where page writes are cached before
          *            being written to disk.
          */
-        public Journal(Pager pager, PageRecorder pageRecorder, MoveNode moveNode, DirtyPageMap dirtyPages)
+        public JournalWriter extend()
         {
-            this.journalPage = pager.newInterimPage(new JournalPage(), dirtyPages);
-            this.journalStart = new Movable(moveNode, journalPage.getJournalPosition(), 0);
-            this.pager = pager;
-            this.dirtyPages = dirtyPages;
-            this.pageRecorder = pageRecorder;
-            this.pageRecorder.getJournalPageSet().add(journalPage.getRawPage().getPosition());
+            JournalPage journal = pager.newInterimPage(new JournalPage(), dirtyPages);
+            Movable start = new Movable(moveNodeRecorder.getMoveNode(), journal.getJournalPosition(), 0);
+            pageRecorder.getJournalPageSet().add(journal.getRawPage().getPosition());
+            return new JournalWriter(pager, moveNodeRecorder, pageRecorder, journal, start, dirtyPages);
+        }
+    }
+    
+    private static class Journal
+    {
+        private JournalWriter writer;
+        
+        public Journal(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageMap dirtyPages)
+        {
+            writer = new NullJournalWriter(pager, moveNodeRecorder, pageRecorder, dirtyPages);
         }
         
         public Movable getJournalStart()
         {
-            return journalStart;
+            return writer.getJournalStart();
         }
         
         public long getJournalPosition()
         {
-            return journalPage.getJournalPosition();
+            return writer.getJournalPosition();
         }
 
         public void write(Operation operation)
         {
-            if (!journalPage.write(operation, NEXT_PAGE_SIZE, dirtyPages))
+            while (!writer.write(operation))
             {
-                JournalPage nextJournalPage = pager.newInterimPage(new JournalPage(), dirtyPages);
-                journalPage.write(new NextOperation(nextJournalPage.getJournalPosition()), 0, dirtyPages);
-                journalPage = nextJournalPage;
-                pageRecorder.getJournalPageSet().add(journalPage.getRawPage().getPosition());
-                write(operation);
+                writer = writer.extend();
             }
+        }
+        
+        public void reset()
+        {
+            writer = writer.reset();
         }
     }
 
@@ -5480,7 +5622,7 @@ public class Pack
             addresses.free(address, player.getDirtyPages());
             UserPage user = pager.getPage(player.adjust(position), new UserPage());
             user.waitOnMirrored();
-            pager.getFreePageBySize().reserve(user);
+            pager.getFreePageBySize().reserve(user.getRawPage().getPosition());
             user.free(address, player.getDirtyPages());
             pager.getFreePageBySize().release(user.getRawPage().getPosition());
             pager.returnUserPage(user);
@@ -5714,17 +5856,21 @@ public class Pack
         
         private long lastPointerPage;
         
-        public Mutator(Pager pager, MoveList listOfMoves, PageRecorder pageRecorder, Journal journal, MoveNode moveNode, DirtyPageMap dirtyPages)
+        public Mutator(Pager pager, MoveList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageMap dirtyPages)
         {
-            MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder(moveNode);
+            BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
+            BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
+
             CompositeMoveRecorder moveRecorder = new CompositeMoveRecorder();
             moveRecorder.add(pageRecorder);
             moveRecorder.add(moveNodeRecorder);
+            moveRecorder.add(new BySizeTableRecorder(allocPagesBySize));
+            moveRecorder.add(new BySizeTableRecorder(writePagesBySize));
             moveRecorder.add(new JournalRecorder(journal));
             this.pager = pager;
             this.journal = journal;
-            this.allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
-            this.writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
+            this.allocPagesBySize = allocPagesBySize;
+            this.writePagesBySize = writePagesBySize;
             this.dirtyPages = dirtyPages;
             this.mapOfAddresses = new TreeMap<Long, Movable>();
             this.moveNodeRecorder = moveNodeRecorder;
@@ -5742,11 +5888,17 @@ public class Pack
         public long temporary(int blockSize)
         {
             long address = allocate(blockSize);
-                
-            Temporary temporary = pager.getTemporary(address);
             
-            journal.write(temporary);
+            final Temporary temporary = pager.getTemporary(address);
 
+            listOfMoves.mutate(new Guarded()
+            {
+                public void run(List<MoveLatch> listOfMoves)
+                {
+                    journal.write(temporary);
+                }
+            });
+            
             listOfTemporaries.add(temporary);
             
             return address;
@@ -6010,6 +6162,19 @@ public class Pack
             pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
             pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
         }
+        
+        private void clear(Commit commit)
+        {
+            journal.reset();
+            allocPagesBySize.clear();
+            writePagesBySize.clear();
+            mapOfAddresses.clear();
+            dirtyPages.clear();
+            moveNodeRecorder.clear();
+            pageRecorder.clear();
+            listOfTemporaries.clear();
+            lastPointerPage = 0;
+        }
   
         public void rollback()
         {
@@ -6029,6 +6194,7 @@ public class Pack
             {
                 pager.getCompactLock().readLock().unlock();
             }
+            clear(new Commit(pageRecorder, journal, moveNodeRecorder));
         }
         
         private int getUserPageCount()
@@ -6139,7 +6305,7 @@ public class Pack
                 if (!setOfGathered.contains(position))
                 {
                     UserPage user = pager.getPage(position, new UserPage());
-                    if (!pager.getFreePageBySize().reserve(user))
+                    if (!pager.getFreePageBySize().reserve(user.getRawPage().getPosition()))
                     {
                         if (!pager.getFreeUserPages().reserve(position))
                         {
@@ -6686,16 +6852,17 @@ public class Pack
 
         public void commit()
         {
+            final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
             pager.getCompactLock().readLock().lock();
             try
             {
-                final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
                 tryCommit(new MoveList(commit, listOfMoves), commit);
             }
             finally
             {
                 pager.getCompactLock().readLock().unlock();
             }
+            clear(commit);
         }
     }
     

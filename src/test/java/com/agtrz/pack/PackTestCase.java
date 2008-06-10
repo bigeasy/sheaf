@@ -12,8 +12,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 import org.junit.Ignore;
 import org.junit.Test;
@@ -662,8 +663,8 @@ public class PackTestCase
     @Test(expected=java.lang.UnsupportedOperationException.class)
     public void bySizeTableIteratorRemove()
     {
-        List<LinkedList<Long>> listOfListsOfSizes = new ArrayList<LinkedList<Long>>();
-        listOfListsOfSizes.add(new LinkedList<Long>());
+        List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
+        listOfListsOfSizes.add(new TreeSet<Long>());
         Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
         iterator.remove();
     }
@@ -671,8 +672,8 @@ public class PackTestCase
     @Test(expected=java.lang.ArrayIndexOutOfBoundsException.class)
     public void bySizeTableIteratorOutOfBounds()
     {
-        List<LinkedList<Long>> listOfListsOfSizes = new ArrayList<LinkedList<Long>>();
-        listOfListsOfSizes.add(new LinkedList<Long>());
+        List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
+        listOfListsOfSizes.add(new TreeSet<Long>());
         Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
         iterator.next();
     }
