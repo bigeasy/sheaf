@@ -801,6 +801,29 @@ public class PackTestCase
         pack.close();
     }
     
+    @Test public void vacuumAtOffset()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        mutator.allocate(64);
+        long address1 = mutator.allocate(64);
+        mutator.allocate(64);
+        long address2 = mutator.allocate(64);
+        mutator.commit();
+        rewrite(pack, 4);
+        pack.close();
+        pack = new Pack.Opener().open(file);
+        mutator = pack.mutate();
+        mutator.free(address1);
+        mutator.free(address2);
+        mutator.commit();
+        mutator = pack.mutate();
+        assertEquals(address1, mutator.allocate(64));
+        mutator.commit();
+        pack.close();
+    }
+    
     @Test
     public void guarded()
     {

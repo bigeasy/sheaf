@@ -200,7 +200,7 @@ public class Pack
     
     /**
      * Wrapper around calls to <code>FileChannel</code> methods that allows
-     * for simulating IO failures in testing. The <code>Disk</code> is
+     * for simulating IO failures in testing. The <code>Disk</code> class is
      * stateless. Methods take a <code>FileChannel</code> as a parameter. The
      * default implementation forwards the calls directly to the
      * <code>FileChannel</code>.
@@ -213,10 +213,11 @@ public class Pack
      * <p>
      * The <code>Disk</code> class is set using the
      * {@link Pack.Creator#setDisk Pack.Creator.setDisk} or
-     * {@link Pack.Opener#setDisk} methods. Because it is stateless it can be
-     * used for multiple <code>Pack</code> instances. However the only
-     * intended use case for a subclass of <code>Disk</code> to generate I/O
-     * failures. These subclasses are not expected to be stateless.
+     * {@link Pack.Opener#setDisk Pack.Opener.setDisk} methods. Because it is
+     * stateless it can be used for multiple <code>Pack</code> instances.
+     * However the only intended use case for a subclass of <code>Disk</code>
+     * to generate I/O failures. These subclasses are not expected to be
+     * stateless.
      */
     public static class Disk
     {
@@ -1150,11 +1151,20 @@ public class Pack
             return mapOfTemporaries;
         }
         
+        /**
+         * Return the file associated with this pack.
+         * 
+         * @return The pack file.
+         */
         public File getFile()
         {
             return file;
         }
 
+        /**
+         * Return the 
+         * @return
+         */
         public FileChannel getFileChannel()
         {
             return fileChannel;
@@ -1242,10 +1252,10 @@ public class Pack
         
         private synchronized void collect()
         {
-            PageReference pageReference = null;
-            while ((pageReference = (PageReference) queue.poll()) != null)
+            Positionable positionable = null;
+            while ((positionable = (Positionable) queue.poll()) != null)
             {
-                mapOfPagesByPosition.remove(pageReference.getPosition());
+                mapOfPagesByPosition.remove(positionable.getPosition());
             }
         }
 
@@ -3254,7 +3264,10 @@ public class Pack
                     int size = getBlockSize(bytes);
                     if (size < 0)
                     {
-                        offset = block;
+                        if (offset == -1)
+                        {
+                            offset = block;
+                        }
                         advance(bytes, size);
                     }
                     else
@@ -3484,10 +3497,7 @@ public class Pack
             while (block < offset)
             {
                 int blockSize = user.getBlockSize(bytes);
-                if (blockSize < 0)
-                {
-                    throw new IllegalStateException();
-                }
+                assert blockSize > 0;
                 user.advance(bytes, blockSize);
                 block++;
             }
@@ -3854,9 +3864,14 @@ public class Pack
             mapOfPages.clear();
         }
     }
+    
+    interface Positionable
+    {
+        public Long getPosition();
+    }
 
     static final class PageReference
-    extends WeakReference<RawPage>
+    extends WeakReference<RawPage> implements Positionable
     {
         private final Long position;
 
@@ -5885,6 +5900,18 @@ public class Pack
             return pager.getStaticPageAddress(uri);
         }
         
+        /**
+         * Allocate a block whose address will be returned in the list
+         * of temporary blocks when the pack is reopened.
+         * <p>
+         * I've implemented this using user space, which seems to imply
+         * that I don't need to provide this as part of the core. I'm
+         * going to attempt to implement it as a user object. 
+         *  
+         * @param blockSize Size of the temporary block to allocate.
+         * 
+         * @return The address of the block.
+         */
         public long temporary(int blockSize)
         {
             long address = allocate(blockSize);
