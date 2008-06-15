@@ -854,6 +854,29 @@ public class PackTestCase
         pack = opener.open(file);
         assertEquals(0, opener.getTemporaryBlocks().size());
     }
+    
+    
+    @Test public void unallocate()
+    {
+        File file = newFile();
+        Pack pack = new Pack.Creator().create(file);
+        Pack.Mutator mutator = pack.mutate();
+        mutator.allocate(13);
+        long allocate = mutator.allocate(9);
+        long write1 = mutator.allocate(72);
+        long write2 = mutator.allocate(82);
+        mutator.free(allocate);
+        mutator.commit();
+        mutator.write(write1, get64bytes());
+        mutator.write(write2, get64bytes());
+        mutator.free(write2);
+        mutator.commit();
+        mutator.allocate(21);
+        allocate = mutator.allocate(37);
+        mutator.free(allocate);
+        mutator.allocate(73);
+        mutator.commit();
+    }
 }
 
 /* vim: set et sw=4 ts=4 ai tw=78 nowrap: */

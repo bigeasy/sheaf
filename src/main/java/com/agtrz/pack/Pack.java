@@ -31,8 +31,14 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
+/**
+ * Management of a file as a reusable randomly accessible blocks of data.
+ */
 public class Pack
 {
+    /**
+     * A constant value of the null address value of 0.
+     */
     public final static long NULL_ADDRESS = 0L;
 
     public final static int ERROR_FREED_FREE_ADDRESS = 300;
@@ -2383,6 +2389,14 @@ public class Pack
         {
         }
 
+        /**
+         * Calculate the header offset for the specified raw page, adjusting for
+         * the header when this is the first address page, which shares space
+         * with the pack file header and journal headers.
+         *
+         * @param rawPage The raw page behind the address page.
+         * @return The offset of address page header in the raw page.
+         */
         private static int getHeaderOffset(RawPage rawPage)
         {
             int offset = 0;
@@ -2394,6 +2408,12 @@ public class Pack
             return offset;
         }
 
+        /**
+         * Load the address page from the raw page. This method will read
+         * through the address page generatign count of free pages.
+         *
+         * @param The raw page behind this address page.
+         */
         public void load(RawPage rawPage)
         {
             ByteBuffer bytes = rawPage.getByteBuffer();
@@ -2415,6 +2435,15 @@ public class Pack
             this.rawPage = rawPage;
         }
 
+        /**
+         * Create a new address page from the raw page. Writes out zero values
+         * to at each address offset in the address page. This method will set
+         * the page of the raw page to this address page.
+         *
+         * @param rawPage The raw page that will become an address page.
+         * @param dirtyPages A map of dirty pages that need to be written to
+         * disk.
+         */
         public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
             ByteBuffer bytes = rawPage.getByteBuffer();
@@ -2435,11 +2464,22 @@ public class Pack
             rawPage.setPage(this);
         }
         
+        /**
+         * Return the raw page that backs this address page.
+         *
+         * @return The raw page behind this address page.
+         */
         public RawPage getRawPage()
         {
             return rawPage;
         }
 
+        /**
+         * Return the count of free addresses, addresses that are neither
+         * allocated nor reserved for alloction.
+         *
+         * @return The count of free addresses.
+         */
         public int getFreeCount()
         {
             synchronized (getRawPage())
@@ -2448,6 +2488,12 @@ public class Pack
             }
         }
 
+        /**
+         * Generate a checksum of the address page. The checksum is generated is
+         * the checksum of the entire contents of the address page.
+         *
+         * @param checksum The checksum to use.
+         */
         public void checksum(Checksum checksum)
         {
             checksum.reset();
@@ -2475,10 +2521,11 @@ public class Pack
         
         /**
          * Reserve an available address from the address page. Reserving an
-         * address requires marking it as reserved on an associated page
-         * reservation page. The parallel page is necessary because we cannot
-         * change the zero state of the address until the page is committed.
+         * address requires marking it as reserved by using an unlikely file
+         * position value - <code>Long.MAX_VALUE</code> - as a reservation
+         * value.
          * <p>
+         * An address is returned to the poll by setting it to zero.
          * The reservation page is tracked with the dirty page map. It can be
          * released after the dirty page map flushes the reservation page to
          * disk.
@@ -2906,12 +2953,10 @@ public class Pack
 
         protected int getBlockSize(ByteBuffer bytes)
         {
-            int size = bytes.getInt(bytes.position());
-            if (Math.abs(size) > bytes.remaining())
-            {
-                throw new IllegalStateException();
-            }
-            return size;
+            int blockSize = bytes.getInt(bytes.position());
+            assert blockSize != 0;
+            assert Math.abs(blockSize) <= bytes.remaining();
+            return blockSize;
         }
 
         protected long getAddress(ByteBuffer bytes)
@@ -3582,6 +3627,69 @@ public class Pack
 
                     bytes.limit(bytes.capacity());
                 }
+            }
+        }
+        
+        public void free(long address, DirtyPageMap dirtyPages)
+        {
+            synchronized (getRawPage())
+            {
+                ByteBuffer bytes = getBlockRange();
+                int blockSize = 0;
+                int block = 0;
+                while (block < count)
+                {
+                    blockSize = getBlockSize(bytes);
+
+                    assert blockSize > 0;
+
+                    if (getAddress(bytes) == address)
+                    {
+                        break;
+                    }
+
+                    advance(bytes, blockSize);
+
+                    block++;
+                }
+
+                assert block != count;
+                
+                int to = bytes.position();
+                advance(bytes, blockSize);
+                int from = bytes.position();
+                
+                remaining += (from - to);
+
+                block++;
+
+                while (block < count)
+                {
+                    blockSize = getBlockSize(bytes);
+                    
+                    assert blockSize > 0;
+                    
+                    advance(bytes, blockSize);
+                    
+                    block++;
+                }
+                
+                int length = bytes.position() - from;
+                
+                for (int i = 0; i < length; i++)
+                {
+                    bytes.put(to + i, bytes.get(from + i));
+                }
+                
+                if (length != 0)
+                {
+                    getRawPage().invalidate(to, length);
+                }
+
+                 count--;
+
+                getRawPage().invalidate(CHECKSUM_SIZE, COUNT_SIZE);
+                bytes.putInt(CHECKSUM_SIZE, getDiskCount());
             }
         }
     }
@@ -6157,10 +6265,46 @@ public class Pack
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    BlockPage blocks = dereference(address, listOfMoveLatches);
-                    long position = blocks.getRawPage().getPosition();
-                    journal.write(new Free(address, position));
-                    pageRecorder.getUserPageSet().add(position);
+                    boolean unallocated = false;
+
+                    Movable movable = mapOfAddresses.get(-address);
+                    if (movable != null)
+                    {
+                        unallocated = true;
+                    }
+                    else
+                    {
+                        movable = mapOfAddresses.get(address);
+                    }
+
+                    if (movable != null)
+                    {
+                        long position = movable.getPosition(pager);
+                        
+                        BySizeTable bySize = unallocated ? allocPagesBySize : writePagesBySize;
+                        boolean reinsert = bySize.remove(position) != 0;
+                        
+                        InterimPage interim = pager.getPage(position, new InterimPage());
+                        interim.free(address, dirtyPages);
+                        
+                        if (reinsert)
+                        {
+                            bySize.add(interim);
+                        }
+                    }
+                     
+                    if (unallocated)
+                    {
+                        AddressPage addresses = pager.getPage(-address, new AddressPage());
+                        addresses.free(address, dirtyPages);
+                    }
+                    else
+                    {
+                        UserPage user = dereference(address, listOfMoveLatches);
+                        long position = user.getRawPage().getPosition();
+                        journal.write(new Free(address, position));
+                        pageRecorder.getUserPageSet().add(position);
+                    }
                 }
             });
         }
