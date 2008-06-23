@@ -93,7 +93,7 @@ public class Pack
 
     private final static int FILE_HEADER_SIZE = COUNT_SIZE * 5 + ADDRESS_SIZE * 5;
 
-    private final static int BLOCK_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
+    public final static int BLOCK_PAGE_HEADER_SIZE = CHECKSUM_SIZE + COUNT_SIZE;
 
     private final static int BLOCK_HEADER_SIZE = POSITION_SIZE + COUNT_SIZE;
     
@@ -388,6 +388,19 @@ public class Pack
             return (getFirstAddressPageStart() + pageSize - 1) / pageSize * pageSize;
         }
     }
+    
+    public interface Schema
+    {
+        public int getPageSize();
+        
+        public int getAlignment();
+        
+//        public int getInternalJournalCount();
+        
+        public Disk getDisk();
+        
+        public long getStaticPageAddress(URI uri);
+    }
 
     public final static class Creator
     {
@@ -410,11 +423,6 @@ public class Pack
             this.disk = new Disk();
         }
 
-        public void setInternalJournalCount(int internalJournalCount)
-        {
-            this.internalJournalCount = internalJournalCount;
-        }
-
         public void setPageSize(int pageSize)
         {
             this.pageSize = pageSize * 1024;
@@ -423,6 +431,11 @@ public class Pack
         public void setAlignment(int alignment)
         {
             this.alignment = alignment;
+        }
+        
+        public void setInternalJournalCount(int internalJournalCount)
+        {
+            this.internalJournalCount = internalJournalCount;
         }
         
         public void setDisk(Disk disk)
@@ -1034,6 +1047,7 @@ public class Pack
     }
 
     final static class Pager
+    implements Schema
     {
         private final File file;
 
@@ -6002,10 +6016,9 @@ public class Pack
             this.listOfTemporaries = new ArrayList<Temporary>();
         }
         
-        // FIXME Make part of pack and not mutator.
-        public long getStaticPageAddress(URI uri)
+        public Schema getSchema()
         {
-            return pager.getStaticPageAddress(uri);
+            return pager;
         }
         
         /**
@@ -6967,9 +6980,6 @@ public class Pack
                     long journalStart = journal.getJournalStart().getPosition(pager);
                     journal.write(new NextOperation(journalStart));
         
-                    // TODO Abstract journal replay out, so it can be used
-                    // here and during recovery.
-                    
                     // Create a next pointer to point at the start of operations.
                     Pointer header = pager.getJournalHeaderSet().allocate();
                     header.getByteBuffer().putLong(beforeVacuum);
