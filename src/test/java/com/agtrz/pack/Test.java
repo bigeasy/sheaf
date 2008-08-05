@@ -526,7 +526,7 @@ public class Test
         public Free(Stressor stressor, Random random)
         {
             int index = random.nextInt(stressor.listOfAllocations.size());
-            Allocation allocation = (Allocation) stressor.listOfAllocations.get(index);
+            Allocation allocation = stressor.listOfAllocations.get(index);
             this.allocationCount = allocation.allocationCount;
         }
 
@@ -598,7 +598,7 @@ public class Test
         public Write(Stressor stressor, Random random)
         {
             int index = random.nextInt(stressor.listOfAllocations.size());
-            Allocation allocation = (Allocation) stressor.listOfAllocations.get(index);
+            Allocation allocation = stressor.listOfAllocations.get(index);
             this.address = allocation.address;
         }
 

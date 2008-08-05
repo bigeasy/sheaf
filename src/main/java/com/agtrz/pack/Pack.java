@@ -864,18 +864,12 @@ public class Pack
                 {
                     return false;
                 }
-                else
-                {
-                    throw new IllegalStateException();
-                }
+                throw new IllegalStateException();
             }
-            else
+            ByteBuffer peek = rawPage.getByteBuffer();
+            if (peek.getInt(CHECKSUM_SIZE) < 0)
             {
-                ByteBuffer peek = rawPage.getByteBuffer();
-                if (peek.getInt(CHECKSUM_SIZE) < 0)
-                {
-                    return true;
-                }
+                return true;
             }
             return false;
         }
@@ -919,24 +913,21 @@ public class Pack
                 {
                     break;
                 }
-                else
+                AddressPage addresses = new AddressPage();
+                if (addresses.verifyChecksum(rawPage, recovery))
                 {
-                    AddressPage addresses = new AddressPage();
-                    if (addresses.verifyChecksum(rawPage, recovery))
+                    addresses = pager.getPage(position, addresses);
+                    if (addresses.verifyAddresses(recovery))
                     {
-                        addresses = pager.getPage(position, addresses);
-                        if (addresses.verifyAddresses(recovery))
+                        if (addresses.getFreeCount() != 0)
                         {
-                            if (addresses.getFreeCount() != 0)
-                            {
-                                pager.addAddressPage(addresses);
-                            }
+                            pager.addAddressPage(addresses);
                         }
                     }
-                    else
-                    {
-                        recovery.badAddressChecksum(position);
-                    }
+                }
+                else
+                {
+                    recovery.badAddressChecksum(position);
                 }
                 position += recovery.getPager().getPageSize();
                 pager.getUserBoundary().increment();
@@ -1329,7 +1320,7 @@ public class Pack
         private void addPageByPosition(RawPage page)
         {
             PageReference intended = new PageReference(page, queue);
-            PageReference existing = (PageReference) mapOfPagesByPosition.get(intended.getPosition());
+            PageReference existing = mapOfPagesByPosition.get(intended.getPosition());
             if (existing != null)
             {
                 existing.enqueue();
@@ -1416,10 +1407,10 @@ public class Pack
         {
             RawPage page = null;
             Long boxPosition = new Long(position);
-            PageReference chunkReference = (PageReference) mapOfPagesByPosition.get(boxPosition);
+            PageReference chunkReference = mapOfPagesByPosition.get(boxPosition);
             if (chunkReference != null)
             {
-                page = (RawPage) chunkReference.get();
+                page = chunkReference.get();
             }
             return page;
         }
@@ -1739,7 +1730,7 @@ public class Pack
 
         private RawPage removePageByPosition(long position)
         {
-            PageReference existing = (PageReference) mapOfPagesByPosition.get(new Long(position));
+            PageReference existing = mapOfPagesByPosition.get(new Long(position));
             RawPage p = null;
             if (existing != null)
             {
@@ -2245,7 +2236,7 @@ public class Pack
             }
             else
             {
-                bytes = (ByteBuffer) byteBufferReference.get();
+                bytes = byteBufferReference.get();
                 if (bytes == null)
                 {
                     bytes = load();
@@ -4597,10 +4588,7 @@ public class Pack
                     {
                         break;
                     }
-                    else
-                    {
-                        advance(skip);
-                    }
+                    advance(skip);
                 }
             }
             finally
@@ -4622,10 +4610,7 @@ public class Pack
                     {
                         return guarded.run(listOfMoveLatches);
                     }
-                    else
-                    {
-                        advance(null);
-                    }
+                    advance(null);
                 }
             }
             finally
@@ -4648,10 +4633,7 @@ public class Pack
                         guarded.run(listOfMoveLatches);
                         break;
                     }
-                    else
-                    {
-                        advance(null);
-                    }
+                    advance(null);
                 }
             }
             finally
