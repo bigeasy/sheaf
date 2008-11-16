@@ -2357,24 +2357,35 @@ public class Pack
      * Unused addresses are indicated by a zero data position value. If an
      * address is in use, there will be a non-zero position value in the slot.
      * <p>
-     * When we allocate a new block, because of isolation, we cannot write out
-     * the address of the new data block until we are playing back a flushed
-     * journal. Thus, during the mutation phase of a mutation, we need to
-     * reserve a free address. Reservations are tracked in an interim
-     * reservation page defined by {@link Pack.ReservationPage}. The
-     * reservation page says which of the free addresses are reserved.
+     * <strong>FIXME</strong> This is no longer true: When we allocate a new
+     * block, because of isolation, we cannot write out the address of the new
+     * data block until we are playing back a flushed journal. Thus, during the
+     * mutation phase of a mutation, we need to reserve a free address.
+     * Reservations are tracked in an interim reservation page defined by
+     * {@link Pack.ReservationPage}. The reservation page says which of the free
+     * addresses are reserved.
      * <p>
      * The associate reservation page is allocated as needed. If there is no
      * associated reservation page, then none of the free addresses are
      * reserved.
+     * <p>
+     * <strong>FIXME</strong>: The documentation below talks about writing
+     * to the address position and also mentions a file position. The word
+     * position is being overloaded. Try and find another way to explain
+     * the address. Address slot? Address entry?
      */
     static final class AddressPage
     implements Page
     {
+        /** The raw page where the contents of the address page are stored. */
         private RawPage rawPage;
         
+        /**
+         * A count of free addresses available for reservation on the address
+         * page.
+         */
         private int freeCount;
-        
+
         /**
          * Construct an uninitialized address page that is then initialized by
          * calling the {@link #create create} or {@link #load load} methods. The
@@ -2383,11 +2394,13 @@ public class Pack
          * <p>
          * All of the page classes have default constructors. This constructor
          * is called by clients of the <code>Pager</code> when requesting pages
-         * or creating new pages. An uninitialized page of the expected Java
-         * class of page is given to the <code>Pager</code>. If the page does
-         * not exist, the newly created page is used, if not is ignored and
-         * garbage collected.
-         *
+         * or creating new pages.
+         * <p>
+         * An uninitialized page of the expected Java class of page is given to
+         * the <code>Pager</code>. If the page does not exist, the newly created
+         * page is used, if not is ignored and garbage collected. This is a
+         * variation on the prototype object construction pattern.
+         * 
          * @see com.agtrz.pack.Pack.Pager#getPage
          */
         public AddressPage()
@@ -2398,8 +2411,9 @@ public class Pack
          * Calculate the header offset for the specified raw page, adjusting for
          * the header when this is the first address page, which shares space
          * with the pack file header and journal headers.
-         *
-         * @param rawPage The raw page behind the address page.
+         * 
+         * @param rawPage
+         *            The raw page behind the address page.
          * @return The offset of address page header in the raw page.
          */
         private static int getHeaderOffset(RawPage rawPage)
@@ -2414,10 +2428,12 @@ public class Pack
         }
 
         /**
-         * Load the address page from the raw page. This method will read
-         * through the address page generatign count of free pages.
-         *
-         * @param The raw page behind this address page.
+         * Load the address page from the raw page. This method will generate a
+         * count of free pages by scanning the raw page at address positions
+         * looking for zero, the unallocated value.
+         * 
+         * @param rawPage
+         *            The raw page behind this address page.
          */
         public void load(RawPage rawPage)
         {
@@ -2441,13 +2457,14 @@ public class Pack
         }
 
         /**
-         * Create a new address page from the raw page. Writes out zero values
-         * to at each address offset in the address page. This method will set
-         * the page of the raw page to this address page.
-         *
-         * @param rawPage The raw page that will become an address page.
-         * @param dirtyPages A map of dirty pages that need to be written to
-         * disk.
+         * Create a new address page from the raw page. Initializes by writing
+         * out zero values at each address offset in the address page. This
+         * method will set the page of the raw page to this address page.
+         * 
+         * @param rawPage
+         *            The raw page that will become an address page.
+         * @param dirtyPages
+         *            A set of pages that need to be flushed to disk.
          */
         public void create(RawPage rawPage, DirtyPageMap dirtyPages)
         {
@@ -2481,8 +2498,8 @@ public class Pack
 
         /**
          * Return the count of free addresses, addresses that are neither
-         * allocated nor reserved for alloction.
-         *
+         * allocated nor reserved for allocation.
+         * 
          * @return The count of free addresses.
          */
         public int getFreeCount()
@@ -2496,8 +2513,9 @@ public class Pack
         /**
          * Generate a checksum of the address page. The checksum is generated is
          * the checksum of the entire contents of the address page.
-         *
-         * @param checksum The checksum to use.
+         * 
+         * @param checksum
+         *            The checksum to use.
          */
         public void checksum(Checksum checksum)
         {
@@ -2511,33 +2529,35 @@ public class Pack
             bytes.putLong(getHeaderOffset(getRawPage()), checksum.getValue());
             getRawPage().invalidate(getHeaderOffset(getRawPage()), CHECKSUM_SIZE);
         }
-        
+
         /**
          * Adjust the starting offset for addresses in the address page
          * accounting for the header and for the file header, if this is the
          * first address page in file.
-         *
+         * 
+         * @param rawPage
+         *            A raw page used to back an address page.
          * @return The start offset for iterating through the addresses.
          */
         private int getFirstAddressOffset(RawPage rawPage)
         {
             return getHeaderOffset(rawPage) + ADDRESS_PAGE_HEADER_SIZE;
         }
-        
+
         /**
          * Reserve an available address from the address page. Reserving an
          * address requires marking it as reserved by using an unlikely file
          * position value - <code>Long.MAX_VALUE</code> - as a reservation
          * value.
          * <p>
-         * An address is returned to the poll by setting it to zero.
-         * The reservation page is tracked with the dirty page map. It can be
+         * An address is returned to the poll by setting it to zero. The
+         * reservation page is tracked with the dirty page map. It can be
          * released after the dirty page map flushes the reservation page to
          * disk.
          * 
          * @param dirtyPages
-         *            The dirty page map.
-         * @return An reserved address or 0 if none are available.
+         *            A set of pages that need to be flushed to disk.
+         * @return A reserved address or 0 if none are available.
          */
         public long reserve(DirtyPageMap dirtyPages)
         {
@@ -2567,6 +2587,18 @@ public class Pack
             }
         }
 
+        /**
+         * Set the value of an address position to reference a specified file
+         * position. The <code>DirtyPageMap</code> will record the raw pages
+         * that are altered by this method.
+         * 
+         * @param address
+         *            The address position to set.
+         * @param position
+         *            The file position that the address references.
+         * @param dirtyPages
+         *            A set of pages that need to be flushed to disk.
+         */
         public void set(long address, long position, DirtyPageMap dirtyPages)
         {
             synchronized (getRawPage())
@@ -2593,6 +2625,14 @@ public class Pack
             }
         }
 
+        /**
+         * Free an address overwriting it with a zero value.
+         * 
+         * @param address
+         *            The address.
+         * @param dirtyPages
+         *            A set of pages that need to be flushed to disk.
+         */
         public void free(long address, DirtyPageMap dirtyPages)
         {
             synchronized (getRawPage())
@@ -3867,6 +3907,7 @@ public class Pack
         }
     }
 
+    /** FIXME Rename dirty page set. */
     public final static class DirtyPageMap
     {
         private final Pager pager;
