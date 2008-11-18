@@ -2357,22 +2357,16 @@ public class Pack
      * Unused addresses are indicated by a zero data position value. If an
      * address is in use, there will be a non-zero position value in the slot.
      * <p>
-     * <strong>FIXME</strong> This is no longer true: When we allocate a new
-     * block, because of isolation, we cannot write out the address of the new
-     * data block until we are playing back a flushed journal. Thus, during the
-     * mutation phase of a mutation, we need to reserve a free address.
-     * Reservations are tracked in an interim reservation page defined by
-     * {@link Pack.ReservationPage}. The reservation page says which of the free
-     * addresses are reserved.
+     * When we allocate a new block, because of isolation, we cannot write out
+     * the address of the new data block until we are playing back a flushed
+     * journal. Thus, during the mutation phase of a mutation, we need to
+     * reserve a free address. Reservations are tracked in an interim
+     * reservation page defined by {@link Pack.ReservationPage}. The reservation
+     * page says which of the free addresses are reserved.
      * <p>
      * The associate reservation page is allocated as needed. If there is no
      * associated reservation page, then none of the free addresses are
      * reserved.
-     * <p>
-     * <strong>FIXME</strong>: The documentation below talks about writing
-     * to the address position and also mentions a file position. The word
-     * position is being overloaded. Try and find another way to explain
-     * the address. Address slot? Address entry?
      */
     static final class AddressPage
     implements Page
