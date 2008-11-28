@@ -304,7 +304,18 @@ public class Pack
         {
             return fileChannel.size();
         }
-        
+
+        /**
+         * Truncates the file channel to the specified size.
+         * 
+         * @param fileChannel
+         *            The file channel to truncate.
+         * @param size
+         *            The new size of the file channel, measured in bytes.
+         * @return The file channel provided.
+         * @throws IOException
+         *             If some other I/O error occurs
+         */
         public FileChannel truncate(FileChannel fileChannel, long size) throws IOException
         {
             return fileChannel.truncate(size);
