@@ -287,8 +287,6 @@ extends RelocatablePage
         }
     }
 
-    // FIXME Why is this boolean. We should never ask for an address that 
-    // does not exist.
     public ByteBuffer read(long address, ByteBuffer dst)
     {
         synchronized (getRawPage())
