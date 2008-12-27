@@ -37,18 +37,18 @@ public class PackTestCase
 
     @Test public void create()
     {
-        new Pack.Creator().create(newFile()).close();
+        new Creator().create(newFile()).close();
     }
     
     @Test public void getFile()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
         assertEquals(file, pack.getFile());
         pack.close();
     }
 
-    private void assertBuffer(Pack.Disk disk, FileChannel fileChannel,
+    private void assertBuffer(Disk disk, FileChannel fileChannel,
             final ByteBuffer expected, ByteBuffer actual) throws IOException
     {
         expected.clear();
@@ -74,7 +74,7 @@ public class PackTestCase
     {
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
 
-        Pack.Regional regional = new Pack.Regional(0L)
+        Regional regional = new Regional(0L)
         {
             @Override
             public ByteBuffer getByteBuffer()
@@ -89,7 +89,7 @@ public class PackTestCase
     {
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
 
-        Pack.Regional regional = new Pack.Regional(0L)
+        Regional regional = new Regional(0L)
         {
             @Override
             public ByteBuffer getByteBuffer()
@@ -102,12 +102,12 @@ public class PackTestCase
 
     @Test public void regional() throws IOException
     {
-        Pack.Disk disk = new Pack.Disk();
+        Disk disk = new Disk();
         FileChannel fileChannel = disk.open(newFile());
 
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
         
-        Pack.Regional regional = new Pack.Regional(0L)
+        Regional regional = new Regional(0L)
         {
             @Override
             public ByteBuffer getByteBuffer()
@@ -218,30 +218,30 @@ public class PackTestCase
     @Test public void reopen()
     {
         File file = newFile();
-        new Pack.Creator().create(file).close();
-        new Pack.Opener().open(file).close();
-        new Pack.Opener().open(file).close();
+        new Creator().create(file).close();
+        new Opener().open(file).close();
+        new Opener().open(file).close();
     }
 
     @Test public void commit()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.commit();
         pack.close();
-        new Pack.Opener().open(file).close();
+        new Opener().open(file).close();
     }
 
     @Test public void allocate()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(64);
         mutator.commit();
         pack.close();
-        new Pack.Opener().open(file).close();
+        new Opener().open(file).close();
     }
     
     @Test public void fileNotFoundOpen()
@@ -249,9 +249,9 @@ public class PackTestCase
         File file = new File("/not/very/likely/harpsicord");
         try
         {
-            new Pack.Opener().open(file);
+            new Opener().open(file);
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
             return;
@@ -264,9 +264,9 @@ public class PackTestCase
         File file = new File("/not/very/likely/harpsicord");
         try
         {
-            new Pack.Creator().create(file);
+            new Creator().create(file);
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
             return;
@@ -276,10 +276,10 @@ public class PackTestCase
     
     @Test public void badSignature() throws IOException
     {
-        Pack.Disk disk = new Pack.Disk();
+        Disk disk = new Disk();
         File file = newFile();
         
-        new Pack.Creator().create(file).close();
+        new Creator().create(file).close();
         
         ByteBuffer bytes = ByteBuffer.allocateDirect(1);
         bytes.put((byte) 0);
@@ -291,9 +291,9 @@ public class PackTestCase
 
         try
         {
-            new Pack.Opener().open(file);
+            new Opener().open(file);
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             assertEquals(Pack.ERROR_SIGNATURE, e.getCode());
             return;
@@ -305,16 +305,16 @@ public class PackTestCase
     @Test public void relocatable()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(64);
         mutator.commit();
         pack.close();
         
-        pack = new Pack.Opener().open(file);
-        Pack.Pager pager = pack.pager;
-        Pack.Page page = pager.getPage(8192, new Pack.RelocatablePage());
-        page = pager.getPage(8192, new Pack.UserPage());
+        pack = new Opener().open(file);
+        Pager pager = pack.pager;
+        Page page = pager.getPage(8192, new RelocatablePage());
+        page = pager.getPage(8192, new UserPage());
         assertEquals(8192, page.getRawPage().getPosition());
     }
 
@@ -332,8 +332,8 @@ public class PackTestCase
     @Test public void write()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         ByteBuffer bytes = ByteBuffer.allocateDirect(64);
         for (int i = 0; i < 64; i++)
@@ -373,8 +373,8 @@ public class PackTestCase
     @Test public void rewrite()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.commit();
         
@@ -417,8 +417,8 @@ public class PackTestCase
     @Test public void collect()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.commit();
         
@@ -474,7 +474,7 @@ public class PackTestCase
     @Test public void rewriteMany()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
 
         rewrite(pack, 12);
                 
@@ -483,7 +483,7 @@ public class PackTestCase
 
     public void rewrite(Pack pack, int count)
     {
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         long[] addresses = new long[count];
         for (int i = 0; i < count; i++)
         {
@@ -519,7 +519,7 @@ public class PackTestCase
         mutator.commit();
     }
 
-    private void assertBuffer(Pack.Mutator mutator, long address, int count)
+    private void assertBuffer(Mutator mutator, long address, int count)
     {
         ByteBuffer bytes = ByteBuffer.allocateDirect(64);
         mutator.read(address, bytes);
@@ -534,9 +534,9 @@ public class PackTestCase
     @Test public void free()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
         
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.commit();
         
@@ -550,7 +550,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -564,14 +564,14 @@ public class PackTestCase
     @Test public void freeAndClose()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
         
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.commit();
         
         pack.close();
-        pack = new Pack.Opener().open(file);
+        pack = new Opener().open(file);
         
         mutator = pack.mutate();
         mutator.free(address);
@@ -583,7 +583,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -597,9 +597,9 @@ public class PackTestCase
     @Test public void freeWithContext()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
         
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.commit();
         
@@ -615,7 +615,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -629,11 +629,11 @@ public class PackTestCase
     @Test public void mulipleJournalPages()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
 
         rewrite(pack, 1);
         
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         for (int i = 0; i < 800; i++)
         {
             mutator.allocate(64);
@@ -646,11 +646,11 @@ public class PackTestCase
     @Test public void moveUserPageForAddress()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
 
         rewrite(pack, 1);
         
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         for (int i = 0; i < 1000; i++)
         {
             mutator.allocate(64);
@@ -665,7 +665,7 @@ public class PackTestCase
     {
         List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
         listOfListsOfSizes.add(new TreeSet<Long>());
-        Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
+        Iterator<Long> iterator = new BySizeTableIterator(listOfListsOfSizes);
         iterator.remove();
     }
     
@@ -674,18 +674,18 @@ public class PackTestCase
     {
         List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
         listOfListsOfSizes.add(new TreeSet<Long>());
-        Iterator<Long> iterator = new Pack.BySizeTableIterator(listOfListsOfSizes);
+        Iterator<Long> iterator = new BySizeTableIterator(listOfListsOfSizes);
         iterator.next();
     }
     
     @Test public void staticPages()
     {
-        Pack.Creator creator = new Pack.Creator();
+        Creator creator = new Creator();
         creator.addStaticPage(URI.create("http://one.com/"), 64);
         creator.addStaticPage(URI.create("http://two.com/"), 64);
         File file = newFile();
         Pack pack = creator.create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         mutator.write(mutator.getSchema().getStaticPageAddress(URI.create("http://one.com/")), get64bytes());
         mutator.commit();
     }
@@ -693,7 +693,7 @@ public class PackTestCase
     @Ignore @Test public void moveInterimPageForAddress()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
+        Pack pack = new Creator().create(file);
 
         rewrite(pack, 8000);
                 
@@ -702,8 +702,8 @@ public class PackTestCase
 
     @Test public void softRecover()
     {
-        Pack.Creator newPack = new Pack.Creator();
-        newPack.setDisk(new Pack.Disk()
+        Creator newPack = new Creator();
+        newPack.setDisk(new Disk()
         {
             int count = 0;
 
@@ -734,7 +734,7 @@ public class PackTestCase
         });
         File file = newFile();
         Pack pack = newPack.create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Mutator mutator = pack.mutate();
         long address = mutator.allocate(64);
         ByteBuffer bytes = ByteBuffer.allocateDirect(64);
         for (int i = 0; i < 64; i++)
@@ -749,12 +749,12 @@ public class PackTestCase
         {
             pack.close();
         }
-        catch (Pack.Danger e)
+        catch (Danger e)
         {
             thrown = true;
         }
         assertTrue(thrown);
-        Pack.Opener opener = new Pack.Opener();
+        Opener opener = new Opener();
         pack = opener.open(file);
         mutator = pack.mutate();
         assertBuffer(mutator, address, 64);
@@ -765,16 +765,16 @@ public class PackTestCase
     @Test public void rollback() 
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(64);
         mutator.commit();
         mutator = pack.mutate();
         long address = mutator.allocate(64);
         mutator.rollback();
         pack.close();
-        new Pack.Opener().open(file).close();
-        pack = new Pack.Opener().open(file);
+        new Opener().open(file).close();
+        pack = new Opener().open(file);
         mutator = pack.mutate();
         assertEquals(address, mutator.allocate(64));
         mutator.rollback();
@@ -784,14 +784,14 @@ public class PackTestCase
     @Test public void vacuum()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(64);
         long address = mutator.allocate(64);
         mutator.commit();
         rewrite(pack, 4);
         pack.close();
-        pack = new Pack.Opener().open(file);
+        pack = new Opener().open(file);
         mutator = pack.mutate();
         mutator.free(address);
         mutator.commit();
@@ -804,8 +804,8 @@ public class PackTestCase
     @Test public void vacuumAtOffset()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(64);
         long address1 = mutator.allocate(64);
         mutator.allocate(64);
@@ -813,7 +813,7 @@ public class PackTestCase
         mutator.commit();
         rewrite(pack, 4);
         pack.close();
-        pack = new Pack.Opener().open(file);
+        pack = new Opener().open(file);
         mutator = pack.mutate();
         mutator.free(address1);
         mutator.free(address2);
@@ -827,21 +827,21 @@ public class PackTestCase
     @Test
     public void guarded()
     {
-        new Pack.Guarded().run((List<Pack.MoveLatch>) null);
-        new Pack.Guarded().run((Pack.BlockPage) null);
-        new Pack.GuardedReturnable<Object>().run((List<Pack.MoveLatch>) null);
-        new Pack.GuardedReturnable<Object>().run((Pack.BlockPage) null);
+        new Guarded().run((List<MoveLatch>) null);
+        new Guarded().run((BlockPage) null);
+        new GuardedReturnable<Object>().run((List<MoveLatch>) null);
+        new GuardedReturnable<Object>().run((BlockPage) null);
     }
 
     @Test public void temporary()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.temporary(64);
         mutator.commit();
         pack.close();
-        Pack.Opener opener = new Pack.Opener();
+        Opener opener = new Opener();
         pack = opener.open(file);
         mutator = pack.mutate();
         for (long address : opener.getTemporaryBlocks())
@@ -850,7 +850,7 @@ public class PackTestCase
         }
         mutator.commit();
         pack.close();
-        opener = new Pack.Opener();
+        opener = new Opener();
         pack = opener.open(file);
         assertEquals(0, opener.getTemporaryBlocks().size());
     }
@@ -859,8 +859,8 @@ public class PackTestCase
     @Test public void unallocate()
     {
         File file = newFile();
-        Pack pack = new Pack.Creator().create(file);
-        Pack.Mutator mutator = pack.mutate();
+        Pack pack = new Creator().create(file);
+        Mutator mutator = pack.mutate();
         mutator.allocate(13);
         long allocate = mutator.allocate(9);
         long write1 = mutator.allocate(72);

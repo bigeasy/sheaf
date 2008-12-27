@@ -1,0 +1,111 @@
+package com.agtrz.pack;
+
+import java.nio.ByteBuffer;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+
+
+final class Player
+{
+    private final Pager pager;
+
+    private final Pointer header;
+
+    private long entryPosition;
+
+    private final DirtyPageMap dirtyPages;
+    
+    private final SortedSet<Long> setOfAddresses;
+    
+    private final Set<AddVacuum> setOfVacuums; 
+    
+    private final LinkedList<Move> listOfMoves;
+    
+    
+    public Player(Pager pager, Pointer header, DirtyPageMap dirtyPages)
+    {
+        ByteBuffer bytes = header.getByteBuffer();
+        
+        bytes.clear();
+        
+        this.pager = pager;
+        this.header = header;
+        this.entryPosition = bytes.getLong();
+        this.dirtyPages = dirtyPages;
+        this.setOfAddresses = new TreeSet<Long>();
+        this.setOfVacuums = new HashSet<AddVacuum>();
+        this.listOfMoves = new LinkedList<Move>();
+    }
+    
+    public Pager getPager()
+    {
+        return pager;
+    }
+    
+    public Pointer getJournalHeader()
+    {
+        return header;
+    }
+
+    public DirtyPageMap getDirtyPages()
+    {
+        return dirtyPages;
+    }
+    
+    public SortedSet<Long> getAddressSet()
+    {
+        return setOfAddresses;
+    }
+    
+    public Set<AddVacuum> getVacuumSet()
+    {
+        return setOfVacuums;
+    }
+    
+    public LinkedList<Move> getMoveList()
+    {
+        return listOfMoves;
+    }
+    
+    public long adjust(long position)
+    {
+        return pager.adjust(getMoveList(), position);
+    }
+
+    private void execute()
+    {
+        JournalPage journalPage = pager.getPage(entryPosition, new JournalPage());
+        
+        journalPage.seek(entryPosition);
+        
+        Operation operation = journalPage.next(); 
+        while (!operation.terminate())
+        {
+            operation.commit(this);
+            journalPage = operation.getJournalPage(this, journalPage);
+            operation = journalPage.next();
+        }
+
+        entryPosition = journalPage.getJournalPosition();
+    }
+
+    public void vacuum()
+    {
+        execute();
+    }
+
+    public void commit()
+    {
+        execute();
+
+        header.getByteBuffer().clear();
+        header.getByteBuffer().putLong(0, 0L);
+
+        dirtyPages.flush(header);
+
+        pager.getJournalHeaderSet().free(header);
+    }
+}

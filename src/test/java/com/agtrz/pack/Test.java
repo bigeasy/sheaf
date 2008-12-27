@@ -190,7 +190,7 @@ public class Test
 
         public int allocationCount;
 
-        private Pack.Mutator mutator;
+        private Mutator mutator;
 
         public Stressor(Environment environment, Recorder recorder)
         {
@@ -340,7 +340,7 @@ public class Test
         public void reopen()
         {
             environment.pack.close();
-            environment.pack = new Pack.Opener().open(environment.file);
+            environment.pack = new Opener().open(environment.file);
             environment.pack.copacetic();
             mutator = environment.pack.mutate();
         }
@@ -676,7 +676,7 @@ public class Test
             this.threadCount = threadCount;
             this.iterations = iterations;
             this.file = newFile();
-            this.pack = new Pack.Creator().create(file);
+            this.pack = new Creator().create(file);
         }
     }
 
