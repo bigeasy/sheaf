@@ -24,7 +24,7 @@ public final class Mutator
 
     final SortedMap<Long, Movable> mapOfAddresses;
 
-    final DirtyPageMap dirtyPages;
+    final DirtyPageSet dirtyPages;
     
     final MoveNodeRecorder moveNodeRecorder;
     
@@ -36,7 +36,7 @@ public final class Mutator
     
     long lastPointerPage;
     
-    public Mutator(Pager pager, MoveList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageMap dirtyPages)
+    public Mutator(Pager pager, MoveList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageSet dirtyPages)
     {
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
         BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());

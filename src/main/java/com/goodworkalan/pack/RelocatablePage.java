@@ -10,7 +10,7 @@ implements Page
 {
     private RawPage rawPage;
     
-    public void create(RawPage rawPage, DirtyPageMap dirtyPages)
+    public void create(RawPage rawPage, DirtyPageSet dirtyPages)
     {
         this.rawPage = rawPage;
         rawPage.setPage(this);

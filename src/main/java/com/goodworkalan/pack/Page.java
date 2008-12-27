@@ -75,7 +75,7 @@ interface Page
      *            The collection of dirty pages.
      * @see Pager#getPage
      */
-    public void create(RawPage rawPage, DirtyPageMap dirtyPages);
+    public void create(RawPage rawPage, DirtyPageSet dirtyPages);
 
     /**
      * Load this specific interpretation from the specified the raw page.

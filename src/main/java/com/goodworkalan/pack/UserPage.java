@@ -55,7 +55,7 @@ final class UserPage extends BlockPage
      * @param force
      * @return
      */
-    public synchronized Mirror mirror(Pager pager, InterimPage interim, boolean force, DirtyPageMap dirtyPages)
+    public synchronized Mirror mirror(Pager pager, InterimPage interim, boolean force, DirtyPageSet dirtyPages)
     {
         int offset = force ? 0 : -1;
         
@@ -126,7 +126,7 @@ final class UserPage extends BlockPage
         notifyAll();
     }
     
-    public void copy(long address, ByteBuffer block, DirtyPageMap dirtyPages)
+    public void copy(long address, ByteBuffer block, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {
@@ -191,7 +191,7 @@ final class UserPage extends BlockPage
         }
     }
     
-    public boolean free(long address, DirtyPageMap dirtyPages)
+    public boolean free(long address, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {

@@ -127,7 +127,7 @@ public class Pack
             public Mutator run(List<MoveLatch> listOfMoveLatches)
             {
                 MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
-                DirtyPageMap dirtyPages = new DirtyPageMap(pager, 16);
+                DirtyPageSet dirtyPages = new DirtyPageSet(pager, 16);
                 Journal journal = new Journal(pager, moveNodeRecorder, pageRecorder, dirtyPages);
                 return new Mutator(pager, listOfMoves, moveNodeRecorder, pageRecorder, journal, dirtyPages);
             }

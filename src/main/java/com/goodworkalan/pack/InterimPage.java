@@ -30,7 +30,7 @@ final class InterimPage extends BlockPage
      *            A dirty page map to record the block page if it changes.
      * @return True if the allocation is successful.
      */
-    public void allocate(long address, int blockSize, DirtyPageMap dirtyPages)
+    public void allocate(long address, int blockSize, DirtyPageSet dirtyPages)
     {
         if (blockSize < Pack.BLOCK_HEADER_SIZE)
         {
@@ -76,7 +76,7 @@ final class InterimPage extends BlockPage
         }
     }
 
-    public void vacuum(UserPage user, DirtyPageMap dirtyPages, int offset, long checksum)
+    public void vacuum(UserPage user, DirtyPageSet dirtyPages, int offset, long checksum)
     {
         if (offset > user.count)
         {
@@ -106,7 +106,7 @@ final class InterimPage extends BlockPage
         }
     }
 
-    public void copy(long address, UserPage user, DirtyPageMap dirtyPages)
+    public void copy(long address, UserPage user, DirtyPageSet dirtyPages)
     {
         // FIXME Locking a lot. Going to deadlock?
         synchronized (getRawPage())
@@ -128,7 +128,7 @@ final class InterimPage extends BlockPage
         }
     }
     
-    public void write(long address, DirtyPageMap dirtyPages)
+    public void write(long address, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {
@@ -175,7 +175,7 @@ final class InterimPage extends BlockPage
         }
     }
     
-    public void free(long address, DirtyPageMap dirtyPages)
+    public void free(long address, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {

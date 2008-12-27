@@ -158,7 +158,7 @@ public final class Creator
         long user = pager.getInterimBoundary().getPosition();
         pager.getInterimBoundary().increment();
         
-        DirtyPageMap dirtyPages = new DirtyPageMap(pager, 0);
+        DirtyPageSet dirtyPages = new DirtyPageSet(pager, 0);
         pager.setPage(user, new UserPage(), dirtyPages, false);
         BlockPage blocks = pager.getPage(user, new UserPage());
         blocks.getRawPage().invalidate(0, pageSize);

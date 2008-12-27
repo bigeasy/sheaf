@@ -9,7 +9,7 @@ extends RelocatablePage
 {
     private int offset;
 
-    public void create(RawPage position, DirtyPageMap dirtyPages)
+    public void create(RawPage position, DirtyPageSet dirtyPages)
     {
         super.create(position, dirtyPages);
 
@@ -63,7 +63,7 @@ extends RelocatablePage
         return bytes;
     }
 
-    public boolean write(Operation operation, int overhead, DirtyPageMap dirtyPages)
+    public boolean write(Operation operation, int overhead, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {

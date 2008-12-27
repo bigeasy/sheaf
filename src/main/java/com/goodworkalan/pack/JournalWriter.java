@@ -7,7 +7,7 @@ class JournalWriter
 
     protected final Pager pager;
     
-    protected final DirtyPageMap dirtyPages;
+    protected final DirtyPageSet dirtyPages;
     
     protected final PageRecorder pageRecorder;
     
@@ -15,7 +15,7 @@ class JournalWriter
     
     protected final MoveNodeRecorder moveNodeRecorder;
     
-    public JournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, JournalPage journal, Movable start, DirtyPageMap dirtyPages)
+    public JournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, JournalPage journal, Movable start, DirtyPageSet dirtyPages)
     {
         this.pager = pager;
         this.pageRecorder = pageRecorder;

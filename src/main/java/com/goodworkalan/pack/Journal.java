@@ -4,7 +4,7 @@ class Journal
 {
     private JournalWriter writer;
     
-    public Journal(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageMap dirtyPages)
+    public Journal(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageSet dirtyPages)
     {
         writer = new NullJournalWriter(pager, moveNodeRecorder, pageRecorder, dirtyPages);
     }

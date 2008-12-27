@@ -81,7 +81,7 @@ extends RelocatablePage
     
     protected abstract int getDiskCount(int count);
 
-    public void create(RawPage rawPage, DirtyPageMap dirtyPages)
+    public void create(RawPage rawPage, DirtyPageSet dirtyPages)
     {
         super.create(rawPage, dirtyPages);
         
@@ -263,7 +263,7 @@ extends RelocatablePage
         return listOfAddresses;
     }
 
-    public boolean write(long address, ByteBuffer data, DirtyPageMap dirtyPages)
+    public boolean write(long address, ByteBuffer data, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {

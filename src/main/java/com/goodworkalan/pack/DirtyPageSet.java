@@ -8,9 +8,7 @@ import java.util.Map;
 import java.util.zip.Adler32;
 import java.util.zip.Checksum;
 
-
-/** FIXME Rename dirty page set. */
-public final class DirtyPageMap
+public final class DirtyPageSet
 {
     private final Pager pager;
     
@@ -22,7 +20,7 @@ public final class DirtyPageMap
 
     private final int capacity;
     
-    public DirtyPageMap(Pager pager, int capacity)
+    public DirtyPageSet(Pager pager, int capacity)
     {
         this.pager = pager;
         this.checksum = new Adler32();

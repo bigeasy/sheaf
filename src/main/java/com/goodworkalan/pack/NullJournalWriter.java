@@ -4,7 +4,7 @@ package com.goodworkalan.pack;
 class NullJournalWriter
 extends JournalWriter
 {
-    public NullJournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageMap dirtyPages)
+    public NullJournalWriter(Pager pager, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, DirtyPageSet dirtyPages)
     {
         super(pager, moveNodeRecorder, pageRecorder, null, null, dirtyPages);
     }

@@ -124,7 +124,7 @@ implements Page
      * @param dirtyPages
      *            A set of pages that need to be flushed to disk.
      */
-    public void create(RawPage rawPage, DirtyPageMap dirtyPages)
+    public void create(RawPage rawPage, DirtyPageSet dirtyPages)
     {
         ByteBuffer bytes = rawPage.getByteBuffer();
 
@@ -217,7 +217,7 @@ implements Page
      *            A set of pages that need to be flushed to disk.
      * @return A reserved address or 0 if none are available.
      */
-    public long reserve(DirtyPageMap dirtyPages)
+    public long reserve(DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {
@@ -257,7 +257,7 @@ implements Page
      * @param dirtyPages
      *            A set of pages that need to be flushed to disk.
      */
-    public void set(long address, long position, DirtyPageMap dirtyPages)
+    public void set(long address, long position, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {
@@ -291,7 +291,7 @@ implements Page
      * @param dirtyPages
      *            A set of pages that need to be flushed to disk.
      */
-    public void free(long address, DirtyPageMap dirtyPages)
+    public void free(long address, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
         {

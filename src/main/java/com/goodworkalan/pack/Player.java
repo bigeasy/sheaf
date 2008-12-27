@@ -16,7 +16,7 @@ final class Player
 
     private long entryPosition;
 
-    private final DirtyPageMap dirtyPages;
+    private final DirtyPageSet dirtyPages;
     
     private final SortedSet<Long> setOfAddresses;
     
@@ -25,7 +25,7 @@ final class Player
     private final LinkedList<Move> listOfMoves;
     
     
-    public Player(Pager pager, Pointer header, DirtyPageMap dirtyPages)
+    public Player(Pager pager, Pointer header, DirtyPageSet dirtyPages)
     {
         ByteBuffer bytes = header.getByteBuffer();
         
@@ -50,7 +50,7 @@ final class Player
         return header;
     }
 
-    public DirtyPageMap getDirtyPages()
+    public DirtyPageSet getDirtyPages()
     {
         return dirtyPages;
     }

@@ -328,7 +328,7 @@ implements Schema
      *            A map of dirty pages.
      * @return A new interim page.
      */
-    public <T extends Page> T newInterimPage(T page, DirtyPageMap dirtyPages)
+    public <T extends Page> T newInterimPage(T page, DirtyPageSet dirtyPages)
     {
         // We pull from the end of the interim space to take pressure of of
         // the durable pages, which are more than likely multiply in number
@@ -440,7 +440,7 @@ implements Schema
         return castPage(rawPage.getPage(), page);
     }
 
-    public <P extends Page> P setPage(long position, P page, DirtyPageMap dirtyPages, boolean extant)
+    public <P extends Page> P setPage(long position, P page, DirtyPageSet dirtyPages, boolean extant)
     {
         position =  position / pageSize * pageSize;
         RawPage rawPage = new RawPage(this, position);
@@ -485,7 +485,7 @@ implements Schema
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
                     {
                         MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
-                        DirtyPageMap dirtyPages = new DirtyPageMap(pack, 16);
+                        DirtyPageSet dirtyPages = new DirtyPageSet(pack, 16);
                         Journal journal = new Journal(pack, moveNodeRecorder, pageRecorder, dirtyPages);
                         return new Mutator(pack, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                     }
@@ -599,7 +599,7 @@ implements Schema
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
                     {
                         MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
-                        DirtyPageMap dirtyPages = new DirtyPageMap(pack, 16);
+                        DirtyPageSet dirtyPages = new DirtyPageSet(pack, 16);
                         Journal journal = new Journal(pack, moveNodeRecorder, pageRecorder, dirtyPages);
                         return new Mutator(pack, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                     }
@@ -630,7 +630,7 @@ implements Schema
         return temporary;
     }
     
-    public void setTemporary(long address, long temporary, DirtyPageMap dirtyPages)
+    public void setTemporary(long address, long temporary, DirtyPageSet dirtyPages)
     {
         synchronized (mapOfTemporaryNodes)
         {
@@ -659,7 +659,7 @@ implements Schema
         }
     }
 
-    public void freeTemporary(long address, DirtyPageMap dirtyPages)
+    public void freeTemporary(long address, DirtyPageSet dirtyPages)
     {
         synchronized (mapOfTemporaryNodes)
         {
