@@ -3,10 +3,10 @@
     xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.agtrz</groupId>
+    <groupId>com.goodworkalan</groupId>
     <artifactId>pack</artifactId>
     <packaging>jar</packaging>
-    <version>0.1</version>
+    <version>0.1.X</version>
 
     <name>pack</name>
     <description>A paged and journaled file format.</description>
