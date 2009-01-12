@@ -364,7 +364,7 @@ implements Page
                 RawPage rawPage = new RawPage(getRawPage().getPager(), position);
                 BlockPage blocks = new UserPage();
                 if (!blocks.verifyChecksum(rawPage, recovery)
-                    || !pager.getPage(position, blocks).contains(address))
+                    || !pager.getPage(position, BlockPage.class, blocks).contains(address))
                 {
                     copacetic = false;
                     recovery.badAddress(address, position);

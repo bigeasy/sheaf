@@ -40,8 +40,8 @@ extends Operation
     {
         Pager pager = player.getPager();
         pager.getAddressLocker().bide(address);
-        InterimPage interim = pager.getPage(from, new InterimPage());
-        UserPage user = pager.getPage(to, new UserPage());
+        InterimPage interim = pager.getPage(from, InterimPage.class, new InterimPage());
+        UserPage user = pager.getPage(to, UserPage.class, new UserPage());
         interim.copy(address, user, player.getDirtyPages());
     }
 

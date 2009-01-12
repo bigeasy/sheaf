@@ -77,7 +77,7 @@ final class Player
 
     private void execute()
     {
-        JournalPage journalPage = pager.getPage(entryPosition, new JournalPage());
+        JournalPage journalPage = pager.getPage(entryPosition, JournalPage.class, new JournalPage());
         
         journalPage.seek(entryPosition);
         

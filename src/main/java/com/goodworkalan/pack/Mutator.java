@@ -150,7 +150,7 @@ public final class Mutator
                 }
                 else
                 {
-                    interim = pager.getPage(bestFit, new InterimPage());
+                    interim = pager.getPage(bestFit, InterimPage.class, new InterimPage());
                 }
                 
                 // Allocate a block from the wilderness data page.
@@ -168,7 +168,7 @@ public final class Mutator
 
     private UserPage dereference(long address, List<MoveLatch> listOfMoveLatches)
     {
-        AddressPage addresses = pager.getPage(address, new AddressPage());
+        AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
 
         long position = addresses.dereference(address);
         if (position == 0L || position == Long.MAX_VALUE)
@@ -185,7 +185,7 @@ public final class Mutator
             }
         }
     
-        return pager.getPage(position, new UserPage());
+        return pager.getPage(position, UserPage.class, new UserPage());
     }
 
     // FIXME Write at offset.
@@ -216,7 +216,7 @@ public final class Mutator
                     }
                     else
                     {
-                        interim = pager.getPage(bestFit, new InterimPage());
+                        interim = pager.getPage(bestFit, InterimPage.class, new InterimPage());
                     }
                     
                     interim.allocate(address, blockSize, dirtyPages);
@@ -237,7 +237,7 @@ public final class Mutator
                 }
                 else
                 {
-                    interim = pager.getPage(movable.getPosition(pager), new InterimPage());
+                    interim = pager.getPage(movable.getPosition(pager), InterimPage.class, new InterimPage());
                 }
     
                 if (!interim.write(address, src, dirtyPages))
@@ -274,7 +274,7 @@ public final class Mutator
                 }
                 if (movable == null)
                 {
-                    AddressPage addresses = pager.getPage(address, new AddressPage());
+                    AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
                     long lastPosition = 0L;
                     for (;;)
                     {
@@ -286,7 +286,7 @@ public final class Mutator
 
                         if (actual != lastPosition)
                         {
-                            UserPage user = pager.getPage(actual, new UserPage());
+                            UserPage user = pager.getPage(actual, UserPage.class, new UserPage());
                             out = user.read(address, bytes);
                             if (out != null)
                             {
@@ -302,7 +302,7 @@ public final class Mutator
                 }
                 else
                 {
-                    InterimPage interim = pager.getPage(movable.getPosition(pager), new InterimPage());
+                    InterimPage interim = pager.getPage(movable.getPosition(pager), InterimPage.class, new InterimPage());
                     out = interim.read(address, bytes);
                 }
 
@@ -340,7 +340,7 @@ public final class Mutator
                     BySizeTable bySize = unallocated ? allocPagesBySize : writePagesBySize;
                     boolean reinsert = bySize.remove(position) != 0;
                     
-                    InterimPage interim = pager.getPage(position, new InterimPage());
+                    InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
                     interim.free(address, dirtyPages);
                     
                     if (reinsert)
@@ -351,7 +351,7 @@ public final class Mutator
                  
                 if (unallocated)
                 {
-                    AddressPage addresses = pager.getPage(-address, new AddressPage());
+                    AddressPage addresses = pager.getPage(-address, AddressPage.class, new AddressPage());
                     addresses.free(address, dirtyPages);
                 }
                 else
@@ -373,7 +373,7 @@ public final class Mutator
             {
                 break;
             }
-            AddressPage addresses = pager.getPage(-address, new AddressPage());
+            AddressPage addresses = pager.getPage(-address, AddressPage.class, new AddressPage());
             addresses.free(-address, dirtyPages);
             dirtyPages.flushIfAtCapacity();
         }
@@ -469,7 +469,7 @@ public final class Mutator
     {
         for (long position: commit.getInUseAddressSet())
         {
-            UserPage user = pager.getPage(position, new UserPage());
+            UserPage user = pager.getPage(position, UserPage.class, new UserPage());
             InterimPage interim = pager.newInterimPage(new InterimPage(), dirtyPages);
             allocPagesBySize.add(interim.getRawPage().getPosition(), user.getRemaining());
             pageRecorder.getAllocationPageSet().add(interim.getRawPage().getPosition());
@@ -531,7 +531,7 @@ public final class Mutator
             commit.getAddressSet().add(position);
             if (!setOfGathered.contains(position))
             {
-                UserPage user = pager.getPage(position, new UserPage());
+                UserPage user = pager.getPage(position, UserPage.class, new UserPage());
                 if (!pager.getFreePageBySize().reserve(user.getRawPage().getPosition()))
                 {
                     if (!pager.getFreeUserPages().reserve(position))
@@ -694,7 +694,7 @@ public final class Mutator
             
             // Get a relocatable page.
 
-            RelocatablePage page = pager.getPage(head.getMove().getFrom(), new RelocatablePage());
+            RelocatablePage page = pager.getPage(head.getMove().getFrom(), RelocatablePage.class, new RelocatablePage());
             
             // Please note that relocate simply moves the entire page with
             // an unforced write. There is minimal benefit to the dirty page
@@ -718,7 +718,7 @@ public final class Mutator
             
             pager.relocate(head.getMove().getFrom(), head.getMove().getTo());
 
-            pager.setPage(head.getMove().getFrom(), new UserPage(), dirtyPages, false);
+            pager.setPage(head.getMove().getFrom(), UserPage.class, new UserPage(), dirtyPages, false);
 
             // Now we can let anyone who is waiting on this interim page
             // through.
@@ -829,9 +829,9 @@ public final class Mutator
                 throw new IllegalStateException();
             }
             
-            InterimPage mirrored = pager.getPage(allocation, new InterimPage());
+            InterimPage mirrored = pager.getPage(allocation, InterimPage.class, new InterimPage());
             
-            UserPage user = pager.getPage(soonToBeCreatedAddress, new UserPage());
+            UserPage user = pager.getPage(soonToBeCreatedAddress, UserPage.class, new UserPage());
             user.mirror(pager, mirrored, true, dirtyPages);
 
             setOfMirroredCopyPages.add(user);
@@ -842,7 +842,7 @@ public final class Mutator
     {
         for (Map.Entry<Long, Movable> entry: mapOfCommits.entrySet())
         {
-            InterimPage interim = pager.getPage(entry.getKey(), new InterimPage());
+            InterimPage interim = pager.getPage(entry.getKey(), InterimPage.class, new InterimPage());
             for (long address: interim.getAddresses())
             {
                 journal.write(new Copy(address, entry.getKey(), entry.getValue().getPosition(pager)));
@@ -859,6 +859,7 @@ public final class Mutator
         setOfMirroredPages.clear();
     }
 
+    // FIXME Begin line by line documentation here.
     private void tryCommit(MoveList listOfMoves, final Commit commit)
     {
         commit.getUnassignedSet().addAll(pageRecorder.getAllocationPageSet());
@@ -963,7 +964,7 @@ public final class Mutator
 
                 for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                 {
-                    UserPage user = pager.getPage(entry.getValue().getPosition(pager), new UserPage());
+                    UserPage user = pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage());
                     Mirror mirror = user.mirror(pager, null, false, dirtyPages);
                     if (mirror != null)
                     {
@@ -1002,7 +1003,7 @@ public final class Mutator
                
                 for (long position: pageRecorder.getWritePageSet())
                 {
-                    InterimPage interim = pager.getPage(position, new InterimPage());
+                    InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
                     for (long address: interim.getAddresses())
                     {
                         journal.write(new Write(address, position));
@@ -1049,11 +1050,11 @@ public final class Mutator
                     pager.getFreeInterimPages().free(commit.getEmptyMap().keySet());
                     for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                     {
-                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new UserPage()));
+                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
                     }
                     for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
                     {
-                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), new UserPage()));
+                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
                     }
                 }
                 else

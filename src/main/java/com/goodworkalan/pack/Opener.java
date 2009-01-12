@@ -189,7 +189,7 @@ public final class Opener
         for (int i = 0; i < blockPageCount; i++)
         {
             long position = reopen.getLong();
-            BlockPage blockPage = pager.getPage(position, new UserPage());
+            BlockPage blockPage = pager.getPage(position, UserPage.class, new UserPage());
             pager.returnUserPage(blockPage);
         }
         
@@ -292,7 +292,7 @@ public final class Opener
         
         if (new AddressPage().verifyChecksum(rawPage, recovery))
         {
-            AddressPage addresses = pager.getPage(position, new AddressPage());
+            AddressPage addresses = pager.getPage(position, AddressPage.class, new AddressPage());
             addresses.verifyAddresses(recovery);
         }
         else
@@ -314,7 +314,7 @@ public final class Opener
             AddressPage addresses = new AddressPage();
             if (addresses.verifyChecksum(rawPage, recovery))
             {
-                addresses = pager.getPage(position, addresses);
+                addresses = pager.getPage(position, AddressPage.class, addresses);
                 if (addresses.verifyAddresses(recovery))
                 {
                     if (addresses.getFreeCount() != 0)
@@ -338,7 +338,7 @@ public final class Opener
             BlockPage blocks = new UserPage();
             if (blocks.verifyChecksum(rawPage, recovery))
             {
-                blocks = pager.getPage(position, blocks);
+                blocks = pager.getPage(position, BlockPage.class, blocks);
                 if (blocks.verifyAddresses(recovery))
                 {
                     pager.returnUserPage(blocks);

@@ -313,8 +313,8 @@ public class PackTestCase
         
         pack = new Opener().open(file);
         Pager pager = pack.pager;
-        Page page = pager.getPage(8192, new RelocatablePage());
-        page = pager.getPage(8192, new UserPage());
+        Page page = pager.getPage(8192, RelocatablePage.class, new RelocatablePage());
+        page = pager.getPage(8192, UserPage.class, new UserPage());
         assertEquals(8192, page.getRawPage().getPosition());
     }
 

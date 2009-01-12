@@ -396,13 +396,7 @@ implements Schema
         return page;
     }
 
-    @SuppressWarnings("unchecked")
-    private <P extends Page> P castPage(Page page, P subtype)
-    {
-        return (P) page;
-    }
-
-    public <P extends Page> P getPage(long position, P page)
+    public <P extends Page> P getPage(long position, Class<P> pageClass, P page)
     {
         position = (long) Math.floor(position - (position % pageSize));
         RawPage rawPage = new RawPage(this, position);
@@ -437,10 +431,10 @@ implements Schema
                 page.load(rawPage);
             }
         }
-        return castPage(rawPage.getPage(), page);
+        return pageClass.cast(rawPage.getPage());
     }
 
-    public <P extends Page> P setPage(long position, P page, DirtyPageSet dirtyPages, boolean extant)
+    public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages, boolean extant)
     {
         position =  position / pageSize * pageSize;
         RawPage rawPage = new RawPage(this, position);
@@ -467,7 +461,7 @@ implements Schema
             }
         }
 
-        return castPage(rawPage.getPage(), page);
+        return pageClass.cast(rawPage.getPage());
     }
     
     private AddressPage tryGetAddressPage(long lastSelected)
@@ -515,7 +509,7 @@ implements Schema
                 }
                 setOfAddressPages.remove(position);
             }
-            AddressPage addressPage = getPage(position, new AddressPage());
+            AddressPage addressPage = getPage(position, AddressPage.class, new AddressPage());
             if (addressPage.getFreeCount() > 1)
             {
                 setOfReturningAddressPages.add(position);
@@ -637,7 +631,7 @@ implements Schema
             ByteBuffer bytes = mapOfTemporaryNodes.get(temporary);
             bytes.putLong(0, address);
             bytes.clear();
-            AddressPage addresses = getPage(temporary, new AddressPage());
+            AddressPage addresses = getPage(temporary, AddressPage.class, new AddressPage());
             long lastPosition = 0L;
             for (;;)
             {
@@ -646,7 +640,7 @@ implements Schema
                 {
                     throw new IllegalStateException();
                 }
-                UserPage user = getPage(position, new UserPage());
+                UserPage user = getPage(position, UserPage.class, new UserPage());
                 synchronized (user.getRawPage())
                 {
                     if (user.write(temporary, bytes, dirtyPages))

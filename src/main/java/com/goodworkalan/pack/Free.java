@@ -30,9 +30,9 @@ extends Operation
         // FIXME Same problem with addresses as with temporary headers,
         // someone can reuse when we're scheduled to release.
         pager.freeTemporary(address, player.getDirtyPages());
-        AddressPage addresses = pager.getPage(address, new AddressPage());
+        AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
         addresses.free(address, player.getDirtyPages());
-        UserPage user = pager.getPage(player.adjust(position), new UserPage());
+        UserPage user = pager.getPage(player.adjust(position), UserPage.class, new UserPage());
         user.waitOnMirrored();
         pager.getFreePageBySize().reserve(user.getRawPage().getPosition());
         user.free(address, player.getDirtyPages());

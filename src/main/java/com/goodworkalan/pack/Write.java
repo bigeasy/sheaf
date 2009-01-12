@@ -24,7 +24,7 @@ extends Operation
     public void commit(Player player)
     {
         Pager pager = player.getPager();
-        InterimPage interim = pager.getPage(from, new InterimPage());
+        InterimPage interim = pager.getPage(from, InterimPage.class, new InterimPage());
         interim.write(address, player.getDirtyPages());
     }
     

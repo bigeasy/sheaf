@@ -423,7 +423,7 @@ extends RelocatablePage
                     recovery.badUserAddress(getRawPage().getPosition(), address);
                     copacetic = false;
                 }
-                AddressPage addresses = pager.getPage(address, new AddressPage());
+                AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
                 if (getRawPage().getPosition() != addresses.dereference(address))
                 {
                     recovery.badUserAddress(getRawPage().getPosition(), address);

@@ -20,7 +20,7 @@ extends Operation
     @Override
     public JournalPage getJournalPage(Player player, JournalPage journalPage)
     {
-        journalPage = player.getPager().getPage(player.adjust(position), new JournalPage());
+        journalPage = player.getPager().getPage(player.adjust(position), JournalPage.class, new JournalPage());
         journalPage.seek(player.adjust(position));
         return journalPage;
     }

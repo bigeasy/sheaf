@@ -132,7 +132,7 @@ final class UserPage extends BlockPage
         {
             RawPage rawPage = getRawPage();
             Pager pager = rawPage.getPager();
-            AddressPage addresses = pager.getPage(address, new AddressPage());
+            AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
             long position = addresses.dereference(address);
             if (position != getRawPage().getPosition())
             {
@@ -142,7 +142,7 @@ final class UserPage extends BlockPage
                 }
                 if (position != Long.MAX_VALUE)
                 {
-                    UserPage blocks = pager.getPage(position, new UserPage());
+                    UserPage blocks = pager.getPage(position, UserPage.class, new UserPage());
                     blocks.free(address, dirtyPages);
                 }
                 addresses.set(address, getRawPage().getPosition(), dirtyPages);

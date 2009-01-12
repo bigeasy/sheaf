@@ -141,7 +141,7 @@ final class InterimPage extends BlockPage
                 
 
                 Pager pager = getRawPage().getPager();
-                AddressPage addresses = pager.getPage(address, new AddressPage());
+                AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
                 long lastPosition = 0L;
                 for (;;)
                 {
@@ -153,7 +153,7 @@ final class InterimPage extends BlockPage
                     
                     if (actual != lastPosition)
                     {
-                        UserPage user = pager.getPage(actual, new UserPage());
+                        UserPage user = pager.getPage(actual, UserPage.class, new UserPage());
                         user.waitOnMirrored();
                         synchronized (user.getRawPage())
                         {

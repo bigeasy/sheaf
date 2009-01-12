@@ -28,8 +28,8 @@ extends Operation
     
     public void vacuum(Player player)
     {
-        InterimPage mirrored = player.getPager().getPage(from, new InterimPage());
-        UserPage user = player.getPager().getPage(to, new UserPage());
+        InterimPage mirrored = player.getPager().getPage(from, InterimPage.class, new InterimPage());
+        UserPage user = player.getPager().getPage(to, UserPage.class, new UserPage());
         mirrored.vacuum(user, player.getDirtyPages(), offset, checksum);
     }
 
