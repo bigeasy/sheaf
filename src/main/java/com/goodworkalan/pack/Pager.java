@@ -18,21 +18,44 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 
+/**
+ * A container for outstanding <code>Page</code> objects that maps
+ * addresses to soft referenced * <code>Page</code> objects.
+ */
 final class Pager
 implements Schema
 {
+    /** The file where this pager writes its contents. */
     private final File file;
 
+    /** An file channel opened on the associated file. */
     private final FileChannel fileChannel;
 
+    /**
+     * Wrapper interface to file channel to allow for IO error
+     * simulation during testing.
+     */
     private final Disk disk;
     
+    /**
+     * Housekeeping information stored at the head of the file.
+     */
     private final Header header;
 
+    /**
+     * A map of URIs to addresses of static pages sized at the creation
+     * of the <code>Pack</code> in the <code>Schema</code>.
+     */
     private final Map<URI, Long> mapOfStaticPages;
 
+    /**
+     * This size of a page.
+     */
     private final int pageSize;
 
+    /**
+     * Round allocations to this alignment.
+     */
     private final int alignment;
     
     private final PositionSet setOfJournalHeaders;
@@ -101,7 +124,8 @@ implements Schema
      */
     private final Lock expandLock;
     
-    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages, long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryNodes)
+    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages,
+        long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryNodes)
     {
         this.file = file;
         this.fileChannel = fileChannel;
