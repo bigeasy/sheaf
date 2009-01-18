@@ -137,31 +137,37 @@
             </plugin>
         </plugins>
     </build>
-<reporting>
-    <plugins>
-    <plugin>
-    <groupId>org.codehaus.mojo</groupId>
-    <artifactId>jxr-maven-plugin</artifactId>
-    </plugin>
-     <plugin>
-             <groupId>org.codehaus.mojo</groupId>
-                     <artifactId>cobertura-maven-plugin</artifactId>
-                           </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-javadoc-plugin</artifactId>
-        <reportSets>
-          <reportSet>
-            <id>html</id>
-            <configuration>
-              <show>private</show>
-            </configuration>
-            <reports>
-              <report>javadoc</report>
-            </reports>
-          </reportSet>
-        </reportSets>
-      </plugin>
-    </plugins>
-  </reporting>
+    <reporting>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>jxr-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>cobertura-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <reportSets>
+                <reportSet>
+                    <id>html</id>
+                    <configuration>
+                        <show>private</show>
+                        <offlineLinks>
+                            <offlineLink>
+                                <url>http://java.sun.com/j2se/1.5.0/docs/api/</url>
+                                <location>etc/javadoc/jdk-5.0/</location>
+                            </offlineLink>
+                        </offlineLinks>
+                    </configuration>
+                    <reports>
+                        <report>javadoc</report>
+                    </reports>
+                </reportSet>
+                </reportSets>
+            </plugin>
+        </plugins>
+    </reporting>
 </project>

@@ -828,9 +828,7 @@ public class PackTestCase
     public void guarded()
     {
         new Guarded().run((List<MoveLatch>) null);
-        new Guarded().run((BlockPage) null);
         new GuardedReturnable<Object>().run((List<MoveLatch>) null);
-        new GuardedReturnable<Object>().run((BlockPage) null);
     }
 
     @Test public void temporary()

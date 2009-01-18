@@ -203,15 +203,13 @@ implements Page
     }
 
     /**
-     * Reserve an available address from the address page. Reserving an
-     * address requires marking it as reserved by using an unlikely file
-     * position value - <code>Long.MAX_VALUE</code> - as a reservation
-     * value.
+     * Reserve an available address from the address page. Reserving an address
+     * requires marking it as reserved by using an unlikely file position value
+     * - <code>Long.MAX_VALUE</code> - as a reservation value.
      * <p>
-     * An address is returned to the poll by setting it to zero. The
-     * reservation page is tracked with the dirty page map. It can be
-     * released after the dirty page map flushes the reservation page to
-     * disk.
+     * An address is returned to the poll by setting it to zero. The reservation
+     * page is tracked with the dirty page map. It can be released after the
+     * dirty page map flushes the reservation page to disk.
      * 
      * @param dirtyPages
      *            A set of pages that need to be flushed to disk.

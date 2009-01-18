@@ -1,6 +1,7 @@
 package com.goodworkalan.pack;
 
+// TODO Outgoing.
 interface Positionable
 {
-    public Long getPosition();
+    public long getPosition();
 }

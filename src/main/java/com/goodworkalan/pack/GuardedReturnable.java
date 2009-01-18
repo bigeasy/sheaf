@@ -5,12 +5,7 @@ import java.util.List;
 
 class GuardedReturnable<T>
 {
-    public T run(List<MoveLatch> listOfMoveLatches)
-    {
-        return null;
-    }
-    
-    public T run(BlockPage blocks)
+    public T run(List<MoveLatch> userMoveLatches)
     {
         return null;
     }

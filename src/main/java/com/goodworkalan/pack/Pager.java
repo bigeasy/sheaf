@@ -54,20 +54,45 @@ implements Schema
     private final int pageSize;
 
     /**
-     * Round allocations to this alignment.
+     * Round block allocations to this alignment.
      */
     private final int alignment;
     
+    /**
+     * The set of journal header positions stored in a {@link
+     * PositionSet} that tracks the availability of a fixed number of
+     * header position reference positions and  blocks a thread that
+     * requests a position when the set is empty.
+     */
     private final PositionSet setOfJournalHeaders;
 
+    /**
+     * The map of weak references to raw pages keyed on the file
+     * position of the raw page.
+     */
     private final Map<Long, PageReference> mapOfPagesByPosition;
 
+    /**
+     * The queue of weak references to raw pages keyed on the file
+     * position of the raw page that is used to remove mappings from the
+     * map of pages by position when the raw pages are collected.
+     */
     private final ReferenceQueue<RawPage> queue;
 
+    /**
+     * The boundary between address pages and user data pages.
+     */
     private final Boundary userBoundary;
     
+    /**
+     * The boundary between user data pages and interim data pages.
+     */
     private final Boundary interimBoundary;
         
+    /**
+     * A reference to linked list of move nodes used as a prototype for
+     * the per mutator move list reference.
+     */
     private final MoveList listOfMoves;
 
     private final SortedSet<Long> setOfAddressPages;
@@ -487,14 +512,41 @@ implements Schema
 
         return pageClass.cast(rawPage.getPage());
     }
-    
-    private AddressPage tryGetAddressPage(long lastSelected)
+
+    /**
+     * Try to get an address page from the set of available address pages or
+     * create address pages by moving user pages if there are none available or
+     * outstanding.
+     * <p>
+     * The caller can allocate one and only address from address page
+     * returned. It must then return the address page to the pager.
+     * 
+     * @param lastSelected
+     *            The last selected address page, which we will try to return if
+     *            available.
+     * 
+     * @return An address page with at least one free position.
+     */
+    private AddressPage getOrCreateAddressPage(long lastSelected)
     {
+        // Lock on the set of address pages, which protects the set of
+        // address pages and the set of returning address pages.
+        
         synchronized (setOfAddressPages)
         {
-            long position = 0L;
+            long position = 0L;         // The position of the new address page.
+
+            // If there are no address pages in the pager that have one
+            // or more free addresses and there are no address pages
+            // outstanding that have two or more free addresses, then we
+            // need to allocate more address pages and try again.
+            
             if (setOfAddressPages.size() == 0 && setOfReturningAddressPages.size() == 0)
             {
+                // Create a mutator to move the user page immediately
+                // following the address page region  to a new user
+                // page.
+
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
                 final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
@@ -508,10 +560,16 @@ implements Schema
                         return new Mutator(pack, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                     }
                 });
-                position = mutator.newAddressPage().first();
+
+                // See the source of Mutator.newAddressPage.
+
+                position = mutator.newAddressPages(1).first();
             }
             else
             {
+                // If we can return the last selected address page,
+                // let's. It will help with locality of reference.
+
                 if (setOfAddressPages.contains(lastSelected))
                 {
                     position = lastSelected;
@@ -522,6 +580,11 @@ implements Schema
                 }
                 else
                 {
+                    // We are here because our set of returning address
+                    // pages is not empty, meaning that a Mutator will
+                    // be returning an address page that has some space
+                    // left. We need to wait for it.
+                    
                     try
                     {
                         setOfAddressPages.wait();
@@ -529,15 +592,35 @@ implements Schema
                     catch (InterruptedException e)
                     {
                     }
+
+                    // When it arrives, we'll return null indicating we
+                    // need to try again.
+
                     return null;
                 }
+
+                // Remove the address page from the set of address
+                // pages available for allocation.
+
                 setOfAddressPages.remove(position);
             }
+
+            // Get the address page.
+
             AddressPage addressPage = getPage(position, AddressPage.class, new AddressPage());
+
+            // If the address page has two or more addresses available,
+            // then we add it to the set of returning address pages, the
+            // address pages that have space, but are currently in use,
+            // so we should wait for them.
+
             if (addressPage.getFreeCount() > 1)
             {
                 setOfReturningAddressPages.add(position);
             }
+
+            // Return the address page.
+
             return addressPage;
         }
     }
@@ -546,7 +629,7 @@ implements Schema
     {
         for (;;)
         {
-            AddressPage addressPage = tryGetAddressPage(lastSelected);
+            AddressPage addressPage = getOrCreateAddressPage(lastSelected);
             if (addressPage != null)
             {
                 return addressPage;

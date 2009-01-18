@@ -3,7 +3,6 @@ package com.goodworkalan.pack;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -12,18 +11,30 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+/**
+ * An isolated view of an atomic alteration the contents of a {@link Pack}. In
+ * order to allocate, read, write or free blocks, one must create a
+ * <code>Mutator</code> by calling {@link Pack#mutate()}.
+ */
 public final class Mutator
 {
+    /** The page manager of the pack to mutate. */
     final Pager pager;
     
+    /** A journal to record the isolated mutations of the associated pack. */
     final Journal journal;
 
     final BySizeTable allocPagesBySize;
     
     final BySizeTable writePagesBySize;
 
+    /**
+     * A map of addresses to movable position references to the blocks the
+     * addresses reference.
+     */
     final SortedMap<Long, Movable> mapOfAddresses;
 
+    /** A set of pages that need to be flushed to the disk.  */
     final DirtyPageSet dirtyPages;
     
     final MoveNodeRecorder moveNodeRecorder;
@@ -63,16 +74,17 @@ public final class Mutator
     {
         return pager;
     }
-    
+
     /**
-     * Allocate a block whose address will be returned in the list
-     * of temporary blocks when the pack is reopened.
+     * Allocate a block whose address will be returned in the list of temporary
+     * blocks when the pack is reopened.
      * <p>
-     * I've implemented this using user space, which seems to imply
-     * that I don't need to provide this as part of the core. I'm
-     * going to attempt to implement it as a user object. 
-     *  
-     * @param blockSize Size of the temporary block to allocate.
+     * I've implemented this using user space, which seems to imply that I don't
+     * need to provide this as part of the core. I'm going to attempt to
+     * implement it as a user object.
+     * 
+     * @param blockSize
+     *            Size of the temporary block to allocate.
      * 
      * @return The address of the block.
      */
@@ -94,14 +106,15 @@ public final class Mutator
         
         return address;
     }
-    
+
     /**
-     * Allocate a block in the <code>Pack</code> to accommodate a block
-     * of the specified block size. This method will reserve a new block
-     * and return the address of the block. The block will not be visible
-     * to other mutators until the mutator commits it's changes.
+     * Allocate a block in the <code>Pack</code> to accommodate a block of the
+     * specified block size. This method will reserve a new block and return the
+     * address of the block. The block will not be visible to other mutators
+     * until the mutator commits it's changes.
      * 
-     * @param blockSize The size of the block to allocate.
+     * @param blockSize
+     *            The size of the block to allocate.
      * @return The address of the block.
      */
     public long allocate(int blockSize)
@@ -405,7 +418,11 @@ public final class Mutator
 
     public void rollback()
     {
+        // Obtain shared lock on the compact lock, preventing pack file
+        // vacuum for the duration of the address page allocation.
+
         pager.getCompactLock().readLock().lock();
+
         try
         {
             listOfMoves.mutate(new Guarded()
@@ -431,8 +448,7 @@ public final class Mutator
         return (int) (userPageSize / pager.getPageSize());
     }
     
-    // FIXME Remove try from these methods. It's confusing.
-    private void tryExpandUser(MoveList listOfMoves, Commit commit, MoveLatch userMoves, int count, SortedSet<Long> setOfInUse)
+    private void expandUser(MoveList listOfMoves, Commit commit, int count, SortedSet<Long> setOfInUse)
     {
         // This invocation is to flush the move list for the current
         // mutator. You may think that this is pointless, but it's
@@ -444,7 +460,7 @@ public final class Mutator
         
         listOfMoves.mutate(new Guarded()
         {
-            public void run(List<MoveLatch> listOfMoveLatches)
+            public void run(List<MoveLatch> userMoveLatches)
             {
             }
         });
@@ -452,16 +468,26 @@ public final class Mutator
         // Gather the interim pages that will become data pages, moving the
         // data to interim boundary.
         
-        gatherPages(count, setOfInUse, commit.getGatheredSet());
+        gatherPages(count, setOfInUse, commit.getUserFromInterimPages());
     }
 
-    private void appendMove(MoveList listOfMoves, MoveLatch userMoves, SortedSet<Long> setOfInUse)
+    /**
+     * Add the interim moves to the per pager list of move latches.
+     * 
+     * @param moveList
+     *            The move list.
+     * @param iterimMoveLatches
+     *            Head of list of iterim move latches.
+     * @param userFromInterimPagesToMove
+     *            Set of iterim pages that need to be moved.
+     */
+    private void addIterimMoveLatches(MoveList moveList, MoveLatch iterimMoveLatches, SortedSet<Long> userFromInterimPagesToMove)
     {
-        if (setOfInUse.size() != 0)
+        if (userFromInterimPagesToMove.size() != 0)
         {
-            appendToMoveList(setOfInUse, userMoves);
-            pager.getMoveList().add(userMoves);
-            listOfMoves.skip(userMoves);
+            buildInterimMoveLatchList(userFromInterimPagesToMove, iterimMoveLatches);
+            pager.getMoveList().add(iterimMoveLatches);
+            moveList.skip(iterimMoveLatches);
         }
     }
 
@@ -477,28 +503,43 @@ public final class Mutator
         }
     }
 
-    private SortedSet<Long> tryNewAddressPage(MoveList listOfMoves, final Commit commit, int count)
+    /**
+     * Create address pages, extending the address page region by moving
+     * the user pages immediately follow after locking the pager to
+     * prevent compaction and close.  
+     *
+     * <p>
+     * Remember that this method is already guarded by k
+     */
+    private SortedSet<Long> tryNewAddressPage(MoveList moveList, final Commit commit, int newAddressPageCount)
     {
-        final MoveLatch userMoves = new MoveLatch(false);
-        final SortedSet<Long> setOfGathered = new TreeSet<Long>();
+        final MoveLatch userMoveLatchHead = new MoveLatch(false);
+
+        // Only one thread is allowed to expand the user region at once.
+
+        // Note that we aren't so grabby with the expand lock during a
+        // user commit, only during a new address page creation.
 
         pager.getExpandLock().lock();
+
         try
         {
-            // If there is enough or else we'll wait for there to
-            // be enough because an interim region expansion is ahead of
-            // us in the move this. The addresses will cause us to wait.
+            // We are going to create address pages from user pages, so
+            // check to see that there are enough user pages, free or
+            // employed.
             
             int userPageCount = getUserPageCount();
-            if (userPageCount < count)
+            if (userPageCount < newAddressPageCount)
             {            
-                SortedSet<Long> setOfInUse = new TreeSet<Long>();
-                // Now we can try to move the pages.
-                tryExpandUser(listOfMoves,
-                              commit,
-                              userMoves,
-                              count - userPageCount, setOfInUse);
-                appendMove(listOfMoves, userMoves, setOfInUse);
+                SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
+
+                // Create new user pages.
+
+                expandUser(moveList, commit, newAddressPageCount - userPageCount, userFromInterimPagesToMove);
+
+                // Append the linked list of moves to the move list.
+
+                addIterimMoveLatches(moveList, userMoveLatchHead, userFromInterimPagesToMove);
              }
         }
         finally
@@ -506,65 +547,93 @@ public final class Mutator
             pager.getExpandLock().unlock();
         }
         
-        if (userMoves.getNext() != null)
+        // If we have moves to perform append them to the per page list
+        // of move latches. It may be the case that all of the needed
+        // user pages were marked as empty, so they do not need to move.
+        
+        if (userMoveLatchHead.getNext() != null)
         {
-            listOfMoves.mutate(new Guarded()
+            moveList.mutate(new Guarded()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    moveAndUnlatch(userMoves);
+                    moveAndUnlatch(userMoveLatchHead);
                 }
             });
         }
         
         // Now we know we have enough user pages to accommodate our
-        // creation of address pages.
+        // creation of address pages. That is we have enough user pages,
+        // full stop. We not looked at whether they are free or in use.
         
-        // Some of those user  block pages may not yet exist. We are going to 
-        // have to wait until they exist before we do anything with
-        // with the block pages.
+        // Some of those user block pages may not yet exist. We are
+        // going to have to wait until they exist before we do anything
+        // with with the block pages.
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < newAddressPageCount; i++)
         {
+            // The new address page is the user page at the user page boundary.
             long position = pager.getUserBoundary().getPosition();
+            
+            // Record the new address page.
             commit.getAddressSet().add(position);
-            if (!setOfGathered.contains(position))
+            
+            // If new address page was not just created by relocating an
+            // interim page, then we do not need to reserve it.
+            
+            if (!commit.getUserFromInterimPages().contains(position))
             {
-                UserPage user = pager.getPage(position, UserPage.class, new UserPage());
-                if (!pager.getFreePageBySize().reserve(user.getRawPage().getPosition()))
+                // If the position is not in the free page by size, then
+                // we'll attempt to reserve it from the list of free
+                // user pages.
+
+                if (pager.getFreePageBySize().reserve(position))
                 {
-                    if (!pager.getFreeUserPages().reserve(position))
-                    {
-                        commit.getInUseAddressSet().add(position);
-                    }
+                    // Remember that free user pages is a FreeSet which will
+                    // remove from a set of available, or add to a set of
+                    // positions that should not be made available. 
+                    
+                    pager.getFreeUserPages().reserve(position);
+                    
+                    // TODO Doesn't this mean that it is in use?
                 }
                 else
                 {
-                    pager.getFreeUserPages().reserve(position);
+                    // Was not in set of pages by size.
+                    
+                    if (!pager.getFreeUserPages().reserve(position))
+                    {
+                        // Was not in set of empty, so it is in use.
+                        
+                        commit.getInUseAddressSet().add(position);
+                    }
                 }
             }
+
+            // Move the boundary for user pages.
+
             pager.getUserBoundary().increment();
         }
 
-        // To move a data page to make space for an address page, we simply
-        // copy over the block pages that need to move, verbatim into an
-        // interim block page and create a commit. The block pages will
-        // operate as allocations, moving into some area within the user
-        // region. The way that journals are written, vacuums and commits
-        // take place before the operations written, so we write out our
-        // address page initializations now.
+        // To move a data page to make space for an address page, we
+        // simply copy over the block pages that need to move, verbatim
+        // into an interim block page and create a commit. The block
+        // pages will operate as allocations, moving into some area
+        // within the user region. The way that journals are written,
+        // vacuums and commits take place before the operations written,
+        // so we write out our address page initializations now.
         
         for (long position : commit.getAddressSet())
         {
             journal.write(new CreateAddressPage(position));
         }
         
-        // If the new address page is in the set of free block pages or if
-        // it is a block page we've just created the
-        // page does not have to be moved.
+        // If the new address page is in the set of free block pages or
+        // if it is a block page we've just created the page does not
+        // have to be moved.
 
-        listOfMoves.mutate(new Guarded()
+        moveList.mutate(new Guarded()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -572,19 +641,29 @@ public final class Mutator
             }
         });
 
-        tryCommit(listOfMoves, commit);
+        tryCommit(moveList, commit);
         
         return commit.getAddressSet();
     }
 
-    public SortedSet<Long> newAddressPage()
+    /**
+     * Create address pages, extending the address page region by moving
+     * the user pages immediately follow after locking the pager to
+     * prevent compaction and close.  
+     *
+     * @param count The number of address pages to create.
+     */
+    public SortedSet<Long> newAddressPages(int count)
     {
+        // Obtain shared lock on the compact lock, preventing pack file
+        // vacuum for the duration of the address page allocation.
+
         pager.getCompactLock().readLock().lock();
         
         try
         {
             final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
-            return tryNewAddressPage(new MoveList(commit, listOfMoves), commit, 1); 
+            return tryNewAddressPage(new MoveList(commit, listOfMoves), commit, count); 
         }
         finally
         {
@@ -616,26 +695,26 @@ public final class Mutator
      * @param mapOfPages
      *            A map that associates one of the pages with an interim
      *            page that will be converted to a data page.
-     * @param setOfInUse
+     * @param userFromInterimPagesToMove
      *            A set of the interim pages that need to be moved to a
      *            new interim pages as opposed to pages that were free.
-     * @param setOfGathered
+     * @param userFromInterimPages
      *            A set of the newly created data positions.
      */
-    private void gatherPages(int count, Set<Long> setOfInUse, SortedSet<Long> setOfGathered)
+    private void gatherPages(int count, Set<Long> userFromInterimPagesToMove, SortedSet<Long> userFromInterimPages)
     {
         for (int i = 0; i < count; i++)
         {
             // Use the page that is at the data to interim boundary.
             
-            long soonToBeCreatedUser = pager.getInterimBoundary().getPosition();
+            long userFromInterimPage = pager.getInterimBoundary().getPosition();
             
             // If it is not in the set of free pages it needs to be moved,
             // so we add it to the set of in use.
             
-            if (!pager.getFreeInterimPages().reserve(soonToBeCreatedUser))
+            if (!pager.getFreeInterimPages().reserve(userFromInterimPage))
             {
-                setOfInUse.add(soonToBeCreatedUser);
+                userFromInterimPagesToMove.add(userFromInterimPage);
             }
 
             // Synapse: What if this page is already in our set? That's
@@ -645,12 +724,12 @@ public final class Mutator
             // However, I'm pretty sure that this is never the case, so
             // I'm going to put an assertion here and think about it.
             
-            if (pageRecorder.getUserPageSet().contains(soonToBeCreatedUser))
+            if (pageRecorder.getUserPageSet().contains(userFromInterimPage))
             {
                 throw new IllegalStateException();
             }
 
-            setOfGathered.add(soonToBeCreatedUser);
+            userFromInterimPages.add(userFromInterimPage);
             
             // Increment the data to interim boundary.
 
@@ -660,7 +739,7 @@ public final class Mutator
     
     private Map<Long, Long> associate(Commit commit)
     {
-        SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getGatheredSet());
+        SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getUserFromInterimPages());
         Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
         while (commit.getUnassignedSet().size() != 0)
         {
@@ -674,19 +753,28 @@ public final class Mutator
         }
         return mapOfCopies;
     }
-    
+
     /**
-     * Iterate the linked list of moves and move latches moving the pages
-     * and then releasing the latches.
-     *
-     * @param head The head a linked list of move latches.
+     * Iterate the linked list of moves and move latches moving the pages and
+     * then releasing the latches.
+     * <p>
+     * Here is why this is thread-safe...
+     * <p>
+     * First the list of moves is appended to the move list. Adding to the move
+     * list is an exclusive operation, if there are any guarded operations, such
+     * as commit, append must wait. Now this operation takes place, and if any
+     * mutator employing one of the pages commits, then they will wait until the
+     * latch is released.
+     * 
+     * @param head
+     *            The head a linked list of move latches.
      */
     private void moveAndUnlatch(MoveLatch head)
     {
         // Iterate through the linked list moving pages and releasing
         // latches.
 
-        while (head.getNext() != null && !head.getNext().isTerminal())
+        while (head.getNext() != null && !head.getNext().isHead())
         {
             // Goto the next node.
 
@@ -704,12 +792,14 @@ public final class Mutator
             
             page.relocate(head.getMove().getTo());
             
+            // Here's why this is tread-safe...
+            
             // Anyone referencing the page is going to be waiting for the
             // move to complete, because of the move list. This goes for all
             // readers and writers who might need to dereference an interim
             // page. The mutators holding the interim pages will wait
             // regardless of whether or not they intend to manipulate the
-            // pages. Note that read only mutator reading only from the
+            // pages. Note that a read-only mutator reading only from the
             // user region will not wait, since it will not have interim
             // pages.
 
@@ -727,23 +817,17 @@ public final class Mutator
         }
     }
     
-    private void appendToMoveList(SortedSet<Long> setOfInUse, MoveLatch head)
+    private void buildInterimMoveLatchList(SortedSet<Long> userFromInterimPagesToMove, MoveLatch iterimMoveLatches)
     {
         // For the set of pages in use, add the page to the move list.
-
-        Iterator<Long> inUse = setOfInUse.iterator();
-
-        // Append of the rest of the moves and latches to the list. 
-
-        while (inUse.hasNext())
+        for (long from : userFromInterimPagesToMove)
         {
-            long from = inUse.next();
             long to = pager.newBlankInterimPage();
-            if (setOfInUse.contains(to))
+            if (userFromInterimPagesToMove.contains(to))
             {
                 throw new IllegalStateException();
             }
-            head.getLast().extend(new MoveLatch(new Move(from, to), false));
+            iterimMoveLatches.getLast().extend(new MoveLatch(new Move(from, to), false));
         }
     }
 
@@ -782,12 +866,12 @@ public final class Mutator
      * @param addressMoves
      *            The head of a linked list of move latches.
      */
-    private void tryExpandAddress(Commit commit, MoveLatch addressMoves)
+    private void expandAddress(Commit commit, MoveLatch addressMoves)
     {
-        Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
+        Map<Long, Long> copies = new TreeMap<Long, Long>();
         for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
         {
-            long soonToBeCreatedAddress = entry.getKey();
+            long addressFromUserPage = entry.getKey();
             long mirroredAsAllocation = entry.getValue().getPosition(pager);
             
             Movable movable = commit.getVacuumMap().get(mirroredAsAllocation);
@@ -801,14 +885,14 @@ public final class Mutator
             }
             
             long newOrExistingUser = movable.getPosition(pager);
-            mapOfCopies.put(soonToBeCreatedAddress, newOrExistingUser);
+            copies.put(addressFromUserPage, newOrExistingUser);
         }
         
-        for (Map.Entry<Long, Long> entry: mapOfCopies.entrySet())
+        for (Map.Entry<Long, Long> entry: copies.entrySet())
         {
-            long soonToBeCreatedAddress = entry.getKey();
+            long addressFromUserPage = entry.getKey();
             long newOrExistingUser = entry.getValue();
-            addressMoves.getLast().extend(new MoveLatch(new Move(soonToBeCreatedAddress, newOrExistingUser), true));
+            addressMoves.getLast().extend(new MoveLatch(new Move(addressFromUserPage, newOrExistingUser), true));
         }
     }
 
@@ -860,14 +944,14 @@ public final class Mutator
     }
 
     // FIXME Begin line by line documentation here.
-    private void tryCommit(MoveList listOfMoves, final Commit commit)
+    private void tryCommit(MoveList moveList, final Commit commit)
     {
         commit.getUnassignedSet().addAll(pageRecorder.getAllocationPageSet());
 
         if (commit.getUnassignedSet().size() != 0)
         {
             // First we mate the interim data pages with 
-            listOfMoves.mutate(new Guarded()
+            moveList.mutate(new Guarded()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
@@ -895,15 +979,14 @@ public final class Mutator
             pager.getExpandLock().lock();
             try
             {
-                SortedSet<Long> setOfInUse = new TreeSet<Long>();
+                SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
+                
                 // Now we can try to move the pages.
-                tryExpandUser(listOfMoves,
-                              commit,
-                              userMoves,
-                              commit.getUnassignedSet().size(),
-                              setOfInUse);
+                expandUser(moveList, commit, commit.getUnassignedSet().size(), userFromInterimPagesToMove);
+                
                 // If we have interim pages in use, move them.
-                appendMove(listOfMoves, userMoves, setOfInUse);
+                addIterimMoveLatches(moveList, userMoves, userFromInterimPagesToMove);
+
                 asssignAllocations(commit);
             }
             finally
@@ -914,7 +997,7 @@ public final class Mutator
         
         if (userMoves.getNext() != null)
         {
-            listOfMoves.mutate(new Guarded()
+            moveList.mutate(new Guarded()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -928,20 +1011,20 @@ public final class Mutator
         
         if (commit.isAddressExpansion())
         {
-            listOfMoves.mutate(new Guarded()
+            moveList.mutate(new Guarded()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    tryExpandAddress(commit, addressMoves);
+                    expandAddress(commit, addressMoves);
                 }
             });
 
             pager.getMoveList().add(addressMoves);
-            listOfMoves.skip(addressMoves);
+            moveList.skip(addressMoves);
         }
 
-        listOfMoves.mutate(new Guarded()
+        moveList.mutate(new Guarded()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -1068,7 +1151,7 @@ public final class Mutator
         });
         
         MoveLatch iterator = addressMoves;
-        while (iterator.getNext() != null && !iterator.getNext().isTerminal())
+        while (iterator.getNext() != null && !iterator.getNext().isHead())
         {
             iterator.getNext().unlatch();
             iterator = iterator.getNext();
@@ -1078,7 +1161,12 @@ public final class Mutator
     public void commit()
     {
         final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
+
+        // Obtain shared lock on the compact lock, preventing pack file
+        // vacuum for the duration of the address page allocation.
+
         pager.getCompactLock().readLock().lock();
+
         try
         {
             tryCommit(new MoveList(commit, listOfMoves), commit);

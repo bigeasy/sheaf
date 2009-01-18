@@ -15,7 +15,7 @@ extends CompositeMoveRecorder
     
     private final SortedSet<Long> setOfAddressPages;
     
-    private final SortedSet<Long> setOfGatheredPages;
+    private final SortedSet<Long> userFromInterimPages;
     
     private final SortedSet<Long> setOfInUseAddressPages;
     
@@ -26,7 +26,7 @@ extends CompositeMoveRecorder
     public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
     {
         this.setOfAddressPages = new TreeSet<Long>();
-        this.setOfGatheredPages = new TreeSet<Long>();
+        this.userFromInterimPages = new TreeSet<Long>();
         this.setOfInUseAddressPages = new TreeSet<Long>();
         this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
         add(setOfUnassigned = new SetRecorder());
@@ -53,10 +53,17 @@ extends CompositeMoveRecorder
     {
         return setOfAddressPages;
     }
-    
-    public SortedSet<Long> getGatheredSet()
+
+    /**
+     * A set of positions of user pages that have been created during the commit
+     * by relocating interim pages and expanding the user page region. These
+     * pages were interim pages at the start of this commit.
+     * 
+     * @return A set of positions of newly created user pages.
+     */
+    public SortedSet<Long> getUserFromInterimPages()
     {
-        return setOfGatheredPages;
+        return userFromInterimPages;
     }
     
     public SortedMap<Long, Movable> getAddressMirrorMap()
