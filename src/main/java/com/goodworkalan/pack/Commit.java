@@ -9,11 +9,11 @@ import java.util.TreeSet;
 final class Commit
 extends CompositeMoveRecorder
 {
-    private final MapRecorder mapOfVaccums;
+    private final MapRecorder vacuumMap;
     
-    private final MapRecorder mapOfEmpties;
+    private final MapRecorder emptyMap;
     
-    private final SortedSet<Long> setOfAddressPages;
+    private final SortedSet<Long> addressSet;
     
     private final SortedSet<Long> userFromInterimPages;
     
@@ -25,14 +25,14 @@ extends CompositeMoveRecorder
     
     public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
     {
-        this.setOfAddressPages = new TreeSet<Long>();
+        this.addressSet = new TreeSet<Long>();
         this.userFromInterimPages = new TreeSet<Long>();
         this.addressFromUserPagesToMove = new TreeSet<Long>();
         this.movingUserPageMirrors = new TreeMap<Long, Movable>();
         add(unassignedInterimBlockPages = new SetRecorder());
         add(pageRecorder);
-        add(mapOfVaccums = new MapRecorder());
-        add(mapOfEmpties = new MapRecorder());
+        add(vacuumMap = new MapRecorder());
+        add(emptyMap = new MapRecorder());
         add(moveNodeRecorder);
         add(new JournalRecorder(journal));
     }
@@ -40,18 +40,18 @@ extends CompositeMoveRecorder
     @Override
     public boolean involves(long position)
     {
-        return setOfAddressPages.contains(position)
+        return addressSet.contains(position)
             || super.involves(position);
     }
     
     public boolean isAddressExpansion()
     {
-        return setOfAddressPages.size() != 0;
+        return addressSet.size() != 0;
     }
 
     public SortedSet<Long> getAddressSet()
     {
-        return setOfAddressPages;
+        return addressSet;
     }
 
     /**
@@ -89,11 +89,11 @@ extends CompositeMoveRecorder
 
     public SortedMap<Long, Movable> getVacuumMap()
     {
-        return mapOfVaccums;
+        return vacuumMap;
     }
     
     public SortedMap<Long, Movable> getEmptyMap()
     {
-        return mapOfEmpties;
+        return emptyMap;
     }
 }

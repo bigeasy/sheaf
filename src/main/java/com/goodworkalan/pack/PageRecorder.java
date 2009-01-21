@@ -6,53 +6,65 @@ import java.util.Set;
 final class PageRecorder
 extends CompositeMoveRecorder
 {
-    private final Set<Long> setOfAddressPages;
+    private final Set<Long> addressPageSet;
 
-    private final SetRecorder setOfUserPages;
+    private final SetRecorder userPageSet;
 
-    private final SetRecorder setOfJournalPages;
+    private final SetRecorder journalPageSet;
     
-    private final SetRecorder setOfWritePages;
+    private final SetRecorder writeBlockPages;
     
-    private final SetRecorder iterimBlockPages;
+    private final SetRecorder allocBlockPages;
     
     public PageRecorder()
     {
-        this.setOfAddressPages = new HashSet<Long>();
-        add(this.setOfUserPages = new SetRecorder());
-        add(this.setOfJournalPages = new SetRecorder());
-        add(this.setOfWritePages = new SetRecorder());
-        add(this.iterimBlockPages = new SetRecorder());
+        this.addressPageSet = new HashSet<Long>();
+        add(this.userPageSet = new SetRecorder());
+        add(this.journalPageSet = new SetRecorder());
+        add(this.writeBlockPages = new SetRecorder());
+        add(this.allocBlockPages = new SetRecorder());
     }
     
     public Set<Long> getAddressPageSet()
     {
-        return setOfAddressPages;
+        return addressPageSet;
     }
     
     public Set<Long> getUserPageSet()
     {
-        return setOfUserPages;
+        return userPageSet;
     }
     
     public Set<Long> getJournalPageSet()
     {
-        return setOfJournalPages;
+        return journalPageSet;
     }
-    
-    public Set<Long> getWritePageSet()
+
+    /**
+     * Return a set of interim block pages used to store blocks that represent a
+     * write to an existing block in a user block page.
+     * 
+     * @return The set of interim block pages containing writes.
+     */
+    public Set<Long> getWriteBlockPages()
     {
-        return setOfWritePages;
+        return writeBlockPages;
     }
-    
-    public Set<Long> getIterimBlockPages()
+
+    /**
+     * Return a set of interim block pages used to store newly allocated blocks
+     * that do not yet have a block in a user block page.
+     * 
+     * @return The set of interim block pages containing block allocations.
+     */
+   public Set<Long> getAllocBlockPages()
     {
-        return iterimBlockPages;
+        return allocBlockPages;
     }
     
     public void clear()
     {
-        setOfAddressPages.clear();
+        addressPageSet.clear();
         super.clear();
     }
 }

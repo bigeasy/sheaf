@@ -159,7 +159,7 @@ public final class Mutator
                 if (bestFit == 0L)
                 {
                     interim = pager.newInterimPage(new InterimPage(), dirtyPages);
-                    pageRecorder.getIterimBlockPages().add(interim.getRawPage().getPosition());
+                    pageRecorder.getAllocBlockPages().add(interim.getRawPage().getPosition());
                 }
                 else
                 {
@@ -228,7 +228,7 @@ public final class Mutator
                     if (bestFit == 0L)
                     {
                         interim = pager.newInterimPage(new InterimPage(), dirtyPages);
-                        pageRecorder.getWritePageSet().add(interim.getRawPage().getPosition());
+                        pageRecorder.getWriteBlockPages().add(interim.getRawPage().getPosition());
                     }
                     else
                     {
@@ -401,8 +401,8 @@ public final class Mutator
         
         dirtyPages.flush();
         
-        pager.getFreeInterimPages().free(pageRecorder.getIterimBlockPages());
-        pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
+        pager.getFreeInterimPages().free(pageRecorder.getAllocBlockPages());
+        pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
         pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
     }
     
@@ -583,7 +583,7 @@ public final class Mutator
             allocPagesBySize.add(interim.getRawPage().getPosition(), user.getRemaining());
 
             // Add the interim page to the map of allocation pages.
-            pageRecorder.getIterimBlockPages().add(interim.getRawPage().getPosition());
+            pageRecorder.getAllocBlockPages().add(interim.getRawPage().getPosition());
 
             // Map the user page to the interim mirror page.
             Movable movable = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
@@ -1020,7 +1020,7 @@ public final class Mutator
         // Start by adding all of the interim block pages to the set of interim
         // block pages whose blocks have not been assigned to a user block page.
 
-        commit.getUnassignedInterimBlockPages().addAll(pageRecorder.getIterimBlockPages());
+        commit.getUnassignedInterimBlockPages().addAll(pageRecorder.getAllocBlockPages());
 
         // If there are interm block pages with no user block page assigned
         // (true for all but read-only mutators), then try to find user block
@@ -1200,7 +1200,7 @@ public final class Mutator
                 journalCommits(commit.getVacuumMap());
                 journalCommits(commit.getEmptyMap());
                
-                for (long position: pageRecorder.getWritePageSet())
+                for (long position: pageRecorder.getWriteBlockPages())
                 {
                     InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
                     for (long address: interim.getAddresses())
@@ -1267,7 +1267,7 @@ public final class Mutator
                 }
                 
                 pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
-                pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
+                pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
             }
         });
 
