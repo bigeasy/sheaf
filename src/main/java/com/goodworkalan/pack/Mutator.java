@@ -503,12 +503,21 @@ public final class Mutator
     }
 
     /**
-     * Create address pages, extending the address page region by moving
-     * the user pages immediately follow after locking the pager to
-     * prevent compaction and close.  
-     *
+     * Create address pages, extending the address page region by moving the
+     * user pages immediately follow after locking the pager to prevent
+     * compaction and close.
      * <p>
-     * Remember that this method is already guarded by k
+     * Remember that this method is already guarded in <code>Pager</code> by
+     * synchronizing on the set of free addresses.
+     * 
+     * @param moveList
+     *            A list of move latches associated with a move recorder
+     *            specific to this address page creation.
+     * @param commit
+     *            The state of the commit that will record the new address
+     *            pages.
+     * @param newAddressPageCount
+     *            The number of address pages to allocate.
      */
     private SortedSet<Long> tryNewAddressPage(MoveList moveList, final Commit commit, int newAddressPageCount)
     {
@@ -670,32 +679,31 @@ public final class Mutator
     }
 
     /**
-     * Map the pages in the set of pages to a soon to be moved interim
-     * that is immediately after the data to interim page boundary. Each
-     * page in the set will be mapped to a page immediately after the data
-     * to interim boundary, incrementing the boundary as the page is
-     * allocated.
+     * Map the pages in the set of pages to a soon to be moved interim that is
+     * immediately after the data to interim page boundary. Each page in the set
+     * will be mapped to a page immediately after the data to interim boundary,
+     * incrementing the boundary as the page is allocated.
      * <p>
-     * If the interim page is in the list of free interim pages, remove
-     * it. We will not lock it. No other mutator will reference a free
-     * page because no other mutator is moving pages and no other mutator
-     * will be using it for work space.
+     * If the interim page is in the list of free interim pages, remove it. We
+     * will not lock it. No other mutator will reference a free page because no
+     * other mutator is moving pages and no other mutator will be using it for
+     * work space.
      * <p>
-     * If the page is not in the list of free interim pages, we do have to
-     * lock it.
+     * If the page is not in the list of free interim pages, we do have to lock
+     * it.
      * 
      * @param setOfPages
-     *            The set of pages that needs to be moved or copied into a
-     *            page in data region of the file.
+     *            The set of pages that needs to be moved or copied into a page
+     *            in data region of the file.
      * @param setOfMovingPages
      *            A set that will keep track of which pages this mutation
      *            references used in conjunction with the move list.
      * @param mapOfPages
-     *            A map that associates one of the pages with an interim
-     *            page that will be converted to a data page.
+     *            A map that associates one of the pages with an interim page
+     *            that will be converted to a data page.
      * @param userFromInterimPagesToMove
-     *            A set of the interim pages that need to be moved to a
-     *            new interim pages as opposed to pages that were free.
+     *            A set of the interim pages that need to be moved to a new
+     *            interim pages as opposed to pages that were free.
      * @param userFromInterimPages
      *            A set of the newly created data positions.
      */
@@ -760,9 +768,9 @@ public final class Mutator
      * <p>
      * First the list of moves is appended to the move list. Adding to the move
      * list is an exclusive operation, if there are any guarded operations, such
-     * as commit, append must wait. Now this operation takes place, and if any
-     * mutator employing one of the pages commits, then they will wait until the
-     * latch is released.
+     * as commit, the append must wait. Now this operation takes place, and if
+     * any mutator employing one of the pages commits, then they will wait until
+     * the latch is released.
      * 
      * @param head
      *            The head a linked list of move latches.
@@ -1055,19 +1063,19 @@ public final class Mutator
                 long afterVacuum = journal.getJournalPosition(); 
                 
                 // Write out all your allocations from above. Each of them
-                // becomes an action. Read the interim page and copy the
-                // data over to the data page.
+                // becomes an action. Read the interim page and copy the data
+                // over to the data page.
                 
-                // Here we insert the vacuum break. During a recovery, the
-                // data pages will be recreated without a reference to their
-                // vacuumed page.
+                // Here we insert the vacuum break. During a recovery, the data
+                // pages will be recreated without a reference to their vacuumed
+                // page.
     
-                // Although, I suppose the vacuum page reference could
-                // simply be a reference to the data page.
+                // Although, I suppose the vacuum page reference could simply be
+                // a reference to the data page.
     
-                // Two ways to deal with writing to a vacuumed page. One it
-                // to overwrite the vacuum journal. The other is to wait
-                // until the vacuumed journal is written.
+                // Two ways to deal with writing to a vacuumed page. One it to
+                // overwrite the vacuum journal. The other is to wait until the
+                // vacuumed journal is written.
     
                 journal.write(new Vacuum(afterVacuum));
                 
@@ -1174,3 +1182,5 @@ public final class Mutator
         clear(commit);
     }
 }
+
+/* vim: set tw=80 : */

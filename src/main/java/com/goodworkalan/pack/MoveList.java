@@ -9,26 +9,25 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * A linked list of moves.
  * 
  * <p>
- * The move list is extended by appending a list of move latch nodes, so
- * that the move latch nodes in the move list itself are chains of
- * related moves.  This means that we can {@link #skip()} a particular
- * sub linked list of moves, so that a thread can skip the latches that
- * it adds itself.
+ * The move list is extended by appending a list of move latch nodes, so that
+ * the move latch nodes in the move list itself are chains of related moves.
+ * This means that we can {@link #skip()} a particular sub linked list of moves,
+ * so that a thread can skip the latches that it adds itself.
  * <h2>Position</h2>
  * The list of user page moves is passed to the {@link GuardedVoid} and
  * {@link Guarded} so that {@link Mutator#free(long)} and
- * {@link Mutator#write(long, java.nio.ByteBuffer)} can determine if
- * they are freeing or writing to a page that has been moved. This is a
- * special case.
+ * {@link Mutator#write(long, java.nio.ByteBuffer)} can determine if they are
+ * freeing or writing to a page that has been moved. This is a special case.
  * <p>
- * Pages allocated by a <code>Mutator</code> are tracked using a {@link
- * Movable} at the outset. The <code>Movable</code> will adjust the
- * position it references according to the latch node linked list that
- * starts from the node that was the tail when the position was
- * allocated.
+ * Pages allocated by a <code>Mutator</code> are tracked using a {@link Movable}
+ * at the outset. The <code>Movable</code> will adjust the position it
+ * references according to the latch node linked list that starts from the node
+ * that was the tail when the position was allocated.
  * <p>
- * Pages that are referenced by the client programmer that were not
- * created by the <code>Mutator</code> 
+ * Pages that are referenced by the client programmer that were not created by
+ * the <code>Mutator</code>
+ * 
+ * TODO Rename MoveLatchList.
  */
 final class MoveList
 {
