@@ -3,7 +3,7 @@ package com.goodworkalan.pack;
 import java.util.List;
 
 
-class GuardedReturnable<T>
+class Guarded<T>
 {
     public T run(List<MoveLatch> userMoveLatches)
     {

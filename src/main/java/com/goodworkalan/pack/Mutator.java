@@ -135,7 +135,7 @@ public final class Mutator
                 
         final int fullSize = blockSize + Pack.BLOCK_HEADER_SIZE;
        
-        return listOfMoves.mutate(new GuardedReturnable<Long>()
+        return listOfMoves.mutate(new Guarded<Long>()
         {
             public Long run(List<MoveLatch> listOfMoves)
             {
@@ -275,7 +275,7 @@ public final class Mutator
 
     public ByteBuffer tryRead(final long address, final ByteBuffer bytes)
     {
-        return listOfMoves.mutate(new GuardedReturnable<ByteBuffer>()
+        return listOfMoves.mutate(new Guarded<ByteBuffer>()
         {
             public ByteBuffer run(List<MoveLatch> listOfMoveLatches)
             {

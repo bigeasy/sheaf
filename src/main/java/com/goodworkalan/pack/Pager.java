@@ -550,7 +550,7 @@ implements Schema
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
                 final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
-                Mutator mutator = listOfMoves.mutate(new GuardedReturnable<Mutator>()
+                Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
                     {
@@ -695,7 +695,7 @@ implements Schema
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
                 final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
-                Mutator mutator = listOfMoves.mutate(new GuardedReturnable<Mutator>()
+                Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
                     {

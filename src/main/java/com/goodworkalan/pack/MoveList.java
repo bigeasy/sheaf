@@ -16,7 +16,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * it adds itself.
  * <h2>Position</h2>
  * The list of user page moves is passed to the {@link GuardedVoid} and
- * {@link GuardedReturnable} so that {@link Mutator#free(long)} and
+ * {@link Guarded} so that {@link Mutator#free(long)} and
  * {@link Mutator#write(long, java.nio.ByteBuffer)} can determine if
  * they are freeing or writing to a page that has been moved. This is a
  * special case.
@@ -136,7 +136,7 @@ final class MoveList
         }
     }
 
-    public <T> T mutate(final GuardedReturnable<T> guarded)
+    public <T> T mutate(final Guarded<T> guarded)
     {
         wasLocked = false;
         skipping = false;
