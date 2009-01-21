@@ -148,7 +148,7 @@ final class BySizeTable implements Iterable<Long>
         return bestFit;
     }
 
-    // FIXME We can compact even further by joining vacuumed pages.
+    // TODO We can compact even further by joining vacuumed pages.
     public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
     {
         int pageSize = listOfSetsOfPages.size() * alignment;

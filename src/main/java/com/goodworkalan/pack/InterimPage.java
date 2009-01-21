@@ -42,7 +42,7 @@ final class InterimPage extends BlockPage
             ByteBuffer bytes = getBlockRange();
             boolean found = false;
             int block = 0;
-            // FIXME Not finding anymore. That's taken care of in commit.
+            // TODO Not finding anymore. That's taken care of in commit.
             while (block != count && !found)
             {
                 int size = getBlockSize(bytes);
@@ -108,7 +108,7 @@ final class InterimPage extends BlockPage
 
     public void copy(long address, UserPage user, DirtyPageSet dirtyPages)
     {
-        // FIXME Locking a lot. Going to deadlock?
+        // TODO Locking a lot. Going to deadlock?
         synchronized (getRawPage())
         {
             ByteBuffer bytes = getRawPage().getByteBuffer();

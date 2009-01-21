@@ -23,12 +23,12 @@ extends Operation
     @Override
     public void commit(Player player)
     {
-        // FIXME Someone else can allocate the address and even the block
+        // TODO Someone else can allocate the address and even the block
         // now that it is free and the replay ruins it. 
         Pager pager = player.getPager();
         pager.getAddressLocker().lock(address);
         player.getAddressSet().add(address);
-        // FIXME Same problem with addresses as with temporary headers,
+        // TODO Same problem with addresses as with temporary headers,
         // someone can reuse when we're scheduled to release.
         pager.freeTemporary(address, player.getDirtyPages());
         AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());

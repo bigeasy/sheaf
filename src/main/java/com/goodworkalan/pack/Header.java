@@ -22,7 +22,7 @@ final class Header extends Regional
         return Pack.FILE_HEADER_SIZE + getInternalJournalCount() * Pack.POSITION_SIZE;
     }
 
-    // FIXME Make this a checksum.
+    // TODO Make this a checksum.
     public long getSignature()
     {
         return bytes.getLong(0);

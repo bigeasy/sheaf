@@ -18,7 +18,7 @@ import java.util.List;
  * {@link Mutator#free(long)} methods need to check the most recent list of
  * moves ...
  * 
- * FIXME Why the most recent list? Why not every move?
+ * TODO Why the most recent list? Why not every move?
  * 
  * @author Alan Gutierrez
  */

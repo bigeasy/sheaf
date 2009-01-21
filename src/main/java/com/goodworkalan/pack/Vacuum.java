@@ -24,7 +24,7 @@ extends Operation
         {
             addVacuum.vacuum(player);
         }
-        // FIXME Prettify.
+        // TODO Prettify.
         ByteBuffer bytes = player.getJournalHeader().getByteBuffer();
         bytes.clear();
         long oldJournalPosition = bytes.getLong();

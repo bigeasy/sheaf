@@ -201,7 +201,7 @@ public final class Mutator
         return pager.getPage(position, UserPage.class, new UserPage());
     }
 
-    // FIXME Write at offset.
+    // TODO Write at offset.
     public void write(final long address, final ByteBuffer src)
     {
         listOfMoves.mutate(new GuardedVoid()
@@ -855,7 +855,7 @@ public final class Mutator
             // tells us not adjust our own move list for the first move
             // detected for this position.
 
-            // FIXME Only add as negative if we are going to observe the move.
+            // TODO Only add as negative if we are going to observe the move.
             pageRecorder.getUserPageSet().add(soonToBeCreatedUser);
 
             commit.getEmptyMap().put(iterimAllocation, movable);
@@ -949,7 +949,6 @@ public final class Mutator
         setOfMirroredPages.clear();
     }
 
-    // FIXME Begin line by line documentation here.
     private void tryCommit(MoveLatchList moveList, final Commit commit)
     {
         commit.getUnassignedSet().addAll(pageRecorder.getAllocationPageSet());
@@ -1045,9 +1044,9 @@ public final class Mutator
                 // Create a vacuum operation for all the vacuums.
                 Set<UserPage> setOfMirroredVacuumPages = new HashSet<UserPage>();
                 
-                // FIXME Do I make sure that mirroring in included before 
+                // TODO Do I make sure that mirroring in included before 
                 // vacuum in recovery as well?
-                // FIXME No. Just make addresses go first. Negative journal.
+                // TODO No. Just make addresses go first. Negative journal.
 
                 for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                 {
@@ -1146,7 +1145,7 @@ public final class Mutator
                 }
                 else
                 {
-                    // FIXME Do I return user pages here?
+                    // TODO Do I return user pages here?
                 }
                 
                 pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());

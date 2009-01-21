@@ -21,8 +21,8 @@ import java.util.TreeSet;
 /**
  * Opens pack files and performs recovery.
  * 
- * FIXME Pull Medic out of this class.
- * FIXME Test temporary pages.
+ * TODO Pull Medic out of this class.
+ * TODO Test temporary pages.
  */
 public final class Opener
 {

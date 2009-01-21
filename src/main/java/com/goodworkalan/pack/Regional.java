@@ -88,7 +88,7 @@ abstract class Regional
     public void write(Disk disk, FileChannel fileChannel) throws IOException
     {
         ByteBuffer bytes = getByteBuffer();
-        bytes.clear(); // FIXME Shouldn't be necessary.
+        bytes.clear(); // TODO Shouldn't be necessary.
 
         for(Map.Entry<Integer, Integer> entry: setOfRegions.entrySet())
         {

@@ -652,7 +652,7 @@ implements Schema
 
     public void addAddressPage(AddressPage addressPage)
     {
-        // FIXME Convince yourself that this works. That you're not really
+        // TODO Convince yourself that this works. That you're not really
         // using the count, but rather the check in and checkout. You
         // could be checking the available, but you'll only determine
         // not to come back, in fact, check in only one place, the the
@@ -799,7 +799,7 @@ implements Schema
 
     public void returnUserPage(BlockPage blocks)
     {
-        // FIXME Is it not the case that the block changes can mutated
+        // TODO Is it not the case that the block changes can mutated
         // by virtue of a deallocation operation?
         if (blocks.getCount() == 0)
         {

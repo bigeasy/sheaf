@@ -82,9 +82,9 @@ interface Page
      */
     public void load(RawPage rawPage);
     
-    /** FIXME Remove. */
+    /** TODO Remove. */
     public void checksum(Checksum checksum);
     
-    /** FIXME Remove. */
+    /** TODO Remove. */
     public boolean verifyChecksum(RawPage rawPage, Recovery recovery);
 }
