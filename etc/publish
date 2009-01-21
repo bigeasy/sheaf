@@ -1,0 +1,3 @@
+rsync -az -e ssh ./target/site/apidocs maribor.blogometer.com:/cb/www/static/curlybraces/documentation/pack/
+rsync -az -e ssh ./target/site/xref maribor.blogometer.com:/cb/www/static/curlybraces/documentation/pack/
+rsync -az -e ssh ./target/site/cobertura maribor.blogometer.com:/cb/www/static/curlybraces/documentation/pack/
