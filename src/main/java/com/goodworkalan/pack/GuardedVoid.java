@@ -22,9 +22,7 @@ import java.util.List;
  * 
  * @author Alan Gutierrez
  */
-class GuardedVoid
+interface GuardedVoid
 {
-    public void run(List<MoveLatch> userMoveLatches)
-    {
-    }
+    public void run(List<MoveLatch> userMoveLatches);
 }

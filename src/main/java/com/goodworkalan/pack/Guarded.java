@@ -3,10 +3,7 @@ package com.goodworkalan.pack;
 import java.util.List;
 
 
-class Guarded<T>
+interface Guarded<T>
 {
-    public T run(List<MoveLatch> userMoveLatches)
-    {
-        return null;
-    }
+    public T run(List<MoveLatch> userMoveLatches);
 }

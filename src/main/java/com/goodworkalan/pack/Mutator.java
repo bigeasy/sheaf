@@ -427,7 +427,6 @@ public final class Mutator
         {
             listOfMoves.mutate(new GuardedVoid()
             {
-                @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     tryRollback();
@@ -555,7 +554,6 @@ public final class Mutator
         {
             moveList.mutate(new GuardedVoid()
             {
-                @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     moveAndUnlatch(userMoveLatchHead);
@@ -999,7 +997,6 @@ public final class Mutator
         {
             moveList.mutate(new GuardedVoid()
             {
-                @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     moveAndUnlatch(userMoves);
@@ -1013,7 +1010,6 @@ public final class Mutator
         {
             moveList.mutate(new GuardedVoid()
             {
-                @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
                     expandAddress(commit, addressMoves);

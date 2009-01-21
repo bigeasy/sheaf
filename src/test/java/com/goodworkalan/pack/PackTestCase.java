@@ -823,13 +823,6 @@ public class PackTestCase
         mutator.commit();
         pack.close();
     }
-    
-    @Test
-    public void guarded()
-    {
-        new GuardedVoid().run((List<MoveLatch>) null);
-        new Guarded<Object>().run((List<MoveLatch>) null);
-    }
 
     @Test public void temporary()
     {
