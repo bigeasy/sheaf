@@ -17,9 +17,9 @@ extends CompositeMoveRecorder
     
     private final SortedSet<Long> userFromInterimPages;
     
-    private final SortedSet<Long> setOfInUseAddressPages;
+    private final SortedSet<Long> addressFromUserPagesToMove;
     
-    private final SetRecorder setOfUnassigned;
+    private final SetRecorder unassignedInterimBlockPages;
     
     private final SortedMap<Long, Movable> mapOfAddressMirrors;
     
@@ -27,9 +27,9 @@ extends CompositeMoveRecorder
     {
         this.setOfAddressPages = new TreeSet<Long>();
         this.userFromInterimPages = new TreeSet<Long>();
-        this.setOfInUseAddressPages = new TreeSet<Long>();
+        this.addressFromUserPagesToMove = new TreeSet<Long>();
         this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
-        add(setOfUnassigned = new SetRecorder());
+        add(unassignedAllocationPages = new SetRecorder());
         add(pageRecorder);
         add(mapOfVaccums = new MapRecorder());
         add(mapOfEmpties = new MapRecorder());
@@ -71,14 +71,20 @@ extends CompositeMoveRecorder
         return mapOfAddressMirrors;
     }
     
-    public SortedSet<Long> getInUseAddressSet()
+    public SortedSet<Long> getAddressFromUserPagesToMove()
     {
-        return setOfInUseAddressPages;
+        return addressFromUserPagesToMove;
     }
-    
-    public SortedSet<Long> getUnassignedSet()
+
+    /**
+     * Return the set of allocation pages whose blocks have not yet been
+     * assigned to a user block page.
+     * 
+     * @return The set of unassigned interim blocks.
+     */
+    public SortedSet<Long> getUnassignedInterimBlockPages()
     {
-        return setOfUnassigned;
+        return unassignedInterimBlockPages;
     }
 
     public SortedMap<Long, Movable> getVacuumMap()

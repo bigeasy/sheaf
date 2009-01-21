@@ -14,7 +14,7 @@ extends CompositeMoveRecorder
     
     private final SetRecorder setOfWritePages;
     
-    private final SetRecorder setOfAllocationPages;
+    private final SetRecorder iterimBlockPages;
     
     public PageRecorder()
     {
@@ -22,7 +22,7 @@ extends CompositeMoveRecorder
         add(this.setOfUserPages = new SetRecorder());
         add(this.setOfJournalPages = new SetRecorder());
         add(this.setOfWritePages = new SetRecorder());
-        add(this.setOfAllocationPages = new SetRecorder());
+        add(this.iterimBlockPages = new SetRecorder());
     }
     
     public Set<Long> getAddressPageSet()
@@ -45,9 +45,9 @@ extends CompositeMoveRecorder
         return setOfWritePages;
     }
     
-    public Set<Long> getAllocationPageSet()
+    public Set<Long> getIterimBlockPages()
     {
-        return setOfAllocationPages;
+        return iterimBlockPages;
     }
     
     public void clear()
