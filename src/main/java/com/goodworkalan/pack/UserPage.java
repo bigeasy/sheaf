@@ -43,21 +43,29 @@ final class UserPage extends BlockPage
     }
 
     /**
-     * Mirror the page excluding freed blocks.
+     * Mirror the user block page to the given interim block page.
      * <p>
-     * For a time, this method would copy starting after the first free
-     * block with the intention of making vacuum more efficient. However,
-     * copying over the entire page makes recovery more certain. Generating
-     * a checksum for the expected page.
+     * The vacuum parameter indicates that mirroring should begin at the first
+     * allocated block beyond the first free block. If there are no free blocks
+     * to vacuum, then <code>mirror</code> returns null. If the interim
+     * parameter is null, then the <code>pager</code> will be used to allocate
+     * an <code>InterimPage</code> if vacuum is necessary.
      * 
+     * @param vacuum
+     *            If true, mirror only if there are free blocks between
+     *            allocated blocks, if false, mirror from the first block.
      * @param pager
+     *            The pager to use to allocate an interim page.
+     * @param interim
+     *            The interim page to which this page is mirrored, or null for
+     *            only if needed allocation.
      * @param dirtyPages
-     * @param force
-     * @return
+     *            The set of dirty pages.
+     * @return The mirrored interim page given.
      */
-    public synchronized Mirror mirror(Pager pager, InterimPage interim, boolean force, DirtyPageSet dirtyPages)
+    public synchronized Mirror mirror(boolean vacuum, Pager pager, InterimPage interim, DirtyPageSet dirtyPages)
     {
-        int offset = force ? 0 : -1;
+        int offset = vacuum ? -1 : 0;
         
         Mirror mirror = null;
         

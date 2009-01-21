@@ -21,14 +21,14 @@ extends CompositeMoveRecorder
     
     private final SetRecorder unassignedInterimBlockPages;
     
-    private final SortedMap<Long, Movable> mapOfAddressMirrors;
+    private final SortedMap<Long, Movable> movingUserPageMirrors;
     
     public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
     {
         this.setOfAddressPages = new TreeSet<Long>();
         this.userFromInterimPages = new TreeSet<Long>();
         this.addressFromUserPagesToMove = new TreeSet<Long>();
-        this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
+        this.movingUserPageMirrors = new TreeMap<Long, Movable>();
         add(unassignedInterimBlockPages = new SetRecorder());
         add(pageRecorder);
         add(mapOfVaccums = new MapRecorder());
@@ -66,9 +66,9 @@ extends CompositeMoveRecorder
         return userFromInterimPages;
     }
     
-    public SortedMap<Long, Movable> getAddressMirrorMap()
+    public SortedMap<Long, Movable> getMovingUserPageMirrors()
     {
-        return mapOfAddressMirrors;
+        return movingUserPageMirrors;
     }
     
     public SortedSet<Long> getAddressFromUserPagesToMove()

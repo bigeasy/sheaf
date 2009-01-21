@@ -313,7 +313,17 @@ extends RelocatablePage
         return null;
     }
     
-    // Note that this must be called in a synchronized block.
+    /**
+     * TODO Note that we can keep this to checksum mirroring, but we do not
+     * want to keep this to checksum each page. Rather, we are going to add
+     * an imprint to each block.
+     * <p> 
+     * Note that this must be called in a synchronized block.
+     * 
+     * @param checksum The checksum to use.
+     * 
+     * @return A checksum.
+     */
     public long getChecksum(Checksum checksum)
     {
         checksum.reset();

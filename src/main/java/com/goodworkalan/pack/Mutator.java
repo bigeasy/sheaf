@@ -202,6 +202,9 @@ public final class Mutator
     }
 
     // TODO Write at offset.
+    // FIXME Answer me this: What is the difference between write and allocate?
+    // How do I allocate? How do I write? Can I use the same interim blocks and
+    // have them written to the right places?
     public void write(final long address, final ByteBuffer src)
     {
         listOfMoves.mutate(new GuardedVoid()
@@ -555,14 +558,17 @@ public final class Mutator
 
     /**
      * Create interim block pages that will mirror the user pages that need to
-     * be moved in order to create new address pages. The interim block pages
-     * create appear as ordinary mirrors of user pages to the commit method.
-     * They are copied into the interim block page before commit and copied into
-     * a new user page into new user block pages in the user region.
+     * be moved in order to create new address pages and add it to the
+     * allocation pages by size table and the allocation page set. The commit
+     * method will allocate a user page for the mirrored page since it is in the
+     * allocation page set. We will look this up in {@link #expandAddress} and
+     * add a move latch to our list of move latches for user pages that moves
+     * the user page at the location of our new address page to the user page
+     * chosen by the commit method.
      *
      * @param commit The state of the current commit.
      */
-    private void mirrorUserPagesToMove(Commit commit)
+    private void allocMovingUserPageMirrors(Commit commit)
     {
         // For each user page that need to move to create an address page.
         for (long position: commit.getAddressFromUserPagesToMove())
@@ -581,7 +587,7 @@ public final class Mutator
 
             // Map the user page to the interim mirror page.
             Movable movable = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
-            commit.getAddressMirrorMap().put(user.getRawPage().getPosition(), movable);
+            commit.getMovingUserPageMirrors().put(user.getRawPage().getPosition(), movable);
         }
     }
 
@@ -723,13 +729,20 @@ public final class Mutator
         // If the new address page is in the set of free block pages or if it is
         // a block page we've just created the page does not have to be moved.
 
-        moveList.mutate(new GuardedVoid()
+        if (commit.getAddressFromUserPagesToMove().size() != 0)
         {
-            public void run(List<MoveLatch> listOfMoveLatches)
+            moveList.mutate(new GuardedVoid()
             {
-                mirrorUserPagesToMove(commit);
-            }
-        });
+                public void run(List<MoveLatch> listOfMoveLatches)
+                {
+                    // Allocate mirrors for the user pages and place them in
+                    // the alloc page by size table and the allocation page set
+                    // so the commit method will assign a destination user page.
+                    
+                    allocMovingUserPageMirrors(commit);
+                }
+            });
+        }
 
         // Run the commit.
 
@@ -866,9 +879,8 @@ public final class Mutator
             long iterimAllocation = copy.getKey();
             long soonToBeCreatedUser = copy.getValue();
 
-            Movable movable = new Movable(moveNodeRecorder.getMoveNode(),
-                                          soonToBeCreatedUser,
-                                          0);
+            Movable movable = new Movable(moveNodeRecorder.getMoveNode(), soonToBeCreatedUser, 0);
+
             // Add the page to the set of pages used to track the pages
             // referenced in regards to the move list. We are going to move
             // this page and we are aware of this move. Negating the value
@@ -883,19 +895,32 @@ public final class Mutator
     }
     
     /**
-     * Add the map of user page moves to the move list. There is no need to
-     * record the move addresses in the user page set, since the only move
-     * of the page will be the move recored here.
+     * Find the user page choosen by the commit method as the destination for
+     * the allocation page used to mirror a moving user page and add a move
+     * latch to indicate the from the of the user page at the new address page
+     * position to the choosen user page. 
+     * <p>
+     * Actual mirroring takes place while writing the journal by calling {@link
+     * #mirrorUserPagesForMove}.
+     * <p> 
+     * There is no need to record the move addresses in the user page set, since
+     * the only move of the page will be the move recored here.
      * 
      * @param commit
      *            Commit map state and move recorder.
-     * @param addressMoves
+     * @param userMoveLatches
      *            The head of a linked list of move latches.
      */
-    private void expandAddress(Commit commit, MoveLatch addressMoves)
+    private void expandAddress(Commit commit, MoveLatch userMoveLatches)
     {
+        // A map of user pages to copy.
         Map<Long, Long> copies = new TreeMap<Long, Long>();
-        for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
+
+        // We put our mirror page into the set of allocation pages, so the
+        // commit method has mapped our allocation page to a user page that will
+        // hold it. Find the destination user page and note it in the copy map.
+
+        for (Map.Entry<Long, Movable> entry: commit.getMovingUserPageMirrors().entrySet())
         {
             long addressFromUserPage = entry.getKey();
             long mirroredAsAllocation = entry.getValue().getPosition(pager);
@@ -913,18 +938,33 @@ public final class Mutator
             long newOrExistingUser = movable.getPosition(pager);
             copies.put(addressFromUserPage, newOrExistingUser);
         }
+
+        // We always perform a move for a user page. It is simplier. Create a
+        // move latch that will protect the move of the user page. (No need to
+        // use Movable because of the protection of the latch.)
         
         for (Map.Entry<Long, Long> entry: copies.entrySet())
         {
             long addressFromUserPage = entry.getKey();
             long newOrExistingUser = entry.getValue();
-            addressMoves.getLast().extend(new MoveLatch(new Move(addressFromUserPage, newOrExistingUser), true));
+            userMoveLatches.getLast().extend(new MoveLatch(new Move(addressFromUserPage, newOrExistingUser), true));
         }
     }
 
-    private void mirrorUsers(Commit commit, Set<UserPage> setOfMirroredCopyPages)
+    /**
+     * Mirror user block pages that need to be moved to accomodate address region
+     * expansion into the interim block pages allocated for mirroring.
+     *
+     * @param commit The state of the commit.
+     * @param userPagesMirroredForMove A set of user pages to record the user pages mirrored
+     * by this method.
+     */
+    private void mirrorUserPagesForMove(Commit commit, Set<UserPage> userPagesMirroredForMove)
     {
-        for (Map.Entry<Long, Movable> entry: commit.getAddressMirrorMap().entrySet())
+        // For each moving user page, mirror the page into the interim block
+        // page allocated for mirroring.
+
+        for (Map.Entry<Long, Movable> entry: commit.getMovingUserPageMirrors().entrySet())
         {
             long addressFromUserPage = entry.getKey();
             long allocation = entry.getValue().getPosition(pager);
@@ -932,9 +972,9 @@ public final class Mutator
             InterimPage mirrored = pager.getPage(allocation, InterimPage.class, new InterimPage());
             
             UserPage user = pager.getPage(addressFromUserPage, UserPage.class, new UserPage());
-            user.mirror(pager, mirrored, true, dirtyPages);
+            user.mirror(false, null, mirrored, dirtyPages);
 
-            setOfMirroredCopyPages.add(user);
+            userPagesMirroredForMove.add(user);
         }
     }
 
@@ -950,6 +990,13 @@ public final class Mutator
         }
     }
     
+    /**
+     * Unlock mirrored pages by calling the {@link UserPage#unmirrored} method
+     * on all of the user pages in the mirrored set and release the hard
+     * refernece to the user page implicit in the set by clearing the set.
+     *
+     * @param mirrored A set of mirrored user pages.
+     */
     private void unlockMirrored(Set<UserPage> mirrored)
     {
         for (UserPage user : mirrored)
@@ -1003,10 +1050,10 @@ public final class Mutator
             });
         }
     
-        // Create the head of list of user move latches that we can append to
-        // the per pager list of move latches, if necessary.
+        // Create the head of list of move latches for interim page moves that
+        // we can append to the per pager list of move latches, if necessary.
         
-        final MoveLatch userMoves = new MoveLatch(false);
+        final MoveLatch interimMoveLatches = new MoveLatch(false);
     
         // If more pages are needed, then we need to extend the user region of
         // the file.
@@ -1030,7 +1077,7 @@ public final class Mutator
                 // Add move latches to the per pager move latch list for each
                 // interim page currently in use whose contents needs to be
                 // moved to accomodate the moved user to interim boundary.
-                addIterimMoveLatches(moveLatchList, userMoves, userFromInterimPagesToMove);
+                addIterimMoveLatches(moveLatchList, interimMoveLatches, userFromInterimPagesToMove);
 
                 // Allocate a new interim page for each interim page currently
                 // in use whose contents needs to be moved to accomodate the
@@ -1045,38 +1092,52 @@ public final class Mutator
         // about to move are waiting for us to unlatch the latches we added to
         // the per pager list of move latches.
         
-        if (userMoves.getNext() != null)
+        if (interimMoveLatches.getNext() != null)
         {
             moveLatchList.mutate(new GuardedVoid()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    moveAndUnlatch(userMoves);
+                    moveAndUnlatch(interimMoveLatches);
                 }
             });
         }
 
-        // Create a list o 
+        // Create the head of list of move latches for user page moves that we
+        // can append to the per pager list of move latches, if necessary.
         
-        final MoveLatch addressMoves = new MoveLatch(true);
+        final MoveLatch userMoveLatches = new MoveLatch(false);
         
-        if (commit.isAddressExpansion())
+        // If commit is part of the expansion of the address region and there
+        // are user pages that need to move to accomdate address pages, add the
+        // user moves to the per pager list of move latches.
+        
+        if (commit.getAddressFromUserPagesToMove().size() != 0)
         {
             moveLatchList.mutate(new GuardedVoid()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
-                    expandAddress(commit, addressMoves);
+                    // Add all of the user page moves to the list of move
+                    // latches for user pages.
+
+                    expandAddress(commit, userMoveLatches);
                 }
             });
 
-            pager.getMoveList().add(addressMoves);
-            moveLatchList.skip(addressMoves);
+            // Append the user page moves to the per pager list of move latches.
+            pager.getMoveList().add(userMoveLatches);
+
+            // Skip the user move latches we just added.
+            moveLatchList.skip(userMoveLatches);
         }
+
+        // Writing of mirrors, journal completion, move recording, journal
+        // playback, resources returned to the pager.
 
         moveLatchList.mutate(new GuardedVoid()
         {
-            public void run(List<MoveLatch> listOfMoveLatches)
+            public void run(List<MoveLatch> userMoveLatches)
             {
                 // Write a terminate to end the playback loop. This
                 // terminate is the true end of the journal.
@@ -1098,7 +1159,7 @@ public final class Mutator
                 for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
                 {
                     UserPage user = pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage());
-                    Mirror mirror = user.mirror(pager, null, false, dirtyPages);
+                    Mirror mirror = user.mirror(true, pager, null, dirtyPages);
                     if (mirror != null)
                     {
                         journal.write(new AddVacuum(mirror, user));
@@ -1127,9 +1188,14 @@ public final class Mutator
                 
                 journal.write(new Terminate());
                 
-                // Create a vacuum operation for all the vacuums.
-                Set<UserPage> setOfMirroredCopyPages = new HashSet<UserPage>();
-                mirrorUsers(commit, setOfMirroredCopyPages);
+                // The list of user pages that were mirrored for relcation.
+                Set<UserPage> userPagesMirroredForMove = new HashSet<UserPage>();
+               
+                // Write the mirror of user pages for relocation to the journal.
+                if (commit.getAddressFromUserPagesToMove().size() != 0)
+                {
+                    mirrorUserPagesForMove(commit, userPagesMirroredForMove);
+                }
 
                 journalCommits(commit.getVacuumMap());
                 journalCommits(commit.getEmptyMap());
@@ -1174,10 +1240,19 @@ public final class Mutator
                 // Then do everything else.
                 player.commit();
 
-                unlockMirrored(setOfMirroredCopyPages);
+                unlockMirrored(userPagesMirroredForMove);
+
+                // Unlock any addresses that were returned as free to their
+                // address pages, but were locked to prevent the commit of a
+                // reallocation until this commit completed.
+
                 pager.getAddressLocker().unlock(player.getAddressSet());
                 
                 if (!commit.isAddressExpansion())
+                {
+                    // TODO Which pages to I return here?
+                }
+                else
                 {
                     pager.getFreeInterimPages().free(commit.getVacuumMap().keySet());
                     pager.getFreeInterimPages().free(commit.getEmptyMap().keySet());
@@ -1190,21 +1265,22 @@ public final class Mutator
                         pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
                     }
                 }
-                else
-                {
-                    // TODO Do I return user pages here?
-                }
                 
                 pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
                 pager.getFreeInterimPages().free(pageRecorder.getWritePageSet());
             }
         });
+
+        // Unlatch any user move latches obtained during this commit. The list
+        // will only contain user move latches if this is an address region
+        // expansion and user pages were moved to accomodate the address region
+        // expansion.
         
-        MoveLatch iterator = addressMoves;
-        while (iterator.getNext() != null && !iterator.getNext().isHead())
+        MoveLatch userMoveLatch = userMoveLatches;
+        while (userMoveLatch.getNext() != null && !userMoveLatch.getNext().isHead())
         {
-            iterator.getNext().unlatch();
-            iterator = iterator.getNext();
+            userMoveLatch.getNext().unlatch();
+            userMoveLatch = userMoveLatch.getNext();
         }
     }
 
