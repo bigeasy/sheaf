@@ -202,9 +202,6 @@ public final class Mutator
     }
 
     // TODO Write at offset.
-    // FIXME Answer me this: What is the difference between write and allocate?
-    // How do I allocate? How do I write? Can I use the same interim blocks and
-    // have them written to the right places?
     public void write(final long address, final ByteBuffer src)
     {
         listOfMoves.mutate(new GuardedVoid()
@@ -221,6 +218,13 @@ public final class Mutator
                 }
                 if (movable == null)
                 {
+                    // Interim block pages allocated to store writes are tracked
+                    // in a separate by size table and a separate set of
+                    // interim pages. During commit interim write blocks need
+                    // only be copied to the user pages where they reside, while
+                    // interim alloc blocks need to be assigned (as a page) to a
+                    // user page with space to accommodate them.
+
                     BlockPage blocks = dereference(address, listOfMoveLatches);
                     int blockSize = blocks.getBlockSize(address);
                    
@@ -1200,6 +1204,10 @@ public final class Mutator
                 journalCommits(commit.getVacuumMap());
                 journalCommits(commit.getEmptyMap());
                
+                // Interim block pages allocated to store writes need only be
+                // written into place using address lookup to find the user
+                // block page.
+
                 for (long position: pageRecorder.getWriteBlockPages())
                 {
                     InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
