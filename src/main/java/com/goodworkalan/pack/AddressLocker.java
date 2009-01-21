@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.SortedSet;
 
 /**
  * Used during commit to lock freed addresses to prevent their possible
@@ -19,7 +18,7 @@ import java.util.SortedSet;
  * the reallocation would be overwritten by the replay of the free.
  * <p>
  * This implementation multiplexes the addresses in 37 different sets of long
- * values and a set is chosen by hasing. Synchronization is performed on the
+ * values and a set is chosen by hashing. Synchronization is performed on the
  * set, so contention is reduced by the reduced chance of two addresses hashing
  * to the same set at the same time.
  * 
@@ -27,53 +26,79 @@ import java.util.SortedSet;
  */
 class AddressLocker
 {
-    private final List<Set<Long>> listOfSetsOfAddress;
+    /** A list of 37 sets of locked addresses. */
+    private final List<Set<Long>> lockedAddressSets;
     
+    /**
+     * Create the address locker. There is one address locker per pager.
+     */
     public AddressLocker()
     {
-        List<Set<Long>> listOfSetsOfAddressess = new ArrayList<Set<Long>>(37);
+        List<Set<Long>> lockedAddressSets = new ArrayList<Set<Long>>(37);
         for (int i = 0; i < 37; i++)
         {
-            listOfSetsOfAddressess.add(new HashSet<Long>());
+            lockedAddressSets.add(new HashSet<Long>());
         }
-        this.listOfSetsOfAddress = listOfSetsOfAddressess;
-    }
-    
-    public void lock(SortedSet<Long> setOfAddresses, Long address)
-    {
-        Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
-        synchronized (setOfLockedAddresses)
-        {
-            assert ! setOfLockedAddresses.contains(address);
-            setOfLockedAddresses.add(address);
-        }
-        setOfAddresses.add(address);
+        this.lockedAddressSets = lockedAddressSets;
     }
 
-    public void unlock(SortedSet<Long> setOfAddresses)
+    /**
+     * Lock the given address, adding it to a set of locked addresses, so that a
+     * call to the <code>bide</code> method will block until the the address is
+     * unlocked using the <code>unlock</code> method.
+     * 
+     * @param address
+     *            The address to lock.
+     */
+    public void lock(Long address)
     {
-        for (Long address : setOfAddresses)
+        Set<Long> lockedAddresses = lockedAddressSets.get(address.hashCode() % 37);
+        synchronized (lockedAddresses)
         {
-            Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
-            synchronized (setOfLockedAddresses)
+            assert ! lockedAddresses.contains(address);
+            lockedAddresses.add(address);
+        }
+    }
+
+    /**
+     * Unlock all the addresses in the given set of addresses, removing them
+     * from this set of locked addresses, and notifying all threads waiting for
+     * the address in the <code>bide</code> method.
+     * 
+     * @param addresses
+     *            The set of addresses to unlock.
+     */
+    public void unlock(Set<Long> addresses)
+    {
+        for (Long address : addresses)
+        {
+            Set<Long> lockedAddresses = lockedAddressSets.get(address.hashCode() % 37);
+            synchronized (lockedAddresses)
             {
-                assert setOfLockedAddresses.contains(address);
-                setOfLockedAddresses.remove(address);
-                setOfLockedAddresses.notifyAll();
+                assert lockedAddresses.contains(address);
+                lockedAddresses.remove(address);
+                lockedAddresses.notifyAll();
             }
         }
     }
 
+    /**
+     * If the given address is in the set of locked addresses, block the current
+     * thread waiting for the address to become unlocked.
+     * 
+     * @param address
+     *            The address to check.
+     */
     public void bide(Long address)
     {
-        Set<Long> setOfLockedAddresses = listOfSetsOfAddress.get(address.hashCode() % 37);
-        synchronized (setOfLockedAddresses)
+        Set<Long> lockedAddresses = lockedAddressSets.get(address.hashCode() % 37);
+        synchronized (lockedAddresses)
         {
-            while (setOfLockedAddresses.contains(address))
+            while (lockedAddresses.contains(address))
             {
                 try
                 {
-                    setOfLockedAddresses.wait();
+                    lockedAddresses.wait();
                 }
                 catch (InterruptedException e)
                 {

@@ -26,7 +26,8 @@ extends Operation
         // FIXME Someone else can allocate the address and even the block
         // now that it is free and the replay ruins it. 
         Pager pager = player.getPager();
-        pager.getAddressLocker().lock(player.getAddressSet(), address);
+        pager.getAddressLocker().lock(address);
+        player.getAddressSet().add(address);
         // FIXME Same problem with addresses as with temporary headers,
         // someone can reuse when we're scheduled to release.
         pager.freeTemporary(address, player.getDirtyPages());
