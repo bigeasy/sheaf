@@ -12,9 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 
@@ -147,7 +145,7 @@ implements Schema
      * A lock to ensure that only one mutator at a time is moving pages in
      * the interim page area.
      */
-    private final Lock expandLock;
+    private final Object expandMutex;
     
     public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages,
         long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryNodes)
@@ -167,7 +165,7 @@ implements Schema
         this.setOfFreeInterimPages = new FreeSet();
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
-        this.expandLock = new ReentrantLock();
+        this.expandMutex = new Object();
         this.listOfMoves = new MoveLatchList();
         this.setOfJournalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.setOfAddressPages = setOfAddressPages;
@@ -281,9 +279,9 @@ implements Schema
         return setOfFreeInterimPages;
     }
 
-    public Lock getExpandLock()
+    public Object getExpandMutex()
     {
-        return expandLock;
+        return expandMutex;
     }
     
     public ReadWriteLock getCompactLock()

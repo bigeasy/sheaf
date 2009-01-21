@@ -551,12 +551,10 @@ public final class Mutator
 
         // Only one thread is allowed to expand the user region at once.
 
-        // Note that we aren't so grabby with the expand lock during a user
+        // Note that we aren't so grabby with the expand mutex during a user
         // commit, only during a new address page creation.
 
-        pager.getExpandLock().lock();
-
-        try
+        synchronized (pager.getExpandMutex())
         {
             // We are going to create address pages from user pages, so check to
             // see that there are enough user pages. By enough user pages, I
@@ -578,10 +576,6 @@ public final class Mutator
 
                 addIterimMoveLatches(moveList, userMoveLatchHead, userFromInterimPagesToMove);
              }
-        }
-        finally
-        {
-            pager.getExpandLock().unlock();
         }
         
         // If we have moves to perform append them to the per page list
@@ -1030,8 +1024,7 @@ public final class Mutator
 
             // Grab the expand lock to prevent anyone else from ...
 
-            pager.getExpandLock().lock();
-            try
+            synchronized (pager.getExpandMutex())
             {
                 SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
                 
@@ -1042,10 +1035,6 @@ public final class Mutator
                 addIterimMoveLatches(moveLatchList, userMoves, userFromInterimPagesToMove);
 
                 asssignAllocations(commit);
-            }
-            finally
-            {
-                pager.getExpandLock().unlock();
             }
         }
         

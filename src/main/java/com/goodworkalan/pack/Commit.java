@@ -29,7 +29,7 @@ extends CompositeMoveRecorder
         this.userFromInterimPages = new TreeSet<Long>();
         this.addressFromUserPagesToMove = new TreeSet<Long>();
         this.mapOfAddressMirrors = new TreeMap<Long, Movable>();
-        add(unassignedAllocationPages = new SetRecorder());
+        add(unassignedInterimBlockPages = new SetRecorder());
         add(pageRecorder);
         add(mapOfVaccums = new MapRecorder());
         add(mapOfEmpties = new MapRecorder());
