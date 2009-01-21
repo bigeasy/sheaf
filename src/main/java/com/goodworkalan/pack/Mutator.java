@@ -555,7 +555,7 @@ public final class Mutator
         if (userFromInterimPagesToMove.size() != 0)
         {
             buildInterimMoveLatchList(userFromInterimPagesToMove, iterimMoveLatches);
-            pager.getMoveList().add(iterimMoveLatches);
+            pager.getMoveLatchList().add(iterimMoveLatches);
             moveList.skip(iterimMoveLatches);
         }
     }
@@ -1130,7 +1130,7 @@ public final class Mutator
             });
 
             // Append the user page moves to the per pager list of move latches.
-            pager.getMoveList().add(userMoveLatches);
+            pager.getMoveLatchList().add(userMoveLatches);
 
             // Skip the user move latches we just added.
             moveLatchList.skip(userMoveLatches);
@@ -1232,7 +1232,7 @@ public final class Mutator
                 journal.write(new NextOperation(journalStart));
     
                 // Create a next pointer to point at the start of operations.
-                Pointer header = pager.getJournalHeaderSet().allocate();
+                Pointer header = pager.getJournalHeaders().allocate();
                 header.getByteBuffer().putLong(beforeVacuum);
                 dirtyPages.flush(header);
                 

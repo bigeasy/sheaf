@@ -106,6 +106,6 @@ final class Player
 
         dirtyPages.flush(header);
 
-        pager.getJournalHeaderSet().free(header);
+        pager.getJournalHeaders().free(header);
     }
 }

@@ -122,7 +122,7 @@ public class Pack
     public Mutator mutate()
     {
         final PageRecorder pageRecorder = new PageRecorder();
-        final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, pager.getMoveList());
+        final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, pager.getMoveLatchList());
         return listOfMoves.mutate(new Guarded<Mutator>()
         {
             public Mutator run(List<MoveLatch> listOfMoveLatches)

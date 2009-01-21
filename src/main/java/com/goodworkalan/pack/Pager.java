@@ -40,10 +40,10 @@ implements Schema
     private final Header header;
 
     /**
-     * A map of URIs to addresses of static pages sized at the creation
-     * of the <code>Pack</code> in the <code>Schema</code>.
+     * A map of URIs to addresses of static pages sized at the creation of the
+     * <code>Pack</code> in the <code>Schema</code>.
      */
-    private final Map<URI, Long> mapOfStaticPages;
+    private final Map<URI, Long> staticPages;
 
     /**
      * This size of a page.
@@ -54,25 +54,25 @@ implements Schema
      * Round block allocations to this alignment.
      */
     private final int alignment;
-    
-    /**
-     * The set of journal header positions stored in a {@link
-     * PositionSet} that tracks the availability of a fixed number of
-     * header position reference positions and  blocks a thread that
-     * requests a position when the set is empty.
-     */
-    private final PositionSet setOfJournalHeaders;
 
     /**
-     * The map of weak references to raw pages keyed on the file
-     * position of the raw page.
+     * The set of journal header positions stored in a {@link PositionSet} that
+     * tracks the availability of a fixed number of header position reference
+     * positions and blocks a thread that requests a position when the set is
+     * empty.
      */
-    private final Map<Long, PageReference> mapOfPagesByPosition;
+    private final PositionSet journalHeaders;
 
     /**
-     * The queue of weak references to raw pages keyed on the file
-     * position of the raw page that is used to remove mappings from the
-     * map of pages by position when the raw pages are collected.
+     * The map of weak references to raw pages keyed on the file position of the
+     * raw page.
+     */
+    private final Map<Long, PageReference> pageByPosition;
+
+    /**
+     * The queue of weak references to raw pages keyed on the file position of
+     * the raw page that is used to remove mappings from the map of pages by
+     * position when the raw pages are collected.
      */
     private final ReferenceQueue<RawPage> queue;
 
@@ -85,12 +85,12 @@ implements Schema
      * The boundary between user data pages and interim data pages.
      */
     private final Boundary interimBoundary;
-        
+
     /**
-     * A reference to linked list of move nodes used as a prototype for
-     * the per mutator move list reference.
+     * A reference to linked list of move nodes used as a prototype for the per
+     * mutator move list reference.
      */
-    private final MoveLatchList listOfMoves;
+    private final MoveLatchList moveLatchList;
 
     private final SortedSet<Long> setOfAddressPages;
     
@@ -98,7 +98,7 @@ implements Schema
     
     private final AddressLocker addressLocker;
     
-    public final BySizeTable pagesBySize_;
+    private final BySizeTable freePageBySize;
     
     private final Map<Long, ByteBuffer> mapOfTemporaryNodes;
     
@@ -128,21 +128,21 @@ implements Schema
      * Remember: Only one mutator can move pages in the interim area at a
      * time.
      */
-    private final FreeSet setOfFreeInterimPages;
-    
+    private final FreeSet freeInterimPages;
+
     /**
      * A read/write lock that coordinates rewind of area boundaries and the
-     * wilderness. 
+     * wilderness.
      * <p>
-     * The compact lock locks the entire file exclusively and block any
-     * other moves or commits. Ordinary commits can run in parallel so long
-     * as blocks are moved forward and not backward in in the file.
+     * The compact lock locks the entire file exclusively and block any other
+     * moves or commits. Ordinary commits can run in parallel so long as blocks
+     * are moved forward and not backward in in the file.
      */
     private final ReadWriteLock compactLock;
-    
+
     /**
-     * A lock to ensure that only one mutator at a time is moving pages in
-     * the interim page area.
+     * A mutex to ensure that only one mutator at a time is moving pages in the
+     * interim page area.
      */
     private final Object expandMutex;
     
@@ -157,16 +157,16 @@ implements Schema
         this.pageSize = header.getPageSize();
         this.userBoundary = new Boundary(pageSize, dataBoundary);
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
-        this.mapOfPagesByPosition = new HashMap<Long, PageReference>();
-        this.pagesBySize_ = new BySizeTable(pageSize, alignment);
-        this.mapOfStaticPages = mapOfStaticPages;
+        this.pageByPosition = new HashMap<Long, PageReference>();
+        this.freePageBySize = new BySizeTable(pageSize, alignment);
+        this.staticPages = mapOfStaticPages;
         this.setOfFreeUserPages = new FreeSet();
-        this.setOfFreeInterimPages = new FreeSet();
+        this.freeInterimPages = new FreeSet();
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
         this.expandMutex = new Object();
-        this.listOfMoves = new MoveLatchList();
-        this.setOfJournalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
+        this.moveLatchList = new MoveLatchList();
+        this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.setOfAddressPages = setOfAddressPages;
         this.setOfReturningAddressPages = new HashSet<Long>();
         this.mapOfTemporaryNodes = mapOfTemporaryNodes;
@@ -200,24 +200,42 @@ implements Schema
     }
 
     /**
-     * Return the 
-     * @return
+     * Return the file channel open on the underlying file.
+     * 
+     * @return The open file channel.
      */
     public FileChannel getFileChannel()
     {
         return fileChannel;
     }
 
+    /**
+     * Return the disk object used to read and write to the file channel. The
+     * disk is an class that can be overridden to generate I/O errors during
+     * testing.
+     * 
+     * @return The disk.
+     */
     public Disk getDisk()
     {
         return disk;
     }
 
+    /**
+     * Get the size of all underlying pages managed by this pager.
+     * 
+     * @return The page size.
+     */
     public int getPageSize()
     {
         return pageSize;
     }
-
+    
+    /**
+     * Return the alignment to which all block allocations are rounded.
+     * 
+     * @return The block alignment.
+     */
     public int getAlignment()
     {
         return alignment;
@@ -225,17 +243,17 @@ implements Schema
     
     public long getStaticPageAddress(URI uri)
     {
-        return mapOfStaticPages.get(uri);
+        return staticPages.get(uri);
     }
     
     public boolean isStaticPageAddress(long address)
     {
-        return mapOfStaticPages.containsValue(address);
+        return staticPages.containsValue(address);
     }
 
-    public PositionSet getJournalHeaderSet()
+    public PositionSet getJournalHeaders()
     {
-        return setOfJournalHeaders;
+        return journalHeaders;
     }
 
     public long getFirstAddressPageStart()
@@ -253,9 +271,9 @@ implements Schema
         return interimBoundary;
     }
 
-    public MoveLatchList getMoveList()
+    public MoveLatchList getMoveLatchList()
     {
-        return listOfMoves;
+        return moveLatchList;
     }
     
     public AddressLocker getAddressLocker()
@@ -265,7 +283,7 @@ implements Schema
     
     public BySizeTable getFreePageBySize()
     {
-        return pagesBySize_;
+        return freePageBySize;
     }
     
     public FreeSet getFreeUserPages()
@@ -275,7 +293,7 @@ implements Schema
     
     public FreeSet getFreeInterimPages()
     {
-        return setOfFreeInterimPages;
+        return freeInterimPages;
     }
 
     public Object getExpandMutex()
@@ -293,7 +311,7 @@ implements Schema
         Positionable positionable = null;
         while ((positionable = (Positionable) queue.poll()) != null)
         {
-            mapOfPagesByPosition.remove(positionable.getPosition());
+            pageByPosition.remove(positionable.getPosition());
         }
     }
 
@@ -347,13 +365,13 @@ implements Schema
     private void addPageByPosition(RawPage page)
     {
         PageReference intended = new PageReference(page, queue);
-        PageReference existing = mapOfPagesByPosition.get(intended.getPosition());
+        PageReference existing = pageByPosition.get(intended.getPosition());
         if (existing != null)
         {
             existing.enqueue();
             collect();
         }
-        mapOfPagesByPosition.put(intended.getPosition(), intended);
+        pageByPosition.put(intended.getPosition(), intended);
     }
     
     /**
@@ -397,7 +415,7 @@ implements Schema
     
         page.create(rawPage, dirtyPages);
     
-        synchronized (mapOfPagesByPosition)
+        synchronized (pageByPosition)
         {
             addPageByPosition(rawPage);
         }
@@ -434,7 +452,7 @@ implements Schema
     {
         RawPage page = null;
         Long boxPosition = new Long(position);
-        PageReference chunkReference = mapOfPagesByPosition.get(boxPosition);
+        PageReference chunkReference = pageByPosition.get(boxPosition);
         if (chunkReference != null)
         {
             page = chunkReference.get();
@@ -449,7 +467,7 @@ implements Schema
         synchronized (rawPage)
         {
             RawPage found = null;
-            synchronized (mapOfPagesByPosition)
+            synchronized (pageByPosition)
             {
                 found = getPageByPosition(position);
                 if (found == null)
@@ -485,7 +503,7 @@ implements Schema
         position =  position / pageSize * pageSize;
         RawPage rawPage = new RawPage(this, position);
 
-        synchronized (mapOfPagesByPosition)
+        synchronized (pageByPosition)
         {
             RawPage existing = removePageByPosition(position);
             if (existing != null)
@@ -546,7 +564,7 @@ implements Schema
 
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveList());
+                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -691,7 +709,7 @@ implements Schema
                 }
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveList());
+                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -810,7 +828,7 @@ implements Schema
 
     private RawPage removePageByPosition(long position)
     {
-        PageReference existing = mapOfPagesByPosition.get(new Long(position));
+        PageReference existing = pageByPosition.get(new Long(position));
         RawPage p = null;
         if (existing != null)
         {
@@ -823,7 +841,7 @@ implements Schema
 
     public void relocate(long from, long to)
     {
-        synchronized (mapOfPagesByPosition)
+        synchronized (pageByPosition)
         {
             RawPage position = removePageByPosition(from);
             if (position != null)
