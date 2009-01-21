@@ -1,19 +1,19 @@
 package com.goodworkalan.pack;
 
-public final class Danger
+public final class PackException
 extends RuntimeException
 {
     private static final long serialVersionUID = 20070821L;
     
     private final int code;
 
-    public Danger(int code)
+    public PackException(int code)
     {
         super(Integer.toString(code));
         this.code = code;
     }
 
-    public Danger(int code, Throwable cause)
+    public PackException(int code, Throwable cause)
     {
         super(Integer.toString(code), cause);
         this.code = code;

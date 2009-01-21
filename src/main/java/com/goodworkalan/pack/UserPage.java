@@ -19,7 +19,7 @@ final class UserPage extends BlockPage
     {
         if ((count & Pack.COUNT_MASK) == 0)
         {
-            throw new Danger(Pack.ERROR_CORRUPT);
+            throw new PackException(Pack.ERROR_CORRUPT);
         }
         return count & ~Pack.COUNT_MASK;
     }

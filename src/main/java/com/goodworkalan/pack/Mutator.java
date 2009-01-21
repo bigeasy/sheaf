@@ -186,7 +186,7 @@ public final class Mutator
         long position = addresses.dereference(address);
         if (position == 0L || position == Long.MAX_VALUE)
         {
-            throw new Danger(Pack.ERROR_FREED_FREE_ADDRESS);
+            throw new PackException(Pack.ERROR_FREED_FREE_ADDRESS);
         }
         
         for (MoveLatch latch: listOfMoveLatches)
@@ -294,7 +294,7 @@ public final class Mutator
                         long actual = addresses.dereference(address);
                         if (actual == 0L || actual == Long.MAX_VALUE)
                         {
-                            throw new Danger(Pack.ERROR_READ_FREE_ADDRESS);
+                            throw new PackException(Pack.ERROR_READ_FREE_ADDRESS);
                         }
 
                         if (actual != lastPosition)
@@ -328,7 +328,7 @@ public final class Mutator
     {
         if (pager.isStaticPageAddress(address))
         {
-            throw new Danger(Pack.ERROR_FREED_STATIC_ADDRESS);
+            throw new PackException(Pack.ERROR_FREED_STATIC_ADDRESS);
         }
         listOfMoves.mutate(new Guarded()
         {

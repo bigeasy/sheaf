@@ -251,7 +251,7 @@ public class PackTestCase
         {
             new Opener().open(file);
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
             return;
@@ -266,7 +266,7 @@ public class PackTestCase
         {
             new Creator().create(file);
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             assertEquals(Pack.ERROR_FILE_NOT_FOUND, e.getCode());
             return;
@@ -293,7 +293,7 @@ public class PackTestCase
         {
             new Opener().open(file);
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             assertEquals(Pack.ERROR_SIGNATURE, e.getCode());
             return;
@@ -550,7 +550,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -583,7 +583,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -615,7 +615,7 @@ public class PackTestCase
         {
             mutator.read(address, ByteBuffer.allocateDirect(64));
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             thrown = true;
             assertEquals(Pack.ERROR_READ_FREE_ADDRESS, e.getCode());
@@ -749,7 +749,7 @@ public class PackTestCase
         {
             pack.close();
         }
-        catch (Danger e)
+        catch (PackException e)
         {
             thrown = true;
         }

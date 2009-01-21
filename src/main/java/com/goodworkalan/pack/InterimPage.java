@@ -14,7 +14,7 @@ final class InterimPage extends BlockPage
     {
         if ((count & Pack.COUNT_MASK) != 0)
         {
-            throw new Danger(Pack.ERROR_CORRUPT);
+            throw new PackException(Pack.ERROR_CORRUPT);
         }
         return count;
     }
@@ -148,7 +148,7 @@ final class InterimPage extends BlockPage
                     long actual = addresses.dereference(address);
                     if (actual == 0L || actual == Long.MAX_VALUE)
                     {
-                        throw new Danger(Pack.ERROR_READ_FREE_ADDRESS);
+                        throw new PackException(Pack.ERROR_READ_FREE_ADDRESS);
                     }
                     
                     if (actual != lastPosition)

@@ -84,7 +84,7 @@ public final class Creator
         }
         catch (FileNotFoundException e)
         {
-            throw new Danger(Pack.ERROR_FILE_NOT_FOUND, e);
+            throw new PackException(Pack.ERROR_FILE_NOT_FOUND, e);
         }
         
         Offsets offsets = new Offsets(pageSize, internalJournalCount, getStaticPagesMapSize());
@@ -95,7 +95,7 @@ public final class Creator
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
         
         // Initialize the header.
@@ -118,7 +118,7 @@ public final class Creator
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
 
         // Create a buffer of journal file positions. Initialize each page
@@ -139,7 +139,7 @@ public final class Creator
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
 
         // To create the map of static pages, we're going to allocate a
@@ -209,7 +209,7 @@ public final class Creator
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
         
         try
@@ -218,7 +218,7 @@ public final class Creator
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
 
         pack.close();

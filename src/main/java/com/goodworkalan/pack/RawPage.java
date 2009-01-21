@@ -117,7 +117,7 @@ final class RawPage extends Regional
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_READ, e);
+            throw new PackException(Pack.ERROR_IO_READ, e);
         }
         bytes.clear();
 

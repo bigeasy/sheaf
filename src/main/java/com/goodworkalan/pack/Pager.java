@@ -319,7 +319,7 @@ implements Schema
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_SIZE, e);
+                throw new PackException(Pack.ERROR_IO_SIZE, e);
             }
 
             try
@@ -328,19 +328,19 @@ implements Schema
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_WRITE, e);
+                throw new PackException(Pack.ERROR_IO_WRITE, e);
             }
 
             try
             {
                 if (disk.size(fileChannel) % 1024 != 0)
                 {
-                    throw new Danger(Pack.ERROR_FILE_SIZE);
+                    throw new PackException(Pack.ERROR_FILE_SIZE);
                 }
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_SIZE, e);
+                throw new PackException(Pack.ERROR_IO_SIZE, e);
             }
         }
 
@@ -910,7 +910,7 @@ implements Schema
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_WRITE, e);
+                throw new PackException(Pack.ERROR_IO_WRITE, e);
             }
             
             try
@@ -919,7 +919,7 @@ implements Schema
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_TRUNCATE, e);
+                throw new PackException(Pack.ERROR_IO_TRUNCATE, e);
             }
             
             header.setDataBoundary(getUserBoundary().getPosition());
@@ -933,7 +933,7 @@ implements Schema
             }
             catch (IOException e)
             {
-                throw new Danger(Pack.ERROR_IO_CLOSE, e);
+                throw new PackException(Pack.ERROR_IO_CLOSE, e);
             }
         }
         finally

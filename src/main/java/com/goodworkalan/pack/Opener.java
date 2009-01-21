@@ -62,7 +62,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_READ, e);
+            throw new PackException(Pack.ERROR_IO_READ, e);
         }
         bytes.flip();
         int count = bytes.getInt();
@@ -77,7 +77,7 @@ public final class Opener
             long address = bytes.getLong();
             if (badAddress(header, address))
             {
-                throw new Danger(Pack.ERROR_IO_STATIC_PAGES);
+                throw new PackException(Pack.ERROR_IO_STATIC_PAGES);
             }
             try
             {
@@ -85,7 +85,7 @@ public final class Opener
             }
             catch (URISyntaxException e)
             {
-                throw new Danger(Pack.ERROR_IO_STATIC_PAGES, e);
+                throw new PackException(Pack.ERROR_IO_STATIC_PAGES, e);
             }
         }
         return mapOfStaticPages;
@@ -101,7 +101,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-           throw new Danger(Pack.ERROR_IO_READ, e);
+           throw new PackException(Pack.ERROR_IO_READ, e);
         }
         return new Header(bytes);
     }
@@ -117,7 +117,7 @@ public final class Opener
         }
         catch (FileNotFoundException e)
         {
-            throw new Danger(Pack.ERROR_FILE_NOT_FOUND, e);
+            throw new PackException(Pack.ERROR_FILE_NOT_FOUND, e);
         }
 
         // Read the header and obtain the basic file properties.
@@ -126,13 +126,13 @@ public final class Opener
 
         if (header.getSignature() != Pack.SIGNATURE)
         {
-            throw new Danger(Pack.ERROR_SIGNATURE);
+            throw new PackException(Pack.ERROR_SIGNATURE);
         }
         
         int shutdown = header.getShutdown();
         if (!(shutdown == Pack.HARD_SHUTDOWN || shutdown == Pack.SOFT_SHUTDOWN))
         {
-            throw new Danger(Pack.ERROR_SHUTDOWN);
+            throw new PackException(Pack.ERROR_SHUTDOWN);
         }
         
         if (shutdown == Pack.HARD_SHUTDOWN)
@@ -154,7 +154,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_SIZE, e);
+            throw new PackException(Pack.ERROR_IO_SIZE, e);
         }
         
         ByteBuffer reopen = ByteBuffer.allocateDirect(reopenSize);
@@ -164,7 +164,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_READ, e);
+            throw new PackException(Pack.ERROR_IO_READ, e);
         }
         reopen.flip();
         
@@ -199,7 +199,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_TRUNCATE, e);
+            throw new PackException(Pack.ERROR_IO_TRUNCATE, e);
         }
         
         long openBoundary = header.getOpenBoundary();
@@ -212,7 +212,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_WRITE, e);
+            throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
         
         try
@@ -221,7 +221,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_FORCE, e);
+            throw new PackException(Pack.ERROR_IO_FORCE, e);
         }
 
         Pack pack = new Pack(pager);
@@ -287,7 +287,7 @@ public final class Opener
         RawPage rawPage = new RawPage(pager, position);
         if (isBlockPage(rawPage, recovery))
         {
-            throw new Danger(Pack.ERROR_CORRUPT);
+            throw new PackException(Pack.ERROR_CORRUPT);
         }
         
         if (new AddressPage().verifyChecksum(rawPage, recovery))
@@ -379,7 +379,7 @@ public final class Opener
     {
         if (header.getInternalJournalCount() < 0)
         {
-            throw new Danger(Pack.ERROR_HEADER_CORRUPT);
+            throw new PackException(Pack.ERROR_HEADER_CORRUPT);
         }
         ByteBuffer journals = ByteBuffer.allocate(header.getInternalJournalCount() * Pack.POSITION_SIZE);
         try
@@ -388,7 +388,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_READ, e);
+            throw new PackException(Pack.ERROR_IO_READ, e);
         }
         journals.flip();
         List<Long> listOfUserJournals = new ArrayList<Long>();
@@ -412,7 +412,7 @@ public final class Opener
         }
         catch (IOException e)
         {
-            throw new Danger(Pack.ERROR_IO_SIZE, e);
+            throw new PackException(Pack.ERROR_IO_SIZE, e);
         }
 
         Offsets offsets = new Offsets(header.getPageSize(), header.getInternalJournalCount(), header.getStaticPageSize());

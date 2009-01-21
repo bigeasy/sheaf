@@ -274,7 +274,7 @@ extends RelocatablePage
                 int size = bytes.getInt();
                 if (bytes.getLong() != address)
                 {
-                    throw new Danger(Pack.ERROR_BLOCK_PAGE_CORRUPT);
+                    throw new PackException(Pack.ERROR_BLOCK_PAGE_CORRUPT);
                 }
                 bytes.limit(offset + size);
                 getRawPage().invalidate(bytes.position(), bytes.remaining());
