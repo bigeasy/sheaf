@@ -280,7 +280,7 @@ public final class Mutator
         tryRead(address, bytes);
     }
 
-    public ByteBuffer tryRead(final long address, final ByteBuffer bytes)
+    private ByteBuffer tryRead(final long address, final ByteBuffer bytes)
     {
         return listOfMoves.mutate(new Guarded<ByteBuffer>()
         {
@@ -762,7 +762,7 @@ public final class Mutator
      *
      * @param count The number of address pages to create.
      */
-    public SortedSet<Long> newAddressPages(int count)
+    SortedSet<Long> newAddressPages(int count)
     {
         // Obtain shared lock on the compact lock, preventing pack file
         // vacuum for the duration of the address page allocation.

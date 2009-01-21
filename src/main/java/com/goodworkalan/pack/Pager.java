@@ -15,10 +15,9 @@ import java.util.SortedSet;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-
 /**
- * A container for outstanding <code>Page</code> objects that maps
- * addresses to soft referenced * <code>Page</code> objects.
+ * A container for outstanding <code>Page</code> objects that maps addresses to
+ * soft referenced <code>Page</code> objects.
  */
 final class Pager
 implements Schema
