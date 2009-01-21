@@ -3,19 +3,19 @@ package com.goodworkalan.pack;
 import java.util.zip.Checksum;
 
 /**
- * Derived clases implement the address, block, journal formats of an underlying
- * page in a Pack file. The <code>Page</code> interface is a specialized
- * application of an underlying page. It is the strategy participant in the
- * strategy design pattern. Each page has an underlying {@link RawPage}.
+ * Derived classes implement the address, block, journal formats of an
+ * underlying page in a Pack file. The <code>Page</code> interface is a
+ * specialized application of an underlying page. It is the strategy participant
+ * in the strategy design pattern. Each page has an underlying {@link RawPage}.
  * <p>
  * <code>RawPage</code> contains the basic position and byte buffer page
  * attributes and maintains a set of invalid regions. A <code>Page</code>
  * implementation interprets the raw page as a specific page type.
- * <h4>Frequent Instanciation and Two-Step Initialization</h4>
+ * <h4>Frequent Instantiation and Two-Step Initialization</h4>
  * <p>
  * When we request a page from the the pager, we give it an implementation of
  * <code>Page</code> that represents the type request. If the raw page exists in
- * the pager and it is assocated with the type of page requested, that page is
+ * the pager and it is associated with the type of page requested, that page is
  * returned. If it is not in the pager, or if the page associated with the raw
  * page is a super class of the page requested, the raw page is associated with
  * the <code>Page</code> implementation given.

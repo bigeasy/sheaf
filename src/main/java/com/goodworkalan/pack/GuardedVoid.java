@@ -3,8 +3,8 @@ package com.goodworkalan.pack;
 import java.util.List;
 
 /**
- * Perform a update of the pages in a Pack file that is guarded against page
- * movement. Guarded is passed to a <code>Mutator</code> object's
+ * Implementation of a modification to the pages in a Pack file that is guarded
+ * against page movement. Guarded is passed to a <code>Mutator</code> object's
  * <code>MoveList</code>. The <code>MoveList</code> will call the {@link #run()}
  * method after recording all the moves that effect the positions recorded by
  * the <code>MoveRecoder</code> assigned to the <code>MoveList</code>. The
@@ -18,10 +18,11 @@ import java.util.List;
  * moves ...
  * 
  * FIXME Why the most recent list? Why not every move?
+ * TODO Don't like the name.
  * 
  * @author Alan Gutierrez
  */
-class Guarded
+class GuardedVoid
 {
     public void run(List<MoveLatch> userMoveLatches)
     {

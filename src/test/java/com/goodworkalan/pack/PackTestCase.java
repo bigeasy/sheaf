@@ -827,7 +827,7 @@ public class PackTestCase
     @Test
     public void guarded()
     {
-        new Guarded().run((List<MoveLatch>) null);
+        new GuardedVoid().run((List<MoveLatch>) null);
         new GuardedReturnable<Object>().run((List<MoveLatch>) null);
     }
 

@@ -15,7 +15,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * sub linked list of moves, so that a thread can skip the latches that
  * it adds itself.
  * <h2>Position</h2>
- * The list of user page moves is passed to the {@link Guarded} and
+ * The list of user page moves is passed to the {@link GuardedVoid} and
  * {@link GuardedReturnable} so that {@link Mutator#free(long)} and
  * {@link Mutator#write(long, java.nio.ByteBuffer)} can determine if
  * they are freeing or writing to a page that has been moved. This is a
@@ -157,7 +157,7 @@ final class MoveList
         }
     }
     
-    public void mutate(Guarded guarded)
+    public void mutate(GuardedVoid guarded)
     {
         wasLocked = false;
         skipping = false;

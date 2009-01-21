@@ -94,7 +94,7 @@ public final class Mutator
         
         final Temporary temporary = pager.getTemporary(address);
 
-        listOfMoves.mutate(new Guarded()
+        listOfMoves.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoves)
             {
@@ -204,7 +204,7 @@ public final class Mutator
     // FIXME Write at offset.
     public void write(final long address, final ByteBuffer src)
     {
-        listOfMoves.mutate(new Guarded()
+        listOfMoves.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -330,7 +330,7 @@ public final class Mutator
         {
             throw new PackException(Pack.ERROR_FREED_STATIC_ADDRESS);
         }
-        listOfMoves.mutate(new Guarded()
+        listOfMoves.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -425,7 +425,7 @@ public final class Mutator
 
         try
         {
-            listOfMoves.mutate(new Guarded()
+            listOfMoves.mutate(new GuardedVoid()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -458,7 +458,7 @@ public final class Mutator
         // If any of the pages we currently referenced are moving
         // those moves will be complete when this call returns.
         
-        listOfMoves.mutate(new Guarded()
+        listOfMoves.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> userMoveLatches)
             {
@@ -553,7 +553,7 @@ public final class Mutator
         
         if (userMoveLatchHead.getNext() != null)
         {
-            moveList.mutate(new Guarded()
+            moveList.mutate(new GuardedVoid()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -633,7 +633,7 @@ public final class Mutator
         // if it is a block page we've just created the page does not
         // have to be moved.
 
-        moveList.mutate(new Guarded()
+        moveList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -951,7 +951,7 @@ public final class Mutator
         if (commit.getUnassignedSet().size() != 0)
         {
             // First we mate the interim data pages with 
-            moveList.mutate(new Guarded()
+            moveList.mutate(new GuardedVoid()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
@@ -997,7 +997,7 @@ public final class Mutator
         
         if (userMoves.getNext() != null)
         {
-            moveList.mutate(new Guarded()
+            moveList.mutate(new GuardedVoid()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -1011,7 +1011,7 @@ public final class Mutator
         
         if (commit.isAddressExpansion())
         {
-            moveList.mutate(new Guarded()
+            moveList.mutate(new GuardedVoid()
             {
                 @Override
                 public void run(List<MoveLatch> listOfMoveLatches)
@@ -1024,7 +1024,7 @@ public final class Mutator
             moveList.skip(addressMoves);
         }
 
-        moveList.mutate(new Guarded()
+        moveList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
