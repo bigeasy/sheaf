@@ -3,34 +3,31 @@ package com.goodworkalan.pack;
 import java.nio.ByteBuffer;
 import java.util.zip.Checksum;
 
-
 /**
- * Interprets a {@link RawPage} as a position as an array of addresses that
- * reference specific positions in the data region of the file. A user
- * address references a position in an address page that contains a long
- * value indicating the position of the user data in the data region of the
- * file.
+ * Interprets a {@link RawPage} as an array of file positions that reference a
+ * file positions in the user region of the file. A user address references a
+ * position in an address page that contains a long value indicating the
+ * position of the user data in the data region of the file.
  * <p>
- * The address itself is a long value indicating the actual position of the
- * user data file position long value in the address page. It is an
- * indirection. To find the position of a user data block, we read the long
- * value at the position indicated by the address to find the page that
- * contains the user block. We then scan the data page for the block that
- * contains the address in its address back-reference.
+ * The address itself is a long value indicating the actual position of the user
+ * data file position long value in the address page. It is an indirection. To
+ * find the position of a user data block, we read the long value at the
+ * position indicated by the address to find the page that contains the user
+ * block. We then scan the data page for the block that contains the address in
+ * its address back-reference.
  * <p>
- * Unused addresses are indicated by a zero data position value. If an
- * address is in use, there will be a non-zero position value in the slot.
+ * Unused addresses are indicated by a zero data position value. If an address
+ * is in use, there will be a non-zero position value in the slot.
  * <p>
- * When we allocate a new block, because of isolation, we cannot write out
- * the address of the new data block until we are playing back a flushed
- * journal. Thus, during the mutation phase of a mutation, we need to
- * reserve a free address. Reservations are tracked in an interim
- * reservation page defined by {@link Pack.ReservationPage}. The reservation
- * page says which of the free addresses are reserved.
+ * When we allocate a new block, because of isolation, we cannot write out the
+ * address of the new data block until we are playing back a flushed journal.
+ * Thus, during the mutation phase of a mutation, we need to reserve a free
+ * address. Reservations are tracked in an interim reservation page defined by
+ * {@link Pack.ReservationPage}. The reservation page says which of the free
+ * addresses are reserved.
  * <p>
  * The associate reservation page is allocated as needed. If there is no
- * associated reservation page, then none of the free addresses are
- * reserved.
+ * associated reservation page, then none of the free addresses are reserved.
  */
 final class AddressPage
 implements Page

@@ -114,7 +114,8 @@ public class Pack
     }
 
     /**
-     * Create an object that can inspect and alter the contents of this pack.
+     * Create a <code>Mutator</code> to inspect and alter the contents of this
+     * pack.
      * 
      * @return A new {@link Mutator}.
      */

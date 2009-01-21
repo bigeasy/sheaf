@@ -174,7 +174,7 @@ implements Schema
         this.setOfReturningAddressPages = new HashSet<Long>();
         this.mapOfTemporaryNodes = mapOfTemporaryNodes;
         this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryNodes);
-        this.addressLocker = new AddressPageAddressLocker();
+        this.addressLocker = new AddressLocker();
     }
     
     private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryNodes)
