@@ -452,8 +452,34 @@ public final class Mutator
                           - pager.getUserBoundary().getPosition();
         return (int) (userPageSize / pager.getPageSize());
     }
-    
-    private void expandUser(MoveLatchList listOfMoves, Commit commit, int count, SortedSet<Long> setOfInUse)
+
+    /**
+     * Map the pages in the set of pages to a soon to be moved interim that is
+     * immediately after the data to interim page boundary. Each page in the set
+     * will be mapped to a page immediately after the data to interim boundary,
+     * incrementing the boundary as the page is allocated.
+     * <p>
+     * If the interim page is in the list of free interim pages, remove it. We
+     * will not lock it. No other mutator will reference a free page because no
+     * other mutator is moving pages and no other mutator will be using it for
+     * work space.
+     * <p>
+     * If the page is not in the list of free interim pages, we do have to lock
+     * it.
+     * 
+     * @param moveLatchList
+     *            The per pager list of move latches associated with a move
+     *            recorder specific to this commit.
+     * @param commit
+     *            The state of this commit.
+     * @param count
+     *            The number of pages by which to expand the move the user to
+     *            interim boundary into the interim region.
+     * @param userFromInterimPagesToMove
+     *            A set of the interim pages currently in user whose contents
+     *            needs to be moved to a new interim page.
+     */
+    private void expandUser(MoveLatchList moveLatchList, Commit commit, int count, SortedSet<Long> userFromInterimPagesToMove)
     {
         // This invocation is to flush the move list for the current mutator.
         // You may think that this is pointless, but it's not. It will ensure
@@ -463,7 +489,7 @@ public final class Mutator
         // If any of the pages we currently referenced are moving those moves
         // will be complete when this call returns.
         
-        listOfMoves.mutate(new GuardedVoid()
+        moveLatchList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> userMoveLatches)
             {
@@ -473,7 +499,38 @@ public final class Mutator
         // Gather the interim pages that will become data pages, moving the data
         // to interim boundary.
         
-        gatherPages(count, setOfInUse, commit.getUserFromInterimPages());
+        for (int i = 0; i < count; i++)
+        {
+            // Use the page that is at the data to interim boundary.
+            
+            long userFromInterimPage = pager.getInterimBoundary().getPosition();
+            
+            // If it is not in the set of free pages it needs to be moved,
+            // so we add it to the set of in use.
+            
+            if (!pager.getFreeInterimPages().reserve(userFromInterimPage))
+            {
+                userFromInterimPagesToMove.add(userFromInterimPage);
+            }
+
+            // Synapse: What if this page is already in our set? That's
+            // fine because we'll first check to see if the page exists
+            // as a positive value, then we'll adjust the negative value.
+            
+            // However, I'm pretty sure that this is never the case, so
+            // I'm going to put an assertion here and think about it.
+            
+            if (pageRecorder.getUserPageSet().contains(userFromInterimPage))
+            {
+                throw new IllegalStateException();
+            }
+
+            commit.getUserFromInterimPages().add(userFromInterimPage);
+            
+            // Increment the data to interim boundary.
+
+            pager.getInterimBoundary().increment();
+        }
     }
 
     /**
@@ -703,71 +760,6 @@ public final class Mutator
         finally
         {
             pager.getCompactLock().readLock().unlock();
-        }
-    }
-
-    /**
-     * Map the pages in the set of pages to a soon to be moved interim that is
-     * immediately after the data to interim page boundary. Each page in the set
-     * will be mapped to a page immediately after the data to interim boundary,
-     * incrementing the boundary as the page is allocated.
-     * <p>
-     * If the interim page is in the list of free interim pages, remove it. We
-     * will not lock it. No other mutator will reference a free page because no
-     * other mutator is moving pages and no other mutator will be using it for
-     * work space.
-     * <p>
-     * If the page is not in the list of free interim pages, we do have to lock
-     * it.
-     * 
-     * @param setOfPages
-     *            The set of pages that needs to be moved or copied into a page
-     *            in data region of the file.
-     * @param setOfMovingPages
-     *            A set that will keep track of which pages this mutation
-     *            references used in conjunction with the move list.
-     * @param mapOfPages
-     *            A map that associates one of the pages with an interim page
-     *            that will be converted to a data page.
-     * @param userFromInterimPagesToMove
-     *            A set of the interim pages that need to be moved to a new
-     *            interim pages as opposed to pages that were free.
-     * @param userFromInterimPages
-     *            A set of the newly created data positions.
-     */
-    private void gatherPages(int count, Set<Long> userFromInterimPagesToMove, SortedSet<Long> userFromInterimPages)
-    {
-        for (int i = 0; i < count; i++)
-        {
-            // Use the page that is at the data to interim boundary.
-            
-            long userFromInterimPage = pager.getInterimBoundary().getPosition();
-            
-            // If it is not in the set of free pages it needs to be moved,
-            // so we add it to the set of in use.
-            
-            if (!pager.getFreeInterimPages().reserve(userFromInterimPage))
-            {
-                userFromInterimPagesToMove.add(userFromInterimPage);
-            }
-
-            // Synapse: What if this page is already in our set? That's
-            // fine because we'll first check to see if the page exists
-            // as a positive value, then we'll adjust the negative value.
-            
-            // However, I'm pretty sure that this is never the case, so
-            // I'm going to put an assertion here and think about it.
-            
-            if (pageRecorder.getUserPageSet().contains(userFromInterimPage))
-            {
-                throw new IllegalStateException();
-            }
-
-            userFromInterimPages.add(userFromInterimPage);
-            
-            // Increment the data to interim boundary.
-
-            pager.getInterimBoundary().increment();
         }
     }
     
@@ -1022,21 +1014,36 @@ public final class Mutator
         if (commit.getUnassignedInterimBlockPages().size() != 0)
         {
 
-            // Grab the expand lock to prevent anyone else from ...
+            // Grab the expand mutex to prevent anyone else from adjusting the
+            // user to interim boundary.
 
             synchronized (pager.getExpandMutex())
             {
+                // The set of interim pages that are currently in use and need
+                // to be copied into a new empty interim page.
                 SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
                 
-                // Now we can try to move the pages.
+                // Expand the user region into the interim region to accomodate
+                // the new user pages.
                 expandUser(moveLatchList, commit, commit.getUnassignedInterimBlockPages().size(), userFromInterimPagesToMove);
                 
-                // If we have interim pages in use, move them.
+                // Add move latches to the per pager move latch list for each
+                // interim page currently in use whose contents needs to be
+                // moved to accomodate the moved user to interim boundary.
                 addIterimMoveLatches(moveLatchList, userMoves, userFromInterimPagesToMove);
 
+                // Allocate a new interim page for each interim page currently
+                // in use whose contents needs to be moved to accomodate the
+                // moved user to interim boundary.
                 asssignAllocations(commit);
             }
         }
+
+        // Move interim pages currently in use to new interim pages to
+        // accomodate any new user pages necessary. Note that we left the expand
+        // synchronized block and any mutators using the interim blocks we are
+        // about to move are waiting for us to unlatch the latches we added to
+        // the per pager list of move latches.
         
         if (userMoves.getNext() != null)
         {
@@ -1048,6 +1055,8 @@ public final class Mutator
                 }
             });
         }
+
+        // Create a list o 
         
         final MoveLatch addressMoves = new MoveLatch(true);
         
