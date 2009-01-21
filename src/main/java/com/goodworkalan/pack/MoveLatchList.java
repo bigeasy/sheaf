@@ -6,7 +6,7 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * A linked list of moves.
+ * A linked list of latches that guard page moves.
  * 
  * <p>
  * The move list is extended by appending a list of move latch nodes, so that
@@ -29,7 +29,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * 
  * TODO Rename MoveLatchList.
  */
-final class MoveList
+final class MoveLatchList
 {
     private final MoveRecorder recorder;
 
@@ -51,7 +51,7 @@ final class MoveList
     
     private boolean skipping;
     
-    public MoveList()
+    public MoveLatchList()
     {
         this.recorder = new NullMoveRecorder();
         this.headMoveLatch = new MoveLatch(false);
@@ -59,7 +59,7 @@ final class MoveList
         this.userMoveLatches = new ArrayList<MoveLatch>();
     }
 
-    public MoveList(MoveRecorder recorder, MoveList listOfMoves)
+    public MoveLatchList(MoveRecorder recorder, MoveLatchList listOfMoves)
     {
         this.recorder = recorder;
         this.headMoveLatch = listOfMoves.headMoveLatch;

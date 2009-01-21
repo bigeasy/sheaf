@@ -93,7 +93,7 @@ implements Schema
      * A reference to linked list of move nodes used as a prototype for
      * the per mutator move list reference.
      */
-    private final MoveList listOfMoves;
+    private final MoveLatchList listOfMoves;
 
     private final SortedSet<Long> setOfAddressPages;
     
@@ -168,7 +168,7 @@ implements Schema
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
         this.expandLock = new ReentrantLock();
-        this.listOfMoves = new MoveList();
+        this.listOfMoves = new MoveLatchList();
         this.setOfJournalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.setOfAddressPages = setOfAddressPages;
         this.setOfReturningAddressPages = new HashSet<Long>();
@@ -256,7 +256,7 @@ implements Schema
         return interimBoundary;
     }
 
-    public MoveList getMoveList()
+    public MoveLatchList getMoveList()
     {
         return listOfMoves;
     }
@@ -549,7 +549,7 @@ implements Schema
 
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
+                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -694,7 +694,7 @@ implements Schema
                 }
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveList listOfMoves = new MoveList(pageRecorder, getMoveList());
+                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)

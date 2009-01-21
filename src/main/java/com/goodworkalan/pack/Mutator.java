@@ -41,13 +41,13 @@ public final class Mutator
     
     final PageRecorder pageRecorder;
     
-    final MoveList listOfMoves;
+    final MoveLatchList listOfMoves;
     
     final List<Temporary> listOfTemporaries;
     
     long lastPointerPage;
     
-    public Mutator(Pager pager, MoveList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageSet dirtyPages)
+    public Mutator(Pager pager, MoveLatchList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageSet dirtyPages)
     {
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
         BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
@@ -65,7 +65,7 @@ public final class Mutator
         this.dirtyPages = dirtyPages;
         this.mapOfAddresses = new TreeMap<Long, Movable>();
         this.moveNodeRecorder = moveNodeRecorder;
-        this.listOfMoves = new MoveList(moveRecorder, listOfMoves);
+        this.listOfMoves = new MoveLatchList(moveRecorder, listOfMoves);
         this.pageRecorder = pageRecorder;
         this.listOfTemporaries = new ArrayList<Temporary>();
     }
@@ -447,7 +447,7 @@ public final class Mutator
         return (int) (userPageSize / pager.getPageSize());
     }
     
-    private void expandUser(MoveList listOfMoves, Commit commit, int count, SortedSet<Long> setOfInUse)
+    private void expandUser(MoveLatchList listOfMoves, Commit commit, int count, SortedSet<Long> setOfInUse)
     {
         // This invocation is to flush the move list for the current
         // mutator. You may think that this is pointless, but it's
@@ -480,7 +480,7 @@ public final class Mutator
      * @param userFromInterimPagesToMove
      *            Set of iterim pages that need to be moved.
      */
-    private void addIterimMoveLatches(MoveList moveList, MoveLatch iterimMoveLatches, SortedSet<Long> userFromInterimPagesToMove)
+    private void addIterimMoveLatches(MoveLatchList moveList, MoveLatch iterimMoveLatches, SortedSet<Long> userFromInterimPagesToMove)
     {
         if (userFromInterimPagesToMove.size() != 0)
         {
@@ -519,7 +519,7 @@ public final class Mutator
      * @param newAddressPageCount
      *            The number of address pages to allocate.
      */
-    private SortedSet<Long> tryNewAddressPage(MoveList moveList, final Commit commit, int newAddressPageCount)
+    private SortedSet<Long> tryNewAddressPage(MoveLatchList moveList, final Commit commit, int newAddressPageCount)
     {
         final MoveLatch userMoveLatchHead = new MoveLatch(false);
 
@@ -670,7 +670,7 @@ public final class Mutator
         try
         {
             final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
-            return tryNewAddressPage(new MoveList(commit, listOfMoves), commit, count); 
+            return tryNewAddressPage(new MoveLatchList(commit, listOfMoves), commit, count); 
         }
         finally
         {
@@ -950,7 +950,7 @@ public final class Mutator
     }
 
     // FIXME Begin line by line documentation here.
-    private void tryCommit(MoveList moveList, final Commit commit)
+    private void tryCommit(MoveLatchList moveList, final Commit commit)
     {
         commit.getUnassignedSet().addAll(pageRecorder.getAllocationPageSet());
 
@@ -1173,7 +1173,7 @@ public final class Mutator
 
         try
         {
-            tryCommit(new MoveList(commit, listOfMoves), commit);
+            tryCommit(new MoveLatchList(commit, listOfMoves), commit);
         }
         finally
         {
