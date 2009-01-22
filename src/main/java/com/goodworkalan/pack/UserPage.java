@@ -61,7 +61,9 @@ final class UserPage extends BlockPage
      *            only if needed allocation.
      * @param dirtyPages
      *            The set of dirty pages.
-     * @return The mirrored interim page given.
+     * @return A mirror object with information on mirrored interim page given
+     *         or the mirrored page allocated, or null if no interim page was
+     *         given nor allocated.
      */
     public synchronized Mirror mirror(boolean vacuum, Pager pager, InterimPage interim, DirtyPageSet dirtyPages)
     {

@@ -1070,6 +1070,9 @@ public final class Mutator
 
             synchronized (pager.getExpandMutex())
             {
+                // Lock obtained. We might actually have enough pages now, but
+                // that is unlikely. Let's make more without checking.
+                
                 // The set of interim pages that are currently in use and need
                 // to be copied into a new empty interim page.
                 SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
@@ -1091,7 +1094,7 @@ public final class Mutator
         }
 
         // Move interim pages currently in use to new interim pages to
-        // accomodate any new user pages necessary. Note that we left the expand
+        // accommodate any new user pages necessary. Note that we left the expand
         // synchronized block and any mutators using the interim blocks we are
         // about to move are waiting for us to unlatch the latches we added to
         // the per pager list of move latches.
@@ -1192,7 +1195,7 @@ public final class Mutator
                 
                 journal.write(new Terminate());
                 
-                // The list of user pages that were mirrored for relcation.
+                // The list of user pages that were mirrored for relocation.
                 Set<UserPage> userPagesMirroredForMove = new HashSet<UserPage>();
                
                 // Write the mirror of user pages for relocation to the journal.
