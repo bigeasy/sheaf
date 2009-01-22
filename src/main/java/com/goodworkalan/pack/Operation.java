@@ -19,6 +19,12 @@ abstract class Operation
         return false;
     }
 
+    /**
+     * Return the length of the operation in the journal including the type
+     * flag.
+     * 
+     * @return The length of this operation in the journal.
+     */
     public abstract int length();
 
     public abstract void write(ByteBuffer bytes);

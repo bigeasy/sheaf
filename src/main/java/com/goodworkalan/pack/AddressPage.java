@@ -4,30 +4,26 @@ import java.nio.ByteBuffer;
 import java.util.zip.Checksum;
 
 /**
- * Interprets a {@link RawPage} as an array of file positions that reference a
- * file positions in the user region of the file. A user address references a
+ * Interprets an underlying page as an array of file positions that reference a
+ * file position in the user region of the file. A user address references a
  * position in an address page that contains a long value indicating the
- * position of the user data in the data region of the file.
+ * position of the user block page containing the block in the user region of
+ * the file.
  * <p>
- * The address itself is a long value indicating the actual position of the user
- * data file position long value in the address page. It is an indirection. To
- * find the position of a user data block, we read the long value at the
- * position indicated by the address to find the page that contains the user
- * block. We then scan the data page for the block that contains the address in
- * its address back-reference.
+ * The address is a long value indicating the actual position of where the file
+ * position of the user block page is stored. It is an indirection. To find the
+ * position of a user block, we read the long value at the position indicated by
+ * the address to find the user block page that contains the user block. We then
+ * scan the user block page for the block that contains the address in its
+ * address back-reference.
  * <p>
  * Unused addresses are indicated by a zero data position value. If an address
  * is in use, there will be a non-zero position value in the slot.
  * <p>
  * When we allocate a new block, because of isolation, we cannot write out the
- * address of the new data block until we are playing back a flushed journal.
- * Thus, during the mutation phase of a mutation, we need to reserve a free
- * address. Reservations are tracked in an interim reservation page defined by
- * {@link Pack.ReservationPage}. The reservation page says which of the free
- * addresses are reserved.
- * <p>
- * The associate reservation page is allocated as needed. If there is no
- * associated reservation page, then none of the free addresses are reserved.
+ * address of the user block page of the new user block until we are playing back a flushed journal.
+ * Thus, during the isolated mutation, we reserve the address position by writing
+ * the maximum long value as the value of the page position.
  */
 final class AddressPage
 implements Page
@@ -47,14 +43,14 @@ implements Page
      * default constructor creates an empty address page that must be
      * initialized before use.
      * <p>
-     * All of the page classes have default constructors. This constructor
-     * is called by clients of the <code>Pager</code> when requesting pages
-     * or creating new pages.
+     * All of the page classes have default constructors. This constructor is
+     * called by clients of the <code>Pager</code> when requesting pages or
+     * creating new pages.
      * <p>
-     * An uninitialized page of the expected Java class of page is given to
-     * the <code>Pager</code>. If the page does not exist, the newly created
-     * page is used, if not is ignored and garbage collected. This is a
-     * variation on the prototype object construction pattern.
+     * An uninitialized page of the expected Java class of page is given to the
+     * <code>Pager</code>. If the page does not exist, the empty, default
+     * constructed page is used, if not is ignored and garbage collected. This
+     * is a variation on the prototype object construction pattern.
      * 
      * @see com.goodworkalan.pack.Pager#getPage
      */
@@ -63,9 +59,9 @@ implements Page
     }
 
     /**
-     * Calculate the header offset for the specified raw page, adjusting for
-     * the header when this is the first address page, which shares space
-     * with the pack file header and journal headers.
+     * Calculate the header offset for the specified raw page, adjusting for the
+     * header when this is the first address page, which shares space with the
+     * pack file header and journal headers.
      * 
      * @param rawPage
      *            The raw page behind the address page.
