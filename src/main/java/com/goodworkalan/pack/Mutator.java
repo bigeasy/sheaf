@@ -49,7 +49,8 @@ public final class Mutator
     
     long lastPointerPage;
     
-    public Mutator(Pager pager, MoveLatchList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder, Journal journal, DirtyPageSet dirtyPages)
+    public Mutator(Pager pager, MoveLatchList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
+        Journal journal, DirtyPageSet dirtyPages)
     {
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
         BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
@@ -142,8 +143,8 @@ public final class Mutator
             public Long run(List<MoveLatch> listOfMoves)
             {
                 
-                // This is unimplemented: Creating a linked list of blocks
-                // when the block size exceeds the size of a page.
+                // This is unimplemented: Creating a linked list of blocks when
+                // the block size exceeds the size of a page.
                 
                 int pageSize = pager.getPageSize();
                 if (fullSize + Pack.BLOCK_PAGE_HEADER_SIZE > pageSize)
@@ -152,9 +153,15 @@ public final class Mutator
                     throw new UnsupportedOperationException();
                 }
                 
-                // If we already have a wilderness data page that will fit
-                // the block, use that page. Otherwise, allocate a new
-                // wilderness data page for allocation.
+                // If we already have a wilderness data page that will fit the
+                // block, use that page. Otherwise, allocate a new wilderness
+                // data page for allocation.
+
+
+                // We know that our already reserved pages are not moving
+                // because our page recorder will wait for them to move.
+
+                // We know that the new iterim page is not moving TODO?
                 
                 InterimPage interim = null;
                 long bestFit = allocPagesBySize.bestFit(fullSize);

@@ -14,7 +14,7 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-
+// TODO Rename FirstFitTable?
 final class BySizeTable implements Iterable<Long>
 {
     private final int alignment;

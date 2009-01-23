@@ -69,7 +69,7 @@ implements Schema
      * The map of weak references to raw pages keyed on the file position of the
      * raw page.
      */
-    private final Map<Long, PageReference> pageByPosition;
+    private final Map<Long, PageReference> rawPageByPosition;
 
     /**
      * The queue of weak references to raw pages keyed on the file position of
@@ -117,8 +117,13 @@ implements Schema
      */
     private final Map<Long, ByteBuffer> temporaryNodes;
     
+    /**
+     * Map of temporary block addresses to temporary node reference file
+     * positions.
+     */
     private final Map<Long, Long> temporaries;
 
+    /** Set of empty user pages. */
     private final FreeSet freeUserPages;
 
     /**
@@ -171,7 +176,7 @@ implements Schema
         this.pageSize = header.getPageSize();
         this.userBoundary = new Boundary(pageSize, dataBoundary);
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
-        this.pageByPosition = new HashMap<Long, PageReference>();
+        this.rawPageByPosition = new HashMap<Long, PageReference>();
         this.freePageBySize = new BySizeTable(pageSize, alignment);
         this.staticPages = mapOfStaticPages;
         this.freeUserPages = new FreeSet();
@@ -270,11 +275,22 @@ implements Schema
         return staticPages.get(uri);
     }
     
+    /**
+     * Return true if the block address is mapped from a static named block.
+     *
+     * @param address A block address.
+     * @return True if the block address is a static named block address.
+     */
     public boolean isStaticPageAddress(long address)
     {
         return staticPages.containsValue(address);
     }
 
+    /**
+     * Get the set of position headers used to reserve journal headers.
+     *
+     * @return The set of position headers.
+     */
     public PositionSet getJournalHeaders()
     {
         return journalHeaders;
@@ -359,10 +375,16 @@ implements Schema
         Positionable positionable = null;
         while ((positionable = (Positionable) queue.poll()) != null)
         {
-            pageByPosition.remove(positionable.getPosition());
+            rawPageByPosition.remove(positionable.getPosition());
         }
     }
 
+    /**
+     * Allocate a new page from the end of the file by extending the length of
+     * the file.
+     *
+     * @return The address of a new page from the end of file.
+     */
     private long fromWilderness()
     {
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
@@ -410,16 +432,21 @@ implements Schema
         return position;
     }
 
-    private void addPageByPosition(RawPage page)
+    /**
+     * Add a raw page to the page by position map.
+     *
+     * @param rawPage The raw page.
+     */
+    private void addRawPageByPosition(RawPage rawPage)
     {
-        PageReference intended = new PageReference(page, queue);
-        PageReference existing = pageByPosition.get(intended.getPosition());
+        PageReference intended = new PageReference(rawPage, queue);
+        PageReference existing = rawPageByPosition.get(intended.getPosition());
         if (existing != null)
         {
             existing.enqueue();
             collect();
         }
-        pageByPosition.put(intended.getPosition(), intended);
+        rawPageByPosition.put(intended.getPosition(), intended);
     }
     
     /**
@@ -463,9 +490,9 @@ implements Schema
     
         page.create(rawPage, dirtyPages);
     
-        synchronized (pageByPosition)
+        synchronized (rawPageByPosition)
         {
-            addPageByPosition(rawPage);
+            addRawPageByPosition(rawPage);
         }
     
         return page;
@@ -496,11 +523,11 @@ implements Schema
     }
 
 
-    private RawPage getPageByPosition(long position)
+    private RawPage getRawPageByPosition(long position)
     {
         RawPage page = null;
         Long boxPosition = new Long(position);
-        PageReference chunkReference = pageByPosition.get(boxPosition);
+        PageReference chunkReference = rawPageByPosition.get(boxPosition);
         if (chunkReference != null)
         {
             page = chunkReference.get();
@@ -515,12 +542,12 @@ implements Schema
         synchronized (rawPage)
         {
             RawPage found = null;
-            synchronized (pageByPosition)
+            synchronized (rawPageByPosition)
             {
-                found = getPageByPosition(position);
+                found = getRawPageByPosition(position);
                 if (found == null)
                 {
-                    addPageByPosition(rawPage);
+                    addRawPageByPosition(rawPage);
                 }
             }
             if (found == null)
@@ -551,9 +578,9 @@ implements Schema
         position =  position / pageSize * pageSize;
         RawPage rawPage = new RawPage(this, position);
 
-        synchronized (pageByPosition)
+        synchronized (rawPageByPosition)
         {
-            RawPage existing = removePageByPosition(position);
+            RawPage existing = removeRawPageByPosition(position);
             if (existing != null)
             {
                 if (!extant)
@@ -569,7 +596,7 @@ implements Schema
             else
             {
                 page.create(rawPage, dirtyPages);
-                addPageByPosition(rawPage);
+                addRawPageByPosition(rawPage);
             }
         }
 
@@ -911,9 +938,9 @@ implements Schema
      * @return The page currently mapped to the position or null if no page is
      *         mapped.
      */
-    private RawPage removePageByPosition(long position)
+    private RawPage removeRawPageByPosition(long position)
     {
-        PageReference existing = pageByPosition.get(new Long(position));
+        PageReference existing = rawPageByPosition.get(new Long(position));
         RawPage p = null;
         if (existing != null)
         {
@@ -937,13 +964,13 @@ implements Schema
      */
     public void relocate(long from, long to)
     {
-        synchronized (pageByPosition)
+        synchronized (rawPageByPosition)
         {
-            RawPage position = removePageByPosition(from);
+            RawPage position = removeRawPageByPosition(from);
             if (position != null)
             {
                 assert to == position.getPosition();
-                addPageByPosition(position);
+                addRawPageByPosition(position);
             }
         }
     }
