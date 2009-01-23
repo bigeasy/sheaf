@@ -26,8 +26,10 @@ public final class Mutator
     /** A journal to record the isolated mutations of the associated pack. */
     final Journal journal;
 
+    /** A table that orders allocation pages by the size of bytes remaining. */
     final BySizeTable allocPagesBySize;
     
+    /** A table that orders write pages by the size of bytes remaining. */
     final BySizeTable writePagesBySize;
 
     /**
@@ -39,8 +41,16 @@ public final class Mutator
     /** A set of pages that need to be flushed to the disk.  */
     final DirtyPageSet dirtyPages;
     
+    /**
+     * The per mutator recorder of move nodes that appends the page moves to a
+     * linked list of move nodes.
+     */
     final MoveNodeRecorder moveNodeRecorder;
     
+    /**
+     * The per mtuator recorder of move nodes that adjusts the file positions of
+     * referenced pages.
+     */
     final PageRecorder pageRecorder;
     
     final MoveLatchList listOfMoves;
@@ -1183,11 +1193,11 @@ public final class Mutator
                     }
                 }
                 
+                // Get the current position after all the vacuum operations.
+                // Once vacuum is performed, we force the file and update the
+                // journal so that playback begins at the vacuum operation,
+                // which does nothing, since we skipped the list of add vacuums.
                 long afterVacuum = journal.getJournalPosition(); 
-                
-                // Write out all your allocations from above. Each of them
-                // becomes an action. Read the interim page and copy the data
-                // over to the data page.
                 
                 // Here we insert the vacuum break. During a recovery, the data
                 // pages will be recreated without a reference to their vacuumed

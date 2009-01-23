@@ -1,6 +1,3 @@
-/**
- * 
- */
 package com.goodworkalan.pack;
 
 import java.util.ArrayList;
@@ -14,7 +11,13 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-// TODO Rename FirstFitTable?
+/**
+ * A table of pages ordered by size that performs a best fit lookup, returning
+ * the page in the collection with the least amount of free space that will
+ * accommodate a block of a given size.
+ * 
+ * @author Alan Gutierrez
+ */
 final class BySizeTable implements Iterable<Long>
 {
     private final int alignment;
@@ -114,20 +117,20 @@ final class BySizeTable implements Iterable<Long>
             release(position);
         }
     }
-    
+
     /**
-     * Return the page with the least amount of space remaining that will
-     * fit the full block size. The block specified block size must
-     * includes the block header.
+     * Return the page with the least amount of space remaining that will fit
+     * the full block size. The block specified block size must includes the
+     * block header.
      * <p>
-     * The method will ascend the table looking at the slots for each
-     * remaining size going form smallest to largest and returning the
-     * first to fit the block, or null if no page can fit the block.
+     * The method will ascend the table looking at the slots for each remaining
+     * size going form smallest to largest and returning the first to fit the
+     * block, or null if no page can fit the block.
      * 
      * @param blockSize
      *            The block size including the block header.
-     * @return A size object containing the a page that will fit the block
-     *         or null if none exists.
+     * @return A size object containing the a page that will fit the block or
+     *         null if none exists.
      */
     public synchronized long bestFit(int blockSize)
     {
@@ -151,6 +154,7 @@ final class BySizeTable implements Iterable<Long>
     // TODO We can compact even further by joining vacuumed pages.
     public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
     {
+        // TODO A better merge if you go in descending order.
         int pageSize = listOfSetsOfPages.size() * alignment;
         for (Map.Entry<Long, Integer> entry : pagesBySize.mapOfPageToSize.entrySet())
         {
