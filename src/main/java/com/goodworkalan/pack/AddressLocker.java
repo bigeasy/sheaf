@@ -9,6 +9,12 @@ import java.util.Set;
  * Used during commit to lock freed addresses to prevent their possible
  * reallocation from being written before the free operation commit completes.
  * <p>
+ * This class is specific to the relatively simple task of preventing the
+ * overwrite of a reallocation by replaying a journaled free. It is not intended
+ * to be the basis of a general purpose synchronization algorithm. Specifically,
+ * it is not intended to lock addresses for users, to coordinate user writes or
+ * frees.
+ * <p>
  * During free, the address in the address page is set to zero, indicating that
  * the address is available for reallocation. Without some form of
  * synchronization it is possible for another mutator to reallocate the freed

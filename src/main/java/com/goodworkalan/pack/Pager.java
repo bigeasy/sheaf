@@ -18,6 +18,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * A container for outstanding <code>Page</code> objects that maps addresses to
  * soft referenced <code>Page</code> objects.
+ * 
+ * FIXME Javadoc for this class must be done first.
  */
 final class Pager
 implements Schema
@@ -100,33 +102,36 @@ implements Schema
     
     private final BySizeTable freePageBySize;
     
-    private final Map<Long, ByteBuffer> mapOfTemporaryNodes;
+    /**
+     * Map of temporary node positions to byte buffers containing the file
+     * position value at the temporary node position.
+     */
+    private final Map<Long, ByteBuffer> temporaryNodes;
     
-    private final Map<Long, Long> mapOfTemporaries;
+    private final Map<Long, Long> temporaries;
 
     private final FreeSet setOfFreeUserPages;
 
     /**
-     * A sorted set of of free interim pages sorted in descending order so
-     * that we can quickly obtain the last free interim page within interim
-     * page space.
+     * A sorted set of of free interim pages sorted in descending order so that
+     * we can quickly obtain the last free interim page within interim page
+     * space.
      * <p>
      * This set of free interim pages guards against overwrites by a simple
-     * method. If the position is in the set of free interim pages, then it
-     * is free, if not it is not free. System pages must be allocated while
-     * the move lock is locked for reading, or locked for writing in the
-     * case of removing free pages from the start of the interim page area
-     * when the user area expands.
+     * method. If the position is in the set of free interim pages, then it is
+     * free, if not it is not free. System pages must be allocated while the
+     * move lock is locked for reading, or locked for writing in the case of
+     * removing free pages from the start of the interim page area when the user
+     * area expands.
      * <p>
-     * Question: Can't an interim page allocated from the set of free pages
-     * be moved while we are first writing to it?
+     * Question: Can't an interim page allocated from the set of free pages be
+     * moved while we are first writing to it?
      * <p>
-     * Answer: No, because the moving mutator will have to add the moves to
-     * the move list before it can move the pages. Adding to move list
-     * requires an exclusive lock on the move list.
+     * Answer: No, because the moving mutator will have to add the moves to the
+     * move list before it can move the pages. Adding to move list requires an
+     * exclusive lock on the move list.
      * <p>
-     * Remember: Only one mutator can move pages in the interim area at a
-     * time.
+     * Remember: Only one mutator can move pages in the interim area at a time.
      */
     private final FreeSet freeInterimPages;
 
@@ -147,7 +152,7 @@ implements Schema
     private final Object expandMutex;
     
     public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages,
-        long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> mapOfTemporaryNodes)
+        long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> temporaryNodes)
     {
         this.file = file;
         this.fileChannel = fileChannel;
@@ -169,24 +174,34 @@ implements Schema
         this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.setOfAddressPages = setOfAddressPages;
         this.setOfReturningAddressPages = new HashSet<Long>();
-        this.mapOfTemporaryNodes = mapOfTemporaryNodes;
-        this.mapOfTemporaries = mapOfTemporaries(mapOfTemporaryNodes);
+        this.temporaryNodes = temporaryNodes;
+        this.temporaries = temporaries(temporaryNodes);
         this.addressLocker = new AddressLocker();
     }
-    
-    private Map<Long, Long> mapOfTemporaries(Map<Long, ByteBuffer> mapOfTemporaryNodes)
+
+    /**
+     * Create a map of temporary block addresses to the file position of their
+     * temporary reference node.
+     * 
+     * @param temporaryNodes
+     *            Map of temporary node positions to byte buffers containing the
+     *            file position value at the temporary node position.
+     * @return A map of temporary block addresses to temporary node reference
+     *         positions.
+     */
+    private static Map<Long, Long> temporaries(Map<Long, ByteBuffer> temporaryNodes)
     {
-        Map<Long, Long> mapOfTemporaries = new HashMap<Long, Long>();
-        for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryNodes.entrySet())
+        Map<Long, Long> temporaries = new HashMap<Long, Long>();
+        for (Map.Entry<Long, ByteBuffer> entry : temporaryNodes.entrySet())
         {
             ByteBuffer bytes = entry.getValue();
             long address = bytes.getLong();
             if (address != 0L)
             {
-                mapOfTemporaries.put(address, entry.getKey());
+                temporaries.put(address, entry.getKey());
             }
         }
-        return mapOfTemporaries;
+        return temporaries;
     }
     
     /**
@@ -261,11 +276,21 @@ implements Schema
         return header.getFirstAddressPageStart();
     }
 
+    /**
+     * Get the boundary between address pages and user data pages.
+     *
+     * @return The boundary between address pages and user data pages.
+     */
     public Boundary getUserBoundary()
     {
         return userBoundary;
     }
 
+    /**
+     * Get the boundary between user pages and interim pages.
+     *
+     * @return The boundary between user pages and interim pages.
+     */
     public Boundary getInterimBoundary()
     {
         return interimBoundary;
@@ -684,15 +709,18 @@ implements Schema
         }
     }
 
+    /**
+     * Create a journal entry that will write a temporary node reference FIXME a temporary node for the given temporary block address.
+     */
     public Temporary getTemporary(long address)
     {
         Temporary temporary = null;
-        synchronized (mapOfTemporaryNodes)
+        synchronized (temporaryNodes)
         {
             BUFFERS: for (;;)
             {
                 Map.Entry<Long, ByteBuffer> last = null;
-                for (Map.Entry<Long, ByteBuffer> entry : mapOfTemporaryNodes.entrySet())
+                for (Map.Entry<Long, ByteBuffer> entry : temporaryNodes.entrySet())
                 {
                     ByteBuffer bytes = entry.getValue();
                     if (bytes.getLong(Pack.ADDRESS_SIZE) == 0L)
@@ -701,7 +729,7 @@ implements Schema
                     }
                     else if (bytes.getLong(0) == 0L)
                     {
-                        mapOfTemporaries.put(address, entry.getKey());
+                        temporaries.put(address, entry.getKey());
                         bytes.putLong(0, Long.MAX_VALUE);
                         temporary = new Temporary(address, entry.getKey());
                         break BUFFERS;
@@ -739,18 +767,26 @@ implements Schema
                 
                 mutator.commit();
                 
-                mapOfTemporaryNodes.put(next, bytes);
+                temporaryNodes.put(next, bytes);
             }
         }
 
         return temporary;
     }
     
+    /**
+     * Set the temporary node at the given temporary node position to reference
+     * the given block address.
+     *
+     * @param address The temporary block address.
+     * @param temporary The position of the temporary reference node.
+     * @param dirtyPages The set of dirty pages.
+     */
     public void setTemporary(long address, long temporary, DirtyPageSet dirtyPages)
     {
-        synchronized (mapOfTemporaryNodes)
+        synchronized (temporaryNodes)
         {
-            ByteBuffer bytes = mapOfTemporaryNodes.get(temporary);
+            ByteBuffer bytes = temporaryNodes.get(temporary);
             bytes.putLong(0, address);
             bytes.clear();
             AddressPage addresses = getPage(temporary, AddressPage.class, new AddressPage());
@@ -775,11 +811,20 @@ implements Schema
         }
     }
 
+    /**
+     * Free a temporary block reference, setting the block reference to zero,
+     * making it available for use to reference another temporary block.
+     * 
+     * @param address
+     *            The address of the temporary block.
+     * @param dirtyPages
+     *            The dirty page set.
+     */
     public void freeTemporary(long address, DirtyPageSet dirtyPages)
     {
-        synchronized (mapOfTemporaryNodes)
+        synchronized (temporaryNodes)
         {
-            Long temporary = mapOfTemporaries.get(address);
+            Long temporary = temporaries.get(address);
             if (temporary != null)
             {
                 setTemporary(0L, temporary, dirtyPages);
@@ -787,12 +832,19 @@ implements Schema
         }
     }
 
-    public void freeTemporary(long address, long temporary)
+    /**
+     * Return a temporary block reference to the pool of temporary block
+     * references as the result of a rollback of a commit.
+     * 
+     * @param address The address of the temporary block.
+     * @param temporary The temporary block 
+     */
+    public void rollbackTemporary(long address, long temporary)
     {
-        synchronized (mapOfTemporaryNodes)
+        synchronized (temporaryNodes)
         {
-            mapOfTemporaries.remove(address);
-            mapOfTemporaryNodes.get(temporary).putLong(0, 0L);
+            temporaries.remove(address);
+            temporaryNodes.get(temporary).putLong(0, 0L);
         }
     }
 
@@ -814,8 +866,8 @@ implements Schema
 
     public void returnUserPage(BlockPage blocks)
     {
-        // TODO Is it not the case that the block changes can mutated
-        // by virtue of a deallocation operation?
+        // TODO Is it not the case that the block changes can mutated by virtue
+        // of a deallocation operation?
         if (blocks.getCount() == 0)
         {
             setOfFreeUserPages.free(blocks.getRawPage().getPosition());
@@ -826,6 +878,16 @@ implements Schema
         }
     }
 
+    /**
+     * Remove a raw page from the map of pages by position. If the page exists
+     * in the map, The page is completly removed by enqueuing the weak page
+     * reference and running <code>collect</code>.
+     * 
+     * @param position
+     *            The position of the page to remove.
+     * @return The page currently mapped to the position or null if no page is
+     *         mapped.
+     */
     private RawPage removePageByPosition(long position)
     {
         PageReference existing = pageByPosition.get(new Long(position));
@@ -839,6 +901,17 @@ implements Schema
         return p;
     }
 
+    /**
+     * Relocate a page in the pager by removing it from the map of pages by
+     * position at the given from position and adding it at the given to
+     * position. This only moves the <code>RawPage</code> in the pager, it does
+     * not copy the page to the new position in the underlying file.
+     * 
+     * @param from
+     *            The position to move from.
+     * @param to
+     *            The position to move to.
+     */
     public void relocate(long from, long to)
     {
         synchronized (pageByPosition)
@@ -851,7 +924,24 @@ implements Schema
             }
         }
     }
-    
+
+    /**
+     * Return a file position based on the given file position adjusted by the
+     * linked list of page moves appended to the given move node. The adjustment
+     * will skip the number of move nodes given by skip.
+     * <p>
+     * The adjustment will account for offset into the page position. This is
+     * necessary for next operations in journals, which may jump to any
+     * operation in a journal, which may be at any location in a page.
+     * 
+     * @param moveNode
+     *            The head of a list of move nodes.
+     * @param position
+     *            The file position to track.
+     * @param skip
+     *            The number of moves to skip (0 or 1).
+     * @return The file position adjusted by the recorded page moves.
+     */
     public long adjust(MoveNode moveNode, long position, int skip)
     {
         int offset = (int) (position % pageSize);
@@ -875,11 +965,25 @@ implements Schema
         return position + offset;
     }
 
-    public long adjust(List<Move> listOfMoves, long position)
+    /**
+     * Return a file position based on the given file position adjusted by page
+     * moves in the given list of move node.
+     * <p>
+     * The adjustment will account for offset into the page position. This is
+     * necessary for next operations in journals, which may jump to any
+     * operation in a journal, which may be at any location in a page.
+     * 
+     * @param moveList
+     *            The list of page moves.
+     * @param position
+     *            The file position to track.
+     * @return The file position adjusted by the recorded page moves.
+     */
+    public long adjust(List<Move> moveList, long position)
     {
         int offset = (int) (position % pageSize);
         position = position - offset;
-        for (Move move: listOfMoves)
+        for (Move move: moveList)
         {
             if (move.getFrom() == position)
             {
@@ -889,11 +993,27 @@ implements Schema
         return position + offset;
     }
 
+    /**
+     * Close the pager writing out the region boudnaries and the soft shutdown
+     * flag in the header and variable pager state to a region at the end of the
+     * file. The variable data includes address pages with addresses remaining,
+     * empty user pages, and user pages with space remaining. The variable data
+     * is positioned at the location indicated by the user to interim boundary.
+     * <p>
+     * Close will wait for any concurrent commits to complete.
+     */
     public void close()
     {
+        // Grab the exclusive compact lock, which will wait for any concurrent
+        // commits to complete.
+
         getCompactLock().writeLock().lock();
+
         try
         {
+            // Write the set of address pages, the set of empty user pages and
+            // the set of pages with space remaining to a byte buffer.
+
             int size = 0;
             
             size += Pack.COUNT_SIZE + setOfAddressPages.size() * Pack.POSITION_SIZE;
@@ -918,6 +1038,8 @@ implements Schema
             }
             
             reopen.flip();
+
+            // Write the variable data at the interim page positions.
             
             try
             {
@@ -927,6 +1049,8 @@ implements Schema
             {
                 throw new PackException(Pack.ERROR_IO_WRITE, e);
             }
+
+            // Write the boundaries and soft shutdown flag.
             
             try
             {
@@ -957,3 +1081,5 @@ implements Schema
         }
     }
 }
+
+/* vim: set tw=80 : */

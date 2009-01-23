@@ -26,8 +26,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * <p>
  * Pages that are referenced by the client programmer that were not created by
  * the <code>Mutator</code>
- * 
- * TODO Rename MoveLatchList.
  */
 final class MoveLatchList
 {

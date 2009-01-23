@@ -28,7 +28,7 @@ extends Operation
     
     public void rollback(Pager pager)
     {
-        pager.freeTemporary(address, temporary);
+        pager.rollbackTemporary(address, temporary);
     }
 
     @Override

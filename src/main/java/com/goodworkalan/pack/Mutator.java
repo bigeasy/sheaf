@@ -15,6 +15,8 @@ import java.util.TreeSet;
  * An isolated view of an atomic alteration the contents of a {@link Pack}. In
  * order to allocate, read, write or free blocks, one must create a
  * <code>Mutator</code> by calling {@link Pack#mutate()}.
+ * 
+ * FIXME Javadoc for this class must be done first.
  */
 public final class Mutator
 {
@@ -219,11 +221,11 @@ public final class Mutator
                 if (movable == null)
                 {
                     // Interim block pages allocated to store writes are tracked
-                    // in a separate by size table and a separate set of
-                    // interim pages. During commit interim write blocks need
-                    // only be copied to the user pages where they reside, while
-                    // interim alloc blocks need to be assigned (as a page) to a
-                    // user page with space to accommodate them.
+                    // in a separate by size table and a separate set of interim
+                    // pages. During commit interim write blocks need only be
+                    // copied to the user pages where they reside, while interim
+                    // alloc blocks need to be assigned (as a page) to a user
+                    // page with space to accommodate them.
 
                     BlockPage blocks = dereference(address, listOfMoveLatches);
                     int blockSize = blocks.getBlockSize(address);
@@ -368,7 +370,7 @@ public final class Mutator
                         bySize.add(interim);
                     }
                 }
-                 
+
                 if (unallocated)
                 {
                     AddressPage addresses = pager.getPage(-address, AddressPage.class, new AddressPage());
@@ -1159,8 +1161,8 @@ public final class Mutator
                 // Create a vacuum operation for all the vacuums.
                 Set<UserPage> setOfMirroredVacuumPages = new HashSet<UserPage>();
                 
-                // TODO Do I make sure that mirroring in included before 
-                // vacuum in recovery as well?
+                // TODO Do I make sure that mirroring in included before vacuum
+                // in recovery as well?
                 // TODO No. Just make addresses go first. Negative journal.
 
                 for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
