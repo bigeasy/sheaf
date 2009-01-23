@@ -94,10 +94,19 @@ implements Schema
      */
     private final MoveLatchList moveLatchList;
 
-    private final SortedSet<Long> setOfAddressPages;
+    /** A set of address pages with available free addresses. */
+    private final SortedSet<Long> addressPages;
     
-    private final Set<Long> setOfReturningAddressPages;
-    
+    /**
+     * A set of address pages currently checked out by a mutator to allocate a
+     * single address, that have more than one free address available.
+     */
+    private final Set<Long> returningAddressPages;
+
+    /**
+     * A synchronization strategy that prevents addresses that have been freed
+     * from overwriting reallocations.
+     */
     private final AddressLocker addressLocker;
     
     private final BySizeTable freePageBySize;
@@ -110,7 +119,7 @@ implements Schema
     
     private final Map<Long, Long> temporaries;
 
-    private final FreeSet setOfFreeUserPages;
+    private final FreeSet freeUserPages;
 
     /**
      * A sorted set of of free interim pages sorted in descending order so that
@@ -165,15 +174,15 @@ implements Schema
         this.pageByPosition = new HashMap<Long, PageReference>();
         this.freePageBySize = new BySizeTable(pageSize, alignment);
         this.staticPages = mapOfStaticPages;
-        this.setOfFreeUserPages = new FreeSet();
+        this.freeUserPages = new FreeSet();
         this.freeInterimPages = new FreeSet();
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
         this.expandMutex = new Object();
         this.moveLatchList = new MoveLatchList();
         this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
-        this.setOfAddressPages = setOfAddressPages;
-        this.setOfReturningAddressPages = new HashSet<Long>();
+        this.addressPages = setOfAddressPages;
+        this.returningAddressPages = new HashSet<Long>();
         this.temporaryNodes = temporaryNodes;
         this.temporaries = temporaries(temporaryNodes);
         this.addressLocker = new AddressLocker();
@@ -300,7 +309,15 @@ implements Schema
     {
         return moveLatchList;
     }
-    
+
+    /**
+     * Returns the address locker which will block a reallocation from
+     * committing until the commit that freed an address has completed. This
+     * prevents the reallocation from being overwritten by playback of the
+     * journaled free.
+     * 
+     * @return The per pack address locker.
+     */
     public AddressLocker getAddressLocker()
     {
         return addressLocker;
@@ -313,7 +330,7 @@ implements Schema
     
     public FreeSet getFreeUserPages()
     {
-        return setOfFreeUserPages;
+        return freeUserPages;
     }
     
     public FreeSet getFreeInterimPages()
@@ -321,7 +338,13 @@ implements Schema
         return freeInterimPages;
     }
 
-    public Object getExpandMutex()
+    /**
+     * Return the per pack mutex used to ensure that only one mutator at a time
+     * is moving pages in the interim page area.
+     * 
+     * @return The user region expand expand mutex. 
+     */
+    public Object getUserExpandMutex()
     {
         return expandMutex;
     }
@@ -572,7 +595,7 @@ implements Schema
         // Lock on the set of address pages, which protects the set of
         // address pages and the set of returning address pages.
         
-        synchronized (setOfAddressPages)
+        synchronized (addressPages)
         {
             long position = 0L;         // The position of the new address page.
 
@@ -581,7 +604,7 @@ implements Schema
             // outstanding that have two or more free addresses, then we
             // need to allocate more address pages and try again.
             
-            if (setOfAddressPages.size() == 0 && setOfReturningAddressPages.size() == 0)
+            if (addressPages.size() == 0 && returningAddressPages.size() == 0)
             {
                 // Create a mutator to move the user page immediately
                 // following the address page region  to a new user
@@ -610,13 +633,13 @@ implements Schema
                 // If we can return the last selected address page,
                 // let's. It will help with locality of reference.
 
-                if (setOfAddressPages.contains(lastSelected))
+                if (addressPages.contains(lastSelected))
                 {
                     position = lastSelected;
                 }
-                else if (setOfAddressPages.size() != 0)
+                else if (addressPages.size() != 0)
                 {
-                    position = setOfAddressPages.first();
+                    position = addressPages.first();
                 }
                 else
                 {
@@ -627,7 +650,7 @@ implements Schema
                     
                     try
                     {
-                        setOfAddressPages.wait();
+                        addressPages.wait();
                     }
                     catch (InterruptedException e)
                     {
@@ -642,7 +665,7 @@ implements Schema
                 // Remove the address page from the set of address
                 // pages available for allocation.
 
-                setOfAddressPages.remove(position);
+                addressPages.remove(position);
             }
 
             // Get the address page.
@@ -656,7 +679,7 @@ implements Schema
 
             if (addressPage.getFreeCount() > 1)
             {
-                setOfReturningAddressPages.add(position);
+                returningAddressPages.add(position);
             }
 
             // Return the address page.
@@ -680,12 +703,12 @@ implements Schema
     public void returnAddressPage(AddressPage addressPage)
     {
         long position = addressPage.getRawPage().getPosition();
-        synchronized (setOfAddressPages)
+        synchronized (addressPages)
         {
-            if (setOfReturningAddressPages.remove(position))
+            if (returningAddressPages.remove(position))
             {
-                setOfAddressPages.add(position);
-                setOfAddressPages.notifyAll();
+                addressPages.add(position);
+                addressPages.notifyAll();
             }
         }
     }
@@ -698,13 +721,13 @@ implements Schema
         // not to come back, in fact, check in only one place, the the
         // tryGetAddressPage method.
         long position = addressPage.getRawPage().getPosition();
-        synchronized (setOfAddressPages)
+        synchronized (addressPages)
         {
-            if (!setOfReturningAddressPages.contains(position)
-                && !setOfAddressPages.contains(position))
+            if (!returningAddressPages.contains(position)
+                && !addressPages.contains(position))
             {
-                setOfAddressPages.add(position);
-                setOfAddressPages.notifyAll();
+                addressPages.add(position);
+                addressPages.notifyAll();
             }
         }
     }
@@ -852,7 +875,7 @@ implements Schema
     {
         while (setOfSourcePages.size() != 0)
         {
-            long position = setOfFreeUserPages.allocate();
+            long position = freeUserPages.allocate();
             if (position == 0L)
             {
                 break;
@@ -870,7 +893,7 @@ implements Schema
         // of a deallocation operation?
         if (blocks.getCount() == 0)
         {
-            setOfFreeUserPages.free(blocks.getRawPage().getPosition());
+            freeUserPages.free(blocks.getRawPage().getPosition());
         }
         else if (blocks.getRemaining() > getAlignment())
         {
@@ -1016,19 +1039,19 @@ implements Schema
 
             int size = 0;
             
-            size += Pack.COUNT_SIZE + setOfAddressPages.size() * Pack.POSITION_SIZE;
-            size += Pack.COUNT_SIZE + (setOfFreeUserPages.size() + getFreePageBySize().getSize()) * Pack.POSITION_SIZE;
+            size += Pack.COUNT_SIZE + addressPages.size() * Pack.POSITION_SIZE;
+            size += Pack.COUNT_SIZE + (freeUserPages.size() + getFreePageBySize().getSize()) * Pack.POSITION_SIZE;
             
             ByteBuffer reopen = ByteBuffer.allocateDirect(size);
             
-            reopen.putInt(setOfAddressPages.size());
-            for (long position: setOfAddressPages)
+            reopen.putInt(addressPages.size());
+            for (long position: addressPages)
             {
                 reopen.putLong(position);
             }
            
-            reopen.putInt(setOfFreeUserPages.size() + getFreePageBySize().getSize());
-            for (long position: setOfFreeUserPages)
+            reopen.putInt(freeUserPages.size() + getFreePageBySize().getSize());
+            for (long position: freeUserPages)
             {
                 reopen.putLong(position);
             }

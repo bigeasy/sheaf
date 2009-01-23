@@ -623,7 +623,7 @@ public final class Mutator
         // Note that we aren't so grabby with the expand mutex during a user
         // commit, only during a new address page creation.
 
-        synchronized (pager.getExpandMutex())
+        synchronized (pager.getUserExpandMutex())
         {
             // We are going to create address pages from user pages, so check to
             // see that there are enough user pages. By enough user pages, I
@@ -1070,7 +1070,7 @@ public final class Mutator
             // Grab the expand mutex to prevent anyone else from adjusting the
             // user to interim boundary.
 
-            synchronized (pager.getExpandMutex())
+            synchronized (pager.getUserExpandMutex())
             {
                 // Lock obtained. We might actually have enough pages now, but
                 // that is unlikely. Let's make more without checking.
