@@ -109,6 +109,7 @@ implements Schema
      */
     private final AddressLocker addressLocker;
     
+    // FIXME Document.
     private final BySizeTable freePageBySize;
     
     /**
@@ -165,6 +166,7 @@ implements Schema
      */
     private final Object expandMutex;
     
+    // FIXME Document.
     public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages,
         long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> temporaryNodes)
     {
@@ -270,6 +272,7 @@ implements Schema
         return alignment;
     }
     
+    // FIXME Document.
     public long getStaticPageAddress(URI uri)
     {
         return staticPages.get(uri);
@@ -296,6 +299,7 @@ implements Schema
         return journalHeaders;
     }
 
+    // FIXME Document.
     public long getFirstAddressPageStart()
     {
         return header.getFirstAddressPageStart();
@@ -321,6 +325,7 @@ implements Schema
         return interimBoundary;
     }
 
+    // FIXME Document.
     public MoveLatchList getMoveLatchList()
     {
         return moveLatchList;
@@ -339,16 +344,19 @@ implements Schema
         return addressLocker;
     }
     
+    // FIXME Document.
     public BySizeTable getFreePageBySize()
     {
         return freePageBySize;
     }
     
+    // FIXME Document.
     public FreeSet getFreeUserPages()
     {
         return freeUserPages;
     }
     
+    // FIXME Document.
     public FreeSet getFreeInterimPages()
     {
         return freeInterimPages;
@@ -365,11 +373,13 @@ implements Schema
         return expandMutex;
     }
     
+    // FIXME Document.
     public ReadWriteLock getCompactLock()
     {
         return compactLock;
     }
     
+    // FIXME Document.
     private synchronized void collect()
     {
         Positionable positionable = null;
@@ -522,7 +532,7 @@ implements Schema
         return position;
     }
 
-
+    // FIXME Document.
     private RawPage getRawPageByPosition(long position)
     {
         RawPage page = null;
@@ -535,6 +545,7 @@ implements Schema
         return page;
     }
 
+    // FIXME Document.
     public <P extends Page> P getPage(long position, Class<P> pageClass, P page)
     {
         position = (long) Math.floor(position - (position % pageSize));
@@ -573,6 +584,7 @@ implements Schema
         return pageClass.cast(rawPage.getPage());
     }
 
+    // FIXME Document.
     public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages, boolean extant)
     {
         position =  position / pageSize * pageSize;
@@ -715,6 +727,7 @@ implements Schema
         }
     }
 
+    // FIXME Document.
     public AddressPage getAddressPage(long lastSelected)
     {
         for (;;)
@@ -727,6 +740,7 @@ implements Schema
         }
     }
     
+    // FIXME Document.
     public void returnAddressPage(AddressPage addressPage)
     {
         long position = addressPage.getRawPage().getPosition();
@@ -740,6 +754,7 @@ implements Schema
         }
     }
 
+    // FIXME Document.
     public void addAddressPage(AddressPage addressPage)
     {
         // TODO Convince yourself that this works. That you're not really
@@ -760,7 +775,9 @@ implements Schema
     }
 
     /**
-     * Create a journal entry that will write a temporary node reference FIXME a temporary node for the given temporary block address.
+     * Create a journal entry that will write a temporary node reference
+     * <p>
+     * FIXME a temporary node for the given temporary block address.
      */
     public Temporary getTemporary(long address)
     {
@@ -898,6 +915,7 @@ implements Schema
         }
     }
 
+    // FIXME Document.
     public void newUserPages(SortedSet<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
     {
         while (setOfSourcePages.size() != 0)
@@ -914,6 +932,7 @@ implements Schema
         }
     }
 
+    // FIXME Document.
     public void returnUserPage(BlockPage blocks)
     {
         // TODO Is it not the case that the block changes can mutated by virtue

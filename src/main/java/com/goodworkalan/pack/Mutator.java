@@ -52,13 +52,30 @@ public final class Mutator
      * referenced pages.
      */
     final PageRecorder pageRecorder;
+
+    /**
+     * A reference to the per pager linked list of latched page moves.
+     * Operations that reference pages will used the mutate methods of this move
+     * latch list to guard against page movement.
+     */
+    final MoveLatchList moveLatchList;
+
+    /**
+     * A list of journal entries that write temporary node references for the
+     * temporary block allocations of this mutator.
+     */
+    final List<Temporary> temporaries;
+
+    /**
+     * The address of the last address page used to allocate an address. We give
+     * this to the pager when we request an address page to indicate a
+     * preference, in hopes of improving locality of reference.
+     * 
+     * @see Pager#getAddressPage(long)
+     */
+    long lastAddressPage;
     
-    final MoveLatchList listOfMoves;
-    
-    final List<Temporary> listOfTemporaries;
-    
-    long lastPointerPage;
-    
+    // FIXME Document.
     public Mutator(Pager pager, MoveLatchList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
         Journal journal, DirtyPageSet dirtyPages)
     {
@@ -66,11 +83,13 @@ public final class Mutator
         BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
 
         CompositeMoveRecorder moveRecorder = new CompositeMoveRecorder();
+        
         moveRecorder.add(pageRecorder);
         moveRecorder.add(moveNodeRecorder);
         moveRecorder.add(new BySizeTableRecorder(allocPagesBySize));
         moveRecorder.add(new BySizeTableRecorder(writePagesBySize));
         moveRecorder.add(new JournalRecorder(journal));
+
         this.pager = pager;
         this.journal = journal;
         this.allocPagesBySize = allocPagesBySize;
@@ -78,11 +97,12 @@ public final class Mutator
         this.dirtyPages = dirtyPages;
         this.mapOfAddresses = new TreeMap<Long, Movable>();
         this.moveNodeRecorder = moveNodeRecorder;
-        this.listOfMoves = new MoveLatchList(moveRecorder, listOfMoves);
+        this.moveLatchList = new MoveLatchList(moveRecorder, listOfMoves);
         this.pageRecorder = pageRecorder;
-        this.listOfTemporaries = new ArrayList<Temporary>();
+        this.temporaries = new ArrayList<Temporary>();
     }
     
+    // FIXME Document.
     public Schema getSchema()
     {
         return pager;
@@ -107,7 +127,7 @@ public final class Mutator
         
         final Temporary temporary = pager.getTemporary(address);
 
-        listOfMoves.mutate(new GuardedVoid()
+        moveLatchList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoves)
             {
@@ -115,7 +135,7 @@ public final class Mutator
             }
         });
         
-        listOfTemporaries.add(temporary);
+        temporaries.add(temporary);
         
         return address;
     }
@@ -134,7 +154,7 @@ public final class Mutator
     {
         AddressPage addressPage = null;
         final long address;
-        addressPage = pager.getAddressPage(lastPointerPage);
+        addressPage = pager.getAddressPage(lastAddressPage);
         try
         {
             address = addressPage.reserve(dirtyPages);
@@ -148,7 +168,7 @@ public final class Mutator
                 
         final int fullSize = blockSize + Pack.BLOCK_HEADER_SIZE;
        
-        return listOfMoves.mutate(new Guarded<Long>()
+        return moveLatchList.mutate(new Guarded<Long>()
         {
             public Long run(List<MoveLatch> listOfMoves)
             {
@@ -198,6 +218,7 @@ public final class Mutator
         });
     }
 
+    // FIXME Document.
     private UserPage dereference(long address, List<MoveLatch> listOfMoveLatches)
     {
         AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
@@ -221,9 +242,10 @@ public final class Mutator
     }
 
     // TODO Write at offset.
+    // FIXME Document.
     public void write(final long address, final ByteBuffer src)
     {
-        listOfMoves.mutate(new GuardedVoid()
+        moveLatchList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -287,6 +309,7 @@ public final class Mutator
         });
     }
     
+    // FIXME Document.
     public ByteBuffer read(long address)
     {
         ByteBuffer bytes = tryRead(address, null);
@@ -294,14 +317,16 @@ public final class Mutator
         return bytes;
     }
     
+    // FIXME Document.
     public void read(long address, ByteBuffer bytes)
     {
         tryRead(address, bytes);
     }
 
+    // FIXME Document.
     private ByteBuffer tryRead(final long address, final ByteBuffer bytes)
     {
-        return listOfMoves.mutate(new Guarded<ByteBuffer>()
+        return moveLatchList.mutate(new Guarded<ByteBuffer>()
         {
             public ByteBuffer run(List<MoveLatch> listOfMoveLatches)
             {
@@ -350,13 +375,14 @@ public final class Mutator
         });
     }
 
+    // FIXME Comment.
     public void free(final long address)
     {
         if (pager.isStaticPageAddress(address))
         {
             throw new PackException(Pack.ERROR_FREED_STATIC_ADDRESS);
         }
-        listOfMoves.mutate(new GuardedVoid()
+        moveLatchList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -404,6 +430,7 @@ public final class Mutator
         });
     }
     
+    // FIXME Comment.
     private void tryRollback()
     {
         for (long address : mapOfAddresses.keySet())
@@ -417,7 +444,7 @@ public final class Mutator
             dirtyPages.flushIfAtCapacity();
         }
         
-        for (Temporary temporary : listOfTemporaries)
+        for (Temporary temporary : temporaries)
         {
             temporary.rollback(pager);
         }
@@ -429,6 +456,7 @@ public final class Mutator
         pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
     }
     
+    // FIXME Document.
     private void clear(Commit commit)
     {
         journal.reset();
@@ -438,10 +466,11 @@ public final class Mutator
         dirtyPages.clear();
         moveNodeRecorder.clear();
         pageRecorder.clear();
-        listOfTemporaries.clear();
-        lastPointerPage = 0;
+        temporaries.clear();
+        lastAddressPage = 0;
     }
 
+    // FIXME Document.
     public void rollback()
     {
         // Obtain shared lock on the compact lock, preventing pack file
@@ -451,7 +480,7 @@ public final class Mutator
 
         try
         {
-            listOfMoves.mutate(new GuardedVoid()
+            moveLatchList.mutate(new GuardedVoid()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
@@ -791,7 +820,7 @@ public final class Mutator
         try
         {
             final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
-            return tryNewAddressPage(new MoveLatchList(commit, listOfMoves), commit, count); 
+            return tryNewAddressPage(new MoveLatchList(commit, moveLatchList), commit, count); 
         }
         finally
         {
@@ -799,6 +828,7 @@ public final class Mutator
         }
     }
     
+    // FIXME Document.
     private Map<Long, Long> associate(Commit commit)
     {
         SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getUserFromInterimPages());
@@ -879,6 +909,7 @@ public final class Mutator
         }
     }
     
+    // FIXME Document.
     private void buildInterimMoveLatchList(SortedSet<Long> userFromInterimPagesToMove, MoveLatch iterimMoveLatches)
     {
         // For the set of pages in use, add the page to the move list.
@@ -893,6 +924,7 @@ public final class Mutator
         }
     }
 
+    // FIXME Document.
     private void asssignAllocations(Commit commit)
     {
         Map<Long, Long> mapOfCopies = associate(commit);
@@ -1001,6 +1033,7 @@ public final class Mutator
         }
     }
 
+    // FIXME Document.
     private void journalCommits(Map<Long, Movable> mapOfCommits)
     {
         for (Map.Entry<Long, Movable> entry: mapOfCommits.entrySet())
@@ -1314,6 +1347,7 @@ public final class Mutator
         }
     }
 
+    // FIXME Document.
     public void commit()
     {
         final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
@@ -1325,7 +1359,7 @@ public final class Mutator
 
         try
         {
-            tryCommit(new MoveLatchList(commit, listOfMoves), commit);
+            tryCommit(new MoveLatchList(commit, moveLatchList), commit);
         }
         finally
         {
