@@ -102,7 +102,6 @@ public final class Mutator
         this.temporaries = new ArrayList<Temporary>();
     }
     
-    // FIXME Document.
     public Schema getSchema()
     {
         return pager;
@@ -375,46 +374,84 @@ public final class Mutator
         });
     }
 
-    // FIXME Comment.
+    /**
+     * Free a block in the pack. Free will free a block. The block may have been
+     * committed, or it may have been allocated by this mutator. That is, you
+     * can free blocks allocated by a mutator, before they are written by a
+     * commit or discarded by a rollback.
+     * <p>
+     * The client programmer is responsible for synchronizing writes and frees.
+     * A client program must not free an address that is being freed or written
+     * by another mutator.
+     * <p>
+     * The free is isolated, so that a read of the address of a committed block
+     * will still be valid while the free is uncommitted.
+     * 
+     * @param address
+     *            The address of the block to free.
+     */
     public void free(final long address)
     {
+        // User is not allowed to free named blocks.
         if (pager.isStaticPageAddress(address))
         {
             throw new PackException(Pack.ERROR_FREED_STATIC_ADDRESS);
         }
+
+        // Ensure that no pages move.
         moveLatchList.mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
-                boolean unallocated = false;
+                // If true, the block was allocated during this mutation and
+                // does not require a journaled free.
+                boolean unallocate = false;
 
+                // See if the block was allocated during this mutation.  This is
+                // indicated by its presence in the address map with the
+                // negative value of the address as a key. If not, check to see
+                // if there has been a write to the address during this
+                // mutation.
                 Movable movable = mapOfAddresses.get(-address);
                 if (movable != null)
                 {
-                    unallocated = true;
+                    unallocate = true;
                 }
                 else
                 {
                     movable = mapOfAddresses.get(address);
                 }
 
+                // If there is an interim block for the address, we need to free
+                // the interim block.
                 if (movable != null)
                 {
+                    // Find the current block position, adjusted for page moves.
                     long position = movable.getPosition(pager);
                     
-                    BySizeTable bySize = unallocated ? allocPagesBySize : writePagesBySize;
+                    // Figure out which by size table contains the page.  We
+                    // will not reinsert the page if it is not already in the by
+                    // size table.
+                    BySizeTable bySize = unallocate ? allocPagesBySize : writePagesBySize;
                     boolean reinsert = bySize.remove(position) != 0;
                     
+                    // Free the block from the interim page.
                     InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
                     interim.free(address, dirtyPages);
                     
+                    // We remove and reinsert because if we free from the end of
+                    // the block, the bytes remaining will change.
                     if (reinsert)
                     {
                         bySize.add(interim);
                     }
                 }
 
-                if (unallocated)
+                // If we are freeing a block allocated by this mutator, we
+                // simply need to set the file position referenced by the
+                // address to zero. Otherwise, we need to write a journaled free
+                // to the journal.
+                if (unallocate)
                 {
                     AddressPage addresses = pager.getPage(-address, AddressPage.class, new AddressPage());
                     addresses.free(address, dirtyPages);
@@ -430,9 +467,16 @@ public final class Mutator
         });
     }
     
-    // FIXME Comment.
+    /**
+     * Internal implementation of rollback, guarded by the per pager compact
+     * lock and the list of move latches, performs the rollback as described in
+     * the public {@link #rollback()} method.
+     */
     private void tryRollback()
     {
+        // For each address in the isolated address map, if the address is
+        // greater than zero, it is an allocation by this mutator, so we need to
+        // set the file position referenced by the address to zero.
         for (long address : mapOfAddresses.keySet())
         {
             if (address > 0)
@@ -444,19 +488,33 @@ public final class Mutator
             dirtyPages.flushIfAtCapacity();
         }
         
+        
+        // Each of the allocations of temporary blocks, blocks that are returned
+        // by the opener when the file is reopened, needs to be rolled back. 
         for (Temporary temporary : temporaries)
         {
             temporary.rollback(pager);
         }
         
+        // Write any dirty pages.
         dirtyPages.flush();
         
+        // Put the interim pages we used back into the set of free interim
+        // pages.
         pager.getFreeInterimPages().free(pageRecorder.getAllocBlockPages());
         pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
         pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
     }
     
-    // FIXME Document.
+    /**
+     * Reset this mutator for reuse.
+     * <p>
+     * TODO Ensure that the move list does not grow from here and leak.
+     * <p>
+     * TODO Ensure that the move latch list does not grow from here and leak.
+     *
+     * @param commit The state of the commit.
+     */
     private void clear(Commit commit)
     {
         journal.reset();
@@ -766,7 +824,8 @@ public final class Mutator
         // over the block pages that need to move, verbatim into an interim
         // block page and create a commit. The commit method will see these
         // interim block pages will as allocations, it will allocate the
-        // necessary user pages and move them into a new place in the user region.
+        // necessary user pages and move them into a new place in the user
+        // region.
 
         // The way that journals are written, vacuums and copies are written
         // before the operations gathered during mutation are written, so we
@@ -1347,9 +1406,14 @@ public final class Mutator
         }
     }
 
-    // FIXME Document.
+    /**
+     * Commit the changes made to the pack by this mutator. Commit will make the
+     * changes made by this mutator visible to all other mutators. After the
+     * commit is complete, the mutator may be reused.
+     */
     public void commit()
     {
+        // Create a commit structure to track the state of the commit.
         final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
 
         // Obtain shared lock on the compact lock, preventing pack file
@@ -1359,6 +1423,9 @@ public final class Mutator
 
         try
         {
+            // Create a move latch list from our move latch list, with the
+            // commit structure as the move recoder, so that page moves by other
+            // committing mutators will be reflected in state of the commit.
             tryCommit(new MoveLatchList(commit, moveLatchList), commit);
         }
         finally

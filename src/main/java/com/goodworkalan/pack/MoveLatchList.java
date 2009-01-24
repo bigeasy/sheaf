@@ -29,6 +29,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 final class MoveLatchList
 {
+    // FIXME Document.
     private final MoveRecorder recorder;
 
     /**
@@ -43,12 +44,16 @@ final class MoveLatchList
      */
     private final List<MoveLatch> userMoveLatches;
     
+    // FIXME Document.
     private MoveLatch headMoveLatch;
     
+    // FIXME Document.
     private boolean wasLocked;
     
+    // FIXME Document.
     private boolean skipping;
     
+    // FIXME Document.
     public MoveLatchList()
     {
         this.recorder = new NullMoveRecorder();
@@ -57,6 +62,7 @@ final class MoveLatchList
         this.userMoveLatches = new ArrayList<MoveLatch>();
     }
 
+    // FIXME Document.
     public MoveLatchList(MoveRecorder recorder, MoveLatchList listOfMoves)
     {
         this.recorder = recorder;
@@ -116,6 +122,7 @@ final class MoveLatchList
      * Advance the 
      * @param skip
      */
+    // FIXME Document.
     public void skip(MoveLatch skip)
     {
         wasLocked = false;
@@ -133,6 +140,7 @@ final class MoveLatchList
         }
     }
 
+    // FIXME Document.
     public <T> T mutate(final Guarded<T> guarded)
     {
         wasLocked = false;
@@ -154,6 +162,7 @@ final class MoveLatchList
         }
     }
     
+    // FIXME Document.
     public void mutate(GuardedVoid guarded)
     {
         wasLocked = false;
