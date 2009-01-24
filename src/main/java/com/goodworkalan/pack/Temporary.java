@@ -9,6 +9,9 @@ import java.nio.ByteBuffer;
  * the mutator holds onto a list of these temporary journal entries, so that
  * during a rollback, the temporary reference node can be put back into the set
  * of available temporary reference nodes kept by the pager.
+ * <p>
+ * The temporary reference node is itself referenced by an address, so that it
+ * can be relocated like any other block.
  *
  * @author Alan Gutierrez
  */
@@ -18,7 +21,7 @@ extends Operation
     /** The address of the temporary block. */
     private long address;
     
-    /** The file position of the temporary reference node. */
+    /** The address of the temporary reference node. */
     private long temporary;
     
     /**
@@ -32,10 +35,10 @@ extends Operation
     /**
      * Construct an instance of a temporary allocation journal entry that will
      * write the allocation of the temporary black at the given address into the
-     * temporary reference node at the given file position.
+     * temporary reference node at the given address.
      *
      * @param address The address of the temporary block.
-     * @param temporary The file position of the temporary reference node.
+     * @param temporary The address of the temporary reference node.
      */
     public Temporary(long address, long temporary)
     {

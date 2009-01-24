@@ -36,14 +36,12 @@ final class Pager implements Pack
      */
     private final Disk disk;
     
-    /**
-     * Housekeeping information stored at the head of the file.
-     */
+    /** Housekeeping information stored at the head of the file. */
     private final Header header;
 
     /**
-     * A map of URIs to addresses of static pages sized at the creation of the
-     * <code>Pack</code> in the <code>Schema</code>.
+     * A map of URIs that identify the addresses of static blocks specified
+     * at the creation of the pack.
      */
     private final Map<URI, Long> staticPages;
 
@@ -78,14 +76,10 @@ final class Pager implements Pack
      */
     private final ReferenceQueue<RawPage> queue;
 
-    /**
-     * The boundary between address pages and user data pages.
-     */
+    /** The boundary between address pages and user data pages. */
     private final Boundary userBoundary;
     
-    /**
-     * The boundary between user data pages and interim data pages.
-     */
+    /** The boundary between user data pages and interim data pages. */
     private final Boundary interimBoundary;
 
     /**
@@ -113,14 +107,13 @@ final class Pager implements Pack
     private final BySizeTable freePageBySize;
     
     /**
-     * Map of temporary node positions to byte buffers containing the file
-     * position value at the temporary node position.
+     * Map of temporary node addresses to byte buffers containing the address
+     * value at the temporary node position.
      */
     private final Map<Long, ByteBuffer> temporaryNodes;
     
     /**
-     * Map of temporary block addresses to temporary node reference file
-     * positions.
+     * Map of temporary block addresses to temporary reference node addreses.
      */
     private final Map<Long, Long> temporaries;
 
@@ -165,10 +158,34 @@ final class Pager implements Pack
      * interim page area.
      */
     private final Object expandMutex;
-    
-    // FIXME Document.
-    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> staticPages, SortedSet<Long> setOfAddressPages,
-        long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> temporaryNodes)
+
+    /**
+     * Create a new pager.
+     * 
+     * @param file
+     *            The file where this pager writes its contents.
+     * @param fileChannel
+     *            An file channel opened on the associated file.
+     * @param disk
+     *            Wrapper interface to file channel to allow for IO error
+     *            simulation during testing.
+     * @param header
+     *            Housekeeping information stored at the head of the file.
+     * @param staticPages
+     *            A map of URIs that identify the addresses of static blocks
+     *            specified at the creation of the pack.
+     * @param addressPages
+     *            A set of address pages with available free addresses.
+     * @param userBoundary
+     *            The boundary between address pages and user data pages.
+     * @param interimBoundary
+     *            The boundary between user data pages and interim data pages.
+     * @param temporaryNodes
+     *            Map of temporary node addresses to byte buffers containing the
+     *            address value at the temporary node position.
+     */
+    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> staticPages, SortedSet<Long> addressPages,
+        long userBoundary, long interimBoundary, Map<Long, ByteBuffer> temporaryNodes)
     {
         this.file = file;
         this.fileChannel = fileChannel;
@@ -176,7 +193,7 @@ final class Pager implements Pack
         this.header = header;
         this.alignment = header.getAlignment();
         this.pageSize = header.getPageSize();
-        this.userBoundary = new Boundary(pageSize, dataBoundary);
+        this.userBoundary = new Boundary(pageSize, userBoundary);
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
         this.rawPageByPosition = new HashMap<Long, PageReference>();
         this.freePageBySize = new BySizeTable(pageSize, alignment);
@@ -188,7 +205,7 @@ final class Pager implements Pack
         this.expandMutex = new Object();
         this.moveLatchList = new MoveLatchList();
         this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
-        this.addressPages = setOfAddressPages;
+        this.addressPages = addressPages;
         this.returningAddressPages = new HashSet<Long>();
         this.temporaryNodes = temporaryNodes;
         this.temporaries = temporaries(temporaryNodes);
@@ -196,14 +213,14 @@ final class Pager implements Pack
     }
 
     /**
-     * Create a map of temporary block addresses to the file position of their
+     * Create a map of temporary block addresses to the address of their
      * temporary reference node.
      * 
      * @param temporaryNodes
-     *            Map of temporary node positions to byte buffers containing the
-     *            file position value at the temporary node position.
-     * @return A map of temporary block addresses to temporary node reference
-     *         positions.
+     *            Map of temporary reference node addresses to byte buffers
+     *            containing the address value at the temporary node position.
+     * @return A map of temporary block addresses to temporary reference node
+     *         addresses.
      */
     private static Map<Long, Long> temporaries(Map<Long, ByteBuffer> temporaryNodes)
     {
@@ -279,7 +296,7 @@ final class Pager implements Pack
 
     /**
      * Get the set of position headers used to reserve journal headers.
-     *
+     * 
      * @return The set of position headers.
      */
     public PositionSet getJournalHeaders()
@@ -287,7 +304,12 @@ final class Pager implements Pack
         return journalHeaders;
     }
 
-    // FIXME Document.
+    /**
+     * Return the position of the first address page, which may be offset from
+     * an aligned page start, in order to accommodate the header.
+     * 
+     * @return The first address page position.
+     */
     public long getFirstAddressPageStart()
     {
         return header.getFirstAddressPageStart();
@@ -331,20 +353,65 @@ final class Pager implements Pack
     {
         return addressLocker;
     }
-    
-    // FIXME Document.
+
+    /**
+     * Return a best fit lookup table of user pages with space remaining for
+     * block allocation. This lookup table is used to find destinations for
+     * newly allocated user blocks during commit.
+     * <p>
+     * A user page is used by one mutator commit at a time. Removing the page
+     * from this table prevents it from being used by another commit.
+     * <p>
+     * Removing a page from this set, prevents it from being used by an
+     * allocation. Removing a page from the available pages sets is the first
+     * step in relocating a page.
+     * <p>
+     * Note that here is no analgous list of free interim pages by size, since
+     * interim block pages are not shared between mutators and they are
+     * completely reclaimed at the end of a mutation.
+     * 
+     * @return The best fit lookup table of user pages.
+     */
     public BySizeTable getFreePageBySize()
     {
         return freePageBySize;
     }
-    
-    // FIXME Document.
+
+    /**
+     * Return the set of completely empty user pages available for block
+     * allocation. The set returned is a class that not only contains the set of
+     * pages available, but will also prevent a page from being returned to the
+     * set of free pages, if that page is midst of relocation.
+     * <p>
+     * A user page is used by one mutator commit at a time. Removing the page
+     * from this table prevents it from being used by another commit.
+     * <p>
+     * Removing a page from this set, prevents it from being used by an
+     * destination for allocations or writes. Removing a page from the available
+     * pages sets is the first step in relocating a page.
+     * 
+     * @return The set of free user pages.
+     */
     public FreeSet getFreeUserPages()
     {
         return freeUserPages;
     }
     
-    // FIXME Document.
+    /**
+     * Return the set of completely empty interim pages available for block
+     * allocation. The set returned is a class that not only contains the set of
+     * pages available, but will also prevent a page from being returned to the
+     * set of free pages, if that page is in the midst of relocation.
+     * <p>
+     * A user page is used by one mutator commit at a time. Removing the page
+     * from this table prevents it from being used by another commit.
+     * <p>
+     * Removing a page from this set, prevents it from being used as an interim
+     * page for an allocation or write. Removing a page from the available pages
+     * sets is the first step in relocating a page.
+     *
+     * @return The set of free user pages.
+     */
     public FreeSet getFreeInterimPages()
     {
         return freeInterimPages;
@@ -354,14 +421,24 @@ final class Pager implements Pack
      * Return the per pack mutex used to ensure that only one mutator at a time
      * is moving pages in the interim page area.
      * 
-     * @return The user region expand expand mutex. 
+     * @return The user region expand expand mutex.
      */
     public Object getUserExpandMutex()
     {
         return expandMutex;
     }
-    
-    // FIXME Document.
+
+    /**
+     * A read/write lock on the pager used to prevent compaction during rollback
+     * or commit. Compaction is not yet implemented, but it is expected to wreck
+     * havoc on normal operation, and should be done exclusively.
+     * <p>
+     * The complact lock is also held exclusively while closing the file, in
+     * order to wait for any rollbacks or commits to complete, and to prevent
+     * any rollbacks or commits to initiate during close.
+     * 
+     * @return The compact read/write lock.
+     */
     public ReadWriteLock getCompactLock()
     {
         return compactLock;
@@ -381,7 +458,7 @@ final class Pager implements Pack
      * Create a <code>Mutator</code> to inspect and alter the contents of this
      * pack.
      * 
-     * @return A new {@link Mutator}.
+     * @return A new mutator.
      */
     public Mutator mutate()
     {
@@ -468,21 +545,21 @@ final class Pager implements Pack
         }
         rawPageByPosition.put(intended.getPosition(), intended);
     }
-    
+
     /**
-     * Allocate a new interim position that is initialized by the
-     * specified page strategy.
+     * Allocate a new interim position that is initialized by the specified page
+     * strategy.
      * <p>
      * This method can only be called from within one of the
      * <code>MoveList.mutate</code> methods. A page obtained from the set of
      * free interim pages will not be moved while the move list is locked
-     * shared. 
+     * shared.
      * 
      * @param <T>
      *            The page strategy for the position.
      * @param page
-     *            An instance of the page strategy that will initialize
-     *            the page at the position.
+     *            An instance of the page strategy that will initialize the page
+     *            at the position.
      * @param dirtyPages
      *            A map of dirty pages.
      * @return A new interim page.
@@ -521,16 +598,16 @@ final class Pager implements Pack
     /**
      * Return an interim page for use as a move destination.
      * <p>
-     * Question: How do we ensure that free interim pages do not slip into
-     * the user data page section? That is, how do we ensure that we're
-     * not moving an interim page to a spot that also needs to move?
+     * Question: How do we ensure that free interim pages do not slip into the
+     * user data page section? That is, how do we ensure that we're not moving
+     * an interim page to a spot that also needs to move?
      * <p>
-     * Simple. We gather all the pages that need to move first. Then we
-     * assign blank pages only to the pages that are in use and need to
-     * move. See <code>tryMove</code> for more discussion.
+     * Simple. We gather all the pages that need to move first. Then we assign
+     * blank pages only to the pages that are in use and need to move. See
+     * <code>tryMove</code> for more discussion.
      * 
-     * @return A blank position in the interim area that for use as the
-     *         target of a move.
+     * @return A blank position in the interim area that for use as the target
+     *         of a move.
      */
     public long newBlankInterimPage()
     {
@@ -542,12 +619,20 @@ final class Pager implements Pack
         return position;
     }
 
-    // FIXME Document.
+    /**
+     * Get a raw page from the map of pages by position. If the page reference
+     * does not exist in the map of pages by position, or if the page reference
+     * has been garbage collected, this method returns null.
+     * 
+     * @param position
+     *            The position of the raw page.
+     * @return The page currently mapped to the position or null if no page is
+     *         mapped.
+     */
     private RawPage getRawPageByPosition(long position)
     {
         RawPage page = null;
-        Long boxPosition = new Long(position);
-        PageReference chunkReference = rawPageByPosition.get(boxPosition);
+        PageReference chunkReference = rawPageByPosition.get(position);
         if (chunkReference != null)
         {
             page = chunkReference.get();
@@ -555,7 +640,45 @@ final class Pager implements Pack
         return page;
     }
 
-    // FIXME Document.
+    /**
+     * Get a given page implementation of an underlying raw page for the given
+     * position. If the page does not exist, the given page instance is used to
+     * load the contents of the underlying raw page. Creation of the page is
+     * syncrhronized so that all mutators will reference the same instace of
+     * <code>Page</code> and <code>RawPage</code>.
+     * <p>
+     * If the given page class is a subclass of the page instance currenlty
+     * mapped to the page position, the given page is used to load the contents
+     * of the underlying raw page and the current page instance is replaced with
+     * the subclass page instance. This is used to upgrade a relocatable page,
+     * to a specific type of relocatable page (journal, user block, or interim
+     * block).
+     * <p>
+     * If the given page class is a superclass of the page instance currently
+     * mappsed to the page position, the current page is returned.
+     * <p>
+     * The page instance is one that is created solely for this invocation of
+     * <code>getPage</code>. It a page of the correct type is in the map of
+     * pages by position, the given page instance is ignored and left for the
+     * garbage collector.
+     * <p>
+     * The given page class is nothing more than a type token, to cast the page
+     * to correct page type, without generating unchecked cast compiler
+     * warnings.
+     * <p>
+     * TODO What happens when I return a journal page to the set of free interim
+     * pages and it comes back as a block page?
+     * 
+     * @param position
+     *            The page postion.
+     * @param pageClass
+     *            A type token indicating the type of page, used to cast the
+     *            page.
+     * @param page
+     *            An instance to used to load the page if the page does not
+     *            exist in the page map.
+     * @return The page of the given type for the given position.
+     */
     public <P extends Page> P getPage(long position, Class<P> pageClass, P page)
     {
         position = (long) Math.floor(position - (position % pageSize));
@@ -594,7 +717,27 @@ final class Pager implements Pack
         return pageClass.cast(rawPage.getPage());
     }
 
-    // FIXME Document.
+    /**
+     * Set the page at the given position in the map of raw pages by position,
+     * to the given page class and given page. This method is called after a
+     * page has been moved and its type has been changed, from user block page
+     * to address page, or from interim page to user block page.
+     * 
+     * @param position
+     *            The page position.
+     * @param pageClass
+     *            A type token indicating the type of page, used to cast the
+     *            page.
+     * @param page
+     *            An instance to used to load the page if the page does not
+     *            exist in the page map.
+     * @param dirtyPages
+     *            The set of dirty pages.
+     * @param extant
+     *            If false, the method will assert that the page does not
+     *            already exist in the map of pages by position.
+     * @return The page given.
+     */
     public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages, boolean extant)
     {
         position =  position / pageSize * pageSize;
@@ -609,7 +752,7 @@ final class Pager implements Pack
                 {
                     throw new IllegalStateException();
                 }
-                // Not sure about this. Maybe lock on existing?
+                // TODO Not sure about this. Maybe lock on existing?
                 synchronized (existing)
                 {
                     page.create(existing, dirtyPages);
@@ -630,8 +773,8 @@ final class Pager implements Pack
      * create address pages by moving user pages if there are none available or
      * outstanding.
      * <p>
-     * The caller can allocate one and only address from address page
-     * returned. It must then return the address page to the pager.
+     * The caller can allocate one and only address from address page returned.
+     * It must then return the address page to the pager.
      * 
      * @param lastSelected
      *            The last selected address page, which we will try to return if
@@ -785,17 +928,35 @@ final class Pager implements Pack
     }
 
     /**
-     * Create a journal entry that will write a temporary node reference
+     * Create a journal entry that will write a temporary node reference for the
+     * given block address. The temporary journal entry is also used to rollback
+     * the assignment of a temporary reference node to the temporary block, if
+     * should the mutator rollback.
      * <p>
-     * FIXME a temporary node for the given temporary block address.
+     * This method will assign the given address to a free temporary node
+     * reference, If there is no free temporary node reference, it will allocate
+     * one by creating a mutator for the sole purpose of extending the list.
+     * <p>
+     * The list of temporary reference nodes will grow but never shrink. The
+     * temporary reference nodes will be reused when temporary blocks are freed.
+     * 
+     * @param address
+     *            The address of the temporary block.
+     * 
+     * @see Temporary
      */
     public Temporary getTemporary(long address)
     {
+        // Synchronize temporary list manipulation on the temporary node map. 
         Temporary temporary = null;
         synchronized (temporaryNodes)
         {
             BUFFERS: for (;;)
             {
+                // Find an empty temporary reference node, or failing that,
+                // take node of the last temporary reference node in the linked
+                // list of temporary reference nodes in order to append a new
+                // temporary reference node later.
                 Map.Entry<Long, ByteBuffer> last = null;
                 for (Map.Entry<Long, ByteBuffer> entry : temporaryNodes.entrySet())
                 {
@@ -850,22 +1011,29 @@ final class Pager implements Pack
 
         return temporary;
     }
-    
+
     /**
      * Set the temporary node at the given temporary node position to reference
-     * the given block address.
-     *
-     * @param address The temporary block address.
-     * @param temporary The position of the temporary reference node.
-     * @param dirtyPages The set of dirty pages.
+     * the given block address. This method is used by the temporary journal
+     * entry to set the value of the temporary reference node.
+     * 
+     * @param address
+     *            The temporary block address.
+     * @param temporary
+     *            The address of the temporary reference node.
+     * @param dirtyPages
+     *            The set of dirty pages.
      */
     public void setTemporary(long address, long temporary, DirtyPageSet dirtyPages)
     {
+        // Synchronize temporary list manipulation on the temporary node map. 
         synchronized (temporaryNodes)
         {
             ByteBuffer bytes = temporaryNodes.get(temporary);
             bytes.putLong(0, address);
             bytes.clear();
+
+            // Use the checked address dereference to find the  
             AddressPage addresses = getPage(temporary, AddressPage.class, new AddressPage());
             long lastPosition = 0L;
             for (;;)
@@ -899,6 +1067,7 @@ final class Pager implements Pack
      */
     public void freeTemporary(long address, DirtyPageSet dirtyPages)
     {
+        // Synchronize temporary list manipulation on the temporary node map. 
         synchronized (temporaryNodes)
         {
             Long temporary = temporaries.get(address);
@@ -913,11 +1082,14 @@ final class Pager implements Pack
      * Return a temporary block reference to the pool of temporary block
      * references as the result of a rollback of a commit.
      * 
-     * @param address The address of the temporary block.
-     * @param temporary The temporary block 
+     * @param address
+     *            The address of the temporary block.
+     * @param temporary
+     *            The address of temporary reference node.
      */
     public void rollbackTemporary(long address, long temporary)
     {
+        // Synchronize temporary list manipulation on the temporary node map. 
         synchronized (temporaryNodes)
         {
             temporaries.remove(address);
@@ -963,7 +1135,7 @@ final class Pager implements Pack
      * reference and running <code>collect</code>.
      * 
      * @param position
-     *            The position of the page to remove.
+     *            The position of the raw page to remove.
      * @return The page currently mapped to the position or null if no page is
      *         mapped.
      */
