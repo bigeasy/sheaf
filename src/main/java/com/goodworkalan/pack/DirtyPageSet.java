@@ -74,7 +74,6 @@ public final class DirtyPageSet
         {
             synchronized (rawPage)
             {
-                rawPage.getPage().checksum(getChecksum());
                 try
                 {
                     rawPage.write(pager.getDisk(), pager.getFileChannel());

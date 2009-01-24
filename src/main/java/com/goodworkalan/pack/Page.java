@@ -1,7 +1,5 @@
 package com.goodworkalan.pack;
 
-import java.util.zip.Checksum;
-
 /**
  * Derived classes implement the address, block, journal formats of an
  * underlying page in a Pack file. The <code>Page</code> interface is a
@@ -81,10 +79,4 @@ interface Page
      * @see Pager#getPage
      */
     public void load(RawPage rawPage);
-    
-    /** TODO Remove. */
-    public void checksum(Checksum checksum);
-    
-    /** TODO Remove. */
-    public boolean verifyChecksum(RawPage rawPage, Recovery recovery);
 }

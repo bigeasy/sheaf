@@ -7,10 +7,8 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
@@ -137,7 +135,7 @@ public final class Opener
         
         if (shutdown == Pack.HARD_SHUTDOWN)
         {
-            return hardOpen(file, fileChannel, header);
+            return null;
         }
 
         return softOpen(file, fileChannel, header);
@@ -248,188 +246,5 @@ public final class Opener
                           mapOfTemporaryArrays);
         
         return pager;
-    }
-    
-    public boolean isBlockPage(RawPage rawPage, Recovery recovery)
-    {
-        long position = rawPage.getPosition();
-        long first = rawPage.getPager().getFirstAddressPageStart();
-        if (position < first)
-        {
-            int pageSize = rawPage.getPager().getPageSize();
-            if (position == first / pageSize * pageSize)
-            {
-                return false;
-            }
-            throw new IllegalStateException();
-        }
-        ByteBuffer peek = rawPage.getByteBuffer();
-        if (peek.getInt(Pack.CHECKSUM_SIZE) < 0)
-        {
-            return true;
-        }
-        return false;
-    }
-
-    private Pack addressRecover(Recovery recovery)
-    {
-        // Clever data structure to track data pages has count of 
-        // blocks, maps page to count of blocks. If not exist, check
-        // and add with one less, then decrement each time checked.
-        // Uh, yeah, so I don't checksum and recover twice. Or else,
-        // just checksum and recover, hey, it's just a more convoluted load.
-        // Definitely keep a set of failed checksums.
-        Pager pager = recovery.getPager();
-        
-        long position = (pager.getUserBoundary().getPosition() - 1) / pager.getPageSize() * pager.getPageSize();
-        
-        RawPage rawPage = new RawPage(pager, position);
-        if (isBlockPage(rawPage, recovery))
-        {
-            throw new PackException(Pack.ERROR_CORRUPT);
-        }
-        
-        if (new AddressPage().verifyChecksum(rawPage, recovery))
-        {
-            AddressPage addresses = pager.getPage(position, AddressPage.class, new AddressPage());
-            addresses.verifyAddresses(recovery);
-        }
-        else
-        {
-            recovery.badAddressChecksum(position);
-        }
-        
-        position += recovery.getPager().getPageSize();
-
-        while (position < recovery.getFileSize())
-        {
-            rawPage = new RawPage(pager, position);
-            BlockPage test = new UserPage();
-            test.verifyChecksum(rawPage, recovery);
-            if (isBlockPage(rawPage, recovery))
-            {
-                break;
-            }
-            AddressPage addresses = new AddressPage();
-            if (addresses.verifyChecksum(rawPage, recovery))
-            {
-                addresses = pager.getPage(position, AddressPage.class, addresses);
-                if (addresses.verifyAddresses(recovery))
-                {
-                    if (addresses.getFreeCount() != 0)
-                    {
-                        pager.addAddressPage(addresses);
-                    }
-                }
-            }
-            else
-            {
-                recovery.badAddressChecksum(position);
-            }
-            position += recovery.getPager().getPageSize();
-            pager.getUserBoundary().increment();
-            pager.getInterimBoundary().increment();
-        }
-
-        for (;;)
-        {
-            pager.getInterimBoundary().increment();
-            BlockPage blocks = new UserPage();
-            if (blocks.verifyChecksum(rawPage, recovery))
-            {
-                blocks = pager.getPage(position, BlockPage.class, blocks);
-                if (blocks.verifyAddresses(recovery))
-                {
-                    pager.returnUserPage(blocks);
-                }
-            }
-            else
-            {
-                recovery.badUserChecksum(position);
-            }
-            position += recovery.getPager().getPageSize();
-            if (position >= recovery.getFileSize())
-            {
-                break;
-            }
-            rawPage = new RawPage(pager, position);
-            if (!isBlockPage(rawPage, recovery))
-            {
-                break;
-            }
-        }
-        
-        pager.close();
-        
-        if (recovery.copacetic())
-        {
-            return open(pager.getFile());
-        }
-        
-        return null;
-    }
-    
-    private Pack journalRecover(Recovery recovery)
-    {
-        throw new UnsupportedOperationException();
-    }
-    
-    private Pack hardOpen(File file, FileChannel fileChannel, Header header)
-    {
-        if (header.getInternalJournalCount() < 0)
-        {
-            throw new PackException(Pack.ERROR_HEADER_CORRUPT);
-        }
-        ByteBuffer journals = ByteBuffer.allocate(header.getInternalJournalCount() * Pack.POSITION_SIZE);
-        try
-        {
-            disk.read(fileChannel, journals, Pack.FILE_HEADER_SIZE);
-        }
-        catch (IOException e)
-        {
-            throw new PackException(Pack.ERROR_IO_READ, e);
-        }
-        journals.flip();
-        List<Long> listOfUserJournals = new ArrayList<Long>();
-        List<Long> listOfAddressJournals = new ArrayList<Long>();
-        while (journals.remaining() != 0)
-        {
-            long journal = journals.getLong();
-            if (journal < 0)
-            {
-                listOfAddressJournals.add(journal);
-            }
-            else if (journal > 0)
-            {
-                listOfUserJournals.add(journal);
-            }
-        }
-        long fileSize;
-        try
-        {
-            fileSize = disk.size(fileChannel);
-        }
-        catch (IOException e)
-        {
-            throw new PackException(Pack.ERROR_IO_SIZE, e);
-        }
-
-        Offsets offsets = new Offsets(header.getPageSize(), header.getInternalJournalCount(), header.getStaticPageSize());
-        // First see if we can get to the data section cleanly.We're not
-        // going to anything but checksum.
-        
-        Map<Long, ByteBuffer> mapOfTemporaryArrays = new HashMap<Long, ByteBuffer>();
-        Pager pager = new Pager(file, fileChannel, disk, header,
-                                new HashMap<URI, Long>(),
-                                new TreeSet<Long>(),
-                                offsets.getDataBoundary(),
-                                offsets.getDataBoundary(),
-                                mapOfTemporaryArrays);
-        if (listOfAddressJournals.size() == 0 && listOfUserJournals.size() == 0)
-        {
-            return addressRecover(new Recovery(pager, fileSize, true));
-        }
-
-        return journalRecover(new Recovery(pager, fileSize, false));
     }
 }

@@ -144,14 +144,6 @@ extends RelocatablePage
         }
     }
 
-    @Override
-    public void checksum(Checksum checksum)
-    {
-        ByteBuffer bytes = getRawPage().getByteBuffer();
-        bytes.putLong(0, getChecksum(checksum));
-        getRawPage().invalidate(0, Pack.CHECKSUM_SIZE);
-    }
-
     protected int getBlockSize(ByteBuffer bytes)
     {
         int blockSize = bytes.getInt(bytes.position());
@@ -312,15 +304,16 @@ extends RelocatablePage
         }
         return null;
     }
-    
+
     /**
-     * TODO Note that we can keep this to checksum mirroring, but we do not
-     * want to keep this to checksum each page. Rather, we are going to add
-     * an imprint to each block.
-     * <p> 
+     * TODO Note that we can keep this to checksum mirroring, but we do not want
+     * to keep this to checksum each page. Rather, we are going to add an
+     * imprint to each block.
+     * <p>
      * Note that this must be called in a synchronized block.
      * 
-     * @param checksum The checksum to use.
+     * @param checksum
+     *            The checksum to use.
      * 
      * @return A checksum.
      */
@@ -356,95 +349,5 @@ extends RelocatablePage
         }
         
         return checksum.getValue();
-    }
-
-    public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
-    {
-        Checksum checksum = recovery.getChecksum();
-        checksum.reset();
-        
-        ByteBuffer bytes = rawPage.getByteBuffer();
-        bytes.position(Pack.CHECKSUM_SIZE);
-        
-        for (int i = 0; i < Integer.SIZE / Byte.SIZE; i++)
-        {
-            checksum.update(bytes.get());
-        }
-        
-        int count = bytes.getInt(Pack.CHECKSUM_SIZE);
-        if ((count & Pack.COUNT_MASK) != 0)
-        {
-            count = (count & ~Pack.COUNT_MASK);
-        }
-        
-        int block = 0;
-        while (block < count)
-        {
-            int size = bytes.getInt(bytes.position());
-            
-            if (Math.abs(size) > bytes.remaining())
-            {
-                recovery.corruptDataPage(rawPage.getPosition());
-                return false;
-            }
-            
-            if (size > 0)
-            {
-                block++;
-                for (int i = 0; i < size; i++)
-                {
-                    checksum.update(bytes.get());
-                }
-            }
-            else
-            {
-                advance(bytes, size);
-            }
-        }
-        
-        long expected = checksum.getValue();
-        long actual = bytes.getLong(0);
-        
-        if (expected != actual)
-        {
-            recovery.badUserChecksum(rawPage.getPosition());
-            return false;
-        }
-        
-        return true;
-    }
-    
-    public boolean verifyAddresses(Recovery recovery)
-    {
-        boolean copacetic = true;
-        Pager pager = getRawPage().getPager();
-        ByteBuffer bytes = getBlockRange();
-        int block = 0;
-        while (block < count)
-        {
-            int size = getBlockSize(bytes);
-            if (size > 0)
-            {
-                block++;
-                long address = getAddress(bytes);
-                if (address < pager.getFirstAddressPageStart() + Pack.ADDRESS_PAGE_HEADER_SIZE
-                    || address >= pager.getUserBoundary().getPosition())
-                {
-                    recovery.badUserAddress(getRawPage().getPosition(), address);
-                    copacetic = false;
-                }
-                AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
-                if (getRawPage().getPosition() != addresses.dereference(address))
-                {
-                    recovery.badUserAddress(getRawPage().getPosition(), address);
-                    copacetic = false;
-                }
-            }
-            else
-            {
-                advance(bytes, size);
-            }
-        }
-        return copacetic;
     }
 }

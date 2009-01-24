@@ -2,8 +2,6 @@ package com.goodworkalan.pack;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.zip.Checksum;
-
 
 class RelocatablePage
 implements Page
@@ -27,16 +25,6 @@ implements Page
         return rawPage;
     }
     
-    public void checksum(Checksum checksum)
-    {
-        throw new UnsupportedOperationException();
-    }
-    
-    public boolean verifyChecksum(RawPage rawPage, Recovery recovery)
-    {
-        throw new UnsupportedOperationException();
-    }
-
     /**
      * Relocate a page from one position to another writing it out
      * immediately. This method does not use a dirty page map, the page

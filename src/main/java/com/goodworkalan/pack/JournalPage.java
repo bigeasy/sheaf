@@ -39,7 +39,6 @@ extends RelocatablePage
      * 
      * @param checksum The checksum algorithm.
      */
-    @Override
     public void checksum(Checksum checksum)
     {
         checksum.reset();
