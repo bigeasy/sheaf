@@ -224,8 +224,7 @@ public final class Opener
             throw new PackException(Pack.ERROR_IO_FORCE, e);
         }
 
-        Pack pack = new Pack(pager);
-        Mutator mutator = pack.mutate();
+        Mutator mutator = pager.mutate();
         
         long temporaries = header.getTemporaries();
         do
@@ -248,7 +247,7 @@ public final class Opener
                           openBoundary,
                           mapOfTemporaryArrays);
         
-        return new Pack(pager);
+        return pager;
     }
     
     public boolean isBlockPage(RawPage rawPage, Recovery recovery)

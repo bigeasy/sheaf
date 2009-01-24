@@ -6,6 +6,7 @@ import java.lang.ref.ReferenceQueue;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -21,8 +22,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * 
  * FIXME Javadoc for this class must be done first.
  */
-final class Pager
-implements Schema
+final class Pager implements Pack
 {
     /** The file where this pager writes its contents. */
     private final File file;
@@ -167,7 +167,7 @@ implements Schema
     private final Object expandMutex;
     
     // FIXME Document.
-    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> mapOfStaticPages, SortedSet<Long> setOfAddressPages,
+    public Pager(File file, FileChannel fileChannel, Disk disk, Header header, Map<URI, Long> staticPages, SortedSet<Long> setOfAddressPages,
         long dataBoundary, long interimBoundary, Map<Long, ByteBuffer> temporaryNodes)
     {
         this.file = file;
@@ -180,7 +180,7 @@ implements Schema
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
         this.rawPageByPosition = new HashMap<Long, PageReference>();
         this.freePageBySize = new BySizeTable(pageSize, alignment);
-        this.staticPages = mapOfStaticPages;
+        this.staticPages = Collections.unmodifiableMap(staticPages);
         this.freeUserPages = new FreeSet();
         this.freeInterimPages = new FreeSet();
         this.queue = new ReferenceQueue<RawPage>();
@@ -272,21 +272,9 @@ implements Schema
         return alignment;
     }
     
-    // FIXME Document.
-    public long getStaticPageAddress(URI uri)
+    public Map<URI, Long> getStaticPages()
     {
-        return staticPages.get(uri);
-    }
-    
-    /**
-     * Return true if the block address is mapped from a static named block.
-     *
-     * @param address A block address.
-     * @return True if the block address is a static named block address.
-     */
-    public boolean isStaticPageAddress(long address)
-    {
-        return staticPages.containsValue(address);
+        return staticPages;
     }
 
     /**
@@ -389,6 +377,28 @@ implements Schema
         }
     }
 
+    /**
+     * Create a <code>Mutator</code> to inspect and alter the contents of this
+     * pack.
+     * 
+     * @return A new {@link Mutator}.
+     */
+    public Mutator mutate()
+    {
+        final PageRecorder pageRecorder = new PageRecorder();
+        final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
+        return listOfMoves.mutate(new Guarded<Mutator>()
+        {
+            public Mutator run(List<MoveLatch> listOfMoveLatches)
+            {
+                MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
+                DirtyPageSet dirtyPages = new DirtyPageSet(Pager.this, 16);
+                Journal journal = new Journal(Pager.this, moveNodeRecorder, pageRecorder, dirtyPages);
+                return new Mutator(Pager.this, listOfMoves, moveNodeRecorder, pageRecorder, journal, dirtyPages);
+            }
+        });
+    }
+    
     /**
      * Allocate a new page from the end of the file by extending the length of
      * the file.
@@ -1060,6 +1070,11 @@ implements Schema
             }
         }
         return position + offset;
+    }
+    
+    public void copacetic()
+    {
+        // TODO Auto-generated method stub
     }
 
     /**

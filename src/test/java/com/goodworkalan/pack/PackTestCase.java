@@ -311,8 +311,7 @@ public class PackTestCase
         mutator.commit();
         pack.close();
         
-        pack = new Opener().open(file);
-        Pager pager = pack.pager;
+        Pager pager = (Pager) new Opener().open(file);
         Page page = pager.getPage(8192, RelocatablePage.class, new RelocatablePage());
         page = pager.getPage(8192, UserPage.class, new UserPage());
         assertEquals(8192, page.getRawPage().getPosition());
@@ -686,7 +685,7 @@ public class PackTestCase
         File file = newFile();
         Pack pack = creator.create(file);
         Mutator mutator = pack.mutate();
-        mutator.write(mutator.getSchema().getStaticPageAddress(URI.create("http://one.com/")), get64bytes());
+        mutator.write(mutator.getPack().getStaticPages().get(URI.create("http://one.com/")), get64bytes());
         mutator.commit();
     }
     

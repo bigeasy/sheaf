@@ -2,12 +2,13 @@
 package com.goodworkalan.pack;
 
 import java.io.File;
-import java.util.List;
+import java.net.URI;
+import java.util.Map;
 
 /**
  * Management of a file as a reusable randomly accessible blocks of data.
  */
-public class Pack
+public interface Pack
 {
     /**
      * A constant value of the null address value of 0.
@@ -100,58 +101,33 @@ public class Pack
     
     final static int COUNT_MASK = 0xA0000000;
     
-    final Pager pager;
-    
     /**
-     * Create a new pack from the specified pager.
-     * <p>
-     * One of these days, I'll have to determine if the pager class contents
-     * could be within the pack.
+     * Get the size of all underlying pages managed by this pager.
+     * 
+     * @return The page size.
      */
-    public Pack(Pager pager)
-    {
-        this.pager = pager;
-    }
+    public int getPageSize();
 
     /**
-     * Create a <code>Mutator</code> to inspect and alter the contents of this
-     * pack.
+     * Return the alignment to which all block allocations are rounded.
      * 
-     * @return A new {@link Mutator}.
+     * @return The block alignment.
      */
-    public Mutator mutate()
-    {
-        final PageRecorder pageRecorder = new PageRecorder();
-        final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, pager.getMoveLatchList());
-        return listOfMoves.mutate(new Guarded<Mutator>()
-        {
-            public Mutator run(List<MoveLatch> listOfMoveLatches)
-            {
-                MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
-                DirtyPageSet dirtyPages = new DirtyPageSet(pager, 16);
-                Journal journal = new Journal(pager, moveNodeRecorder, pageRecorder, dirtyPages);
-                return new Mutator(pager, listOfMoves, moveNodeRecorder, pageRecorder, journal, dirtyPages);
-            }
-        });
-    }
+    public int getAlignment();
 
     /**
      * Soft close of the pack will wait until all mutators commit or rollback
      * and then compact the pack before closing the file.
      */
-    public void close()
-    {
-        pager.close();
-    }
+    public void close();
     
-    public File getFile()
-    {
-        return pager.getFile();
-    }
+    public Mutator mutate();
+    
+    public File getFile();
 
-    public void copacetic()
-    {
-    }
+    public void copacetic();
+    
+    public Map<URI, Long> getStaticPages();
 }
 
 /* vim: set et sw=4 ts=4 ai tw=80 nowrap: */

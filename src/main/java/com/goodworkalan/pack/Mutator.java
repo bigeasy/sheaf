@@ -102,7 +102,7 @@ public final class Mutator
         this.temporaries = new ArrayList<Temporary>();
     }
     
-    public Schema getSchema()
+    public Pack getPack()
     {
         return pager;
     }
@@ -393,7 +393,7 @@ public final class Mutator
     public void free(final long address)
     {
         // User is not allowed to free named blocks.
-        if (pager.isStaticPageAddress(address))
+        if (pager.getStaticPages().containsValue(address))
         {
             throw new PackException(Pack.ERROR_FREED_STATIC_ADDRESS);
         }

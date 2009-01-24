@@ -49,7 +49,11 @@ public final class Creator
         this.internalJournalCount = internalJournalCount;
     }
     
-    public void setDisk(Disk disk)
+    /**
+     * Implements a wrapper around 
+     * @param disk
+     */
+    void setDisk(Disk disk)
     {
         this.disk = disk;
     }
@@ -166,9 +170,7 @@ public final class Creator
         
         pager.returnUserPage(blocks);
         
-        Pack pack = new Pack(pager);
-        
-        Mutator mutator = pack.mutate();
+        Mutator mutator = pager.mutate();
         
         header.setTemporaries(mutator.allocate(Pack.ADDRESS_SIZE * 2));
         ByteBuffer temporaries = mutator.read(header.getTemporaries());
@@ -221,7 +223,7 @@ public final class Creator
             throw new PackException(Pack.ERROR_IO_WRITE, e);
         }
 
-        pack.close();
+        pager.close();
         
         Opener opener = new Opener();
         
