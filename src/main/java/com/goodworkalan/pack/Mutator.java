@@ -36,7 +36,7 @@ public final class Mutator
      * A map of addresses to movable position references to the blocks the
      * addresses reference.
      */
-    final SortedMap<Long, Movable> mapOfAddresses;
+    final SortedMap<Long, Movable> addresses;
 
     /** A set of pages that need to be flushed to the disk.  */
     final DirtyPageSet dirtyPages;
@@ -58,7 +58,7 @@ public final class Mutator
      * Operations that reference pages will used the mutate methods of this move
      * latch list to guard against page movement.
      */
-    final MoveLatchList moveLatchList;
+    final MoveLatchIterator moveLatchList;
 
     /**
      * A list of journal entries that write temporary node references for the
@@ -95,7 +95,7 @@ public final class Mutator
      * @param dirtyPages
      *            The set of dirty pages.
      */
-    Mutator(Pager pager, MoveLatchList moveLatchList, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
+    Mutator(Pager pager, MoveLatchIterator moveLatchList, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
         Journal journal, DirtyPageSet dirtyPages)
     {
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
@@ -114,9 +114,9 @@ public final class Mutator
         this.allocPagesBySize = allocPagesBySize;
         this.writePagesBySize = writePagesBySize;
         this.dirtyPages = dirtyPages;
-        this.mapOfAddresses = new TreeMap<Long, Movable>();
+        this.addresses = new TreeMap<Long, Movable>();
         this.moveNodeRecorder = moveNodeRecorder;
-        this.moveLatchList = new MoveLatchList(moveRecorder, moveLatchList);
+        this.moveLatchList = new MoveLatchIterator(moveRecorder, moveLatchList);
         this.pageRecorder = pageRecorder;
         this.temporaries = new ArrayList<Temporary>();
     }
@@ -234,7 +234,7 @@ public final class Mutator
                 
                 allocPagesBySize.add(interim);
                 
-                mapOfAddresses.put(-address, new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
+                addresses.put(-address, new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0));
                 
                 return address;
             }
@@ -275,10 +275,10 @@ public final class Mutator
                 // For now, the first test will write to an allocated block, so
                 // the write buffer is already there.
                 InterimPage interim = null;
-                Movable movable = mapOfAddresses.get(address);
+                Movable movable = addresses.get(address);
                 if (movable == null)
                 {
-                    movable = mapOfAddresses.get(-address);
+                    movable = addresses.get(-address);
                 }
                 if (movable == null)
                 {
@@ -317,7 +317,7 @@ public final class Mutator
                     }
 
                     movable = new Movable(moveNodeRecorder.getMoveNode(), interim.getRawPage().getPosition(), 0);
-                    mapOfAddresses.put(address, movable);
+                    addresses.put(address, movable);
                 }
                 else
                 {
@@ -339,13 +339,15 @@ public final class Mutator
         bytes.flip();
         return bytes;
     }
-    
+
     /**
-     * Read the block referenced by the given address into the
-     * given byte buffer.
+     * Read the block referenced by the given address into the given byte
+     * buffer.
      * 
-     * @param address The address of the block.
-     * @param bytes The destination byte buffer.
+     * @param address
+     *            The address of the block.
+     * @param bytes
+     *            The destination byte buffer.
      */
     public void read(long address, ByteBuffer bytes)
     {
@@ -364,10 +366,10 @@ public final class Mutator
             public ByteBuffer run(List<MoveLatch> userMoveLatches)
             {
                 ByteBuffer out = null;
-                Movable movable = mapOfAddresses.get(address);
+                Movable movable = addresses.get(address);
                 if (movable == null)
                 {
-                    movable = mapOfAddresses.get(-address);
+                    movable = addresses.get(-address);
                 }
                 if (movable == null)
                 {
@@ -446,14 +448,14 @@ public final class Mutator
                 // negative value of the address as a key. If not, check to see
                 // if there has been a write to the address during this
                 // mutation.
-                Movable movable = mapOfAddresses.get(-address);
+                Movable movable = addresses.get(-address);
                 if (movable != null)
                 {
                     unallocate = true;
                 }
                 else
                 {
-                    movable = mapOfAddresses.get(address);
+                    movable = addresses.get(address);
                 }
 
                 // If there is an interim block for the address, we need to free
@@ -511,7 +513,7 @@ public final class Mutator
         // For each address in the isolated address map, if the address is
         // greater than zero, it is an allocation by this mutator, so we need to
         // set the file position referenced by the address to zero.
-        for (long address : mapOfAddresses.keySet())
+        for (long address : addresses.keySet())
         {
             if (address > 0)
             {
@@ -554,7 +556,7 @@ public final class Mutator
         journal.reset();
         allocPagesBySize.clear();
         writePagesBySize.clear();
-        mapOfAddresses.clear();
+        addresses.clear();
         dirtyPages.clear();
         moveNodeRecorder.clear();
         pageRecorder.clear();
@@ -626,7 +628,7 @@ public final class Mutator
      *            A set of the interim pages currently in user whose contents
      *            needs to be moved to a new interim page.
      */
-    private void expandUser(MoveLatchList moveLatchList, Commit commit, int count, SortedSet<Long> userFromInterimPagesToMove)
+    private void expandUser(MoveLatchIterator moveLatchList, Commit commit, int count, SortedSet<Long> userFromInterimPagesToMove)
     {
         // This invocation is to flush the move list for the current mutator.
         // You may think that this is pointless, but it's not. It will ensure
@@ -690,7 +692,7 @@ public final class Mutator
      * @param userFromInterimPagesToMove
      *            Set of iterim pages that need to be moved.
      */
-    private void addIterimMoveLatches(MoveLatchList moveList, MoveLatch iterimMoveLatches, SortedSet<Long> userFromInterimPagesToMove)
+    private void addIterimMoveLatches(MoveLatchIterator moveList, MoveLatch iterimMoveLatches, SortedSet<Long> userFromInterimPagesToMove)
     {
         if (userFromInterimPagesToMove.size() != 0)
         {
@@ -752,7 +754,7 @@ public final class Mutator
      * @param newAddressPageCount
      *            The number of address pages to allocate.
      */
-    private SortedSet<Long> tryNewAddressPage(MoveLatchList moveList, final Commit commit, int newAddressPageCount)
+    private SortedSet<Long> tryNewAddressPage(MoveLatchIterator moveList, final Commit commit, int newAddressPageCount)
     {
         final MoveLatch userMoveLatchHead = new MoveLatch(false);
 
@@ -913,7 +915,7 @@ public final class Mutator
         try
         {
             final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
-            return tryNewAddressPage(new MoveLatchList(commit, moveLatchList), commit, count); 
+            return tryNewAddressPage(new MoveLatchIterator(commit, moveLatchList), commit, count); 
         }
         finally
         {
@@ -1164,7 +1166,7 @@ public final class Mutator
      * @param commit
      *            The state of this commit.
      */
-    private void tryCommit(MoveLatchList moveLatchList, final Commit commit)
+    private void tryCommit(MoveLatchIterator moveLatchList, final Commit commit)
     {
         // Start by adding all of the interim block pages to the set of interim
         // block pages whose blocks have not been assigned to a user block page.
@@ -1460,7 +1462,7 @@ public final class Mutator
             // Create a move latch list from our move latch list, with the
             // commit structure as the move recoder, so that page moves by other
             // committing mutators will be reflected in state of the commit.
-            tryCommit(new MoveLatchList(commit, moveLatchList), commit);
+            tryCommit(new MoveLatchIterator(commit, moveLatchList), commit);
         }
         finally
         {

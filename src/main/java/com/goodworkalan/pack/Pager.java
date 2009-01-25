@@ -86,7 +86,7 @@ final class Pager implements Pack
      * A reference to linked list of move nodes used as a prototype for the per
      * mutator move list reference.
      */
-    private final MoveLatchList moveLatchList;
+    private final MoveLatchIterator moveLatchList;
 
     /** A set of address pages with available free addresses. */
     private final SortedSet<Long> addressPages;
@@ -203,7 +203,7 @@ final class Pager implements Pack
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
         this.expandMutex = new Object();
-        this.moveLatchList = new MoveLatchList();
+        this.moveLatchList = new MoveLatchIterator();
         this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.addressPages = addressPages;
         this.returningAddressPages = new HashSet<Long>();
@@ -336,7 +336,7 @@ final class Pager implements Pack
     }
 
     // FIXME Document.
-    public MoveLatchList getMoveLatchList()
+    public MoveLatchIterator getMoveLatchList()
     {
         return moveLatchList;
     }
@@ -463,7 +463,7 @@ final class Pager implements Pack
     public Mutator mutate()
     {
         final PageRecorder pageRecorder = new PageRecorder();
-        final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
+        final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
         return listOfMoves.mutate(new Guarded<Mutator>()
         {
             public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -804,7 +804,7 @@ final class Pager implements Pack
 
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
+                final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -975,7 +975,7 @@ final class Pager implements Pack
                 }
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchList listOfMoves = new MoveLatchList(pageRecorder, getMoveLatchList());
+                final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)

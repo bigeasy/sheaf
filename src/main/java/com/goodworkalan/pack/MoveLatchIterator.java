@@ -26,7 +26,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Pages that are referenced by the client programmer that were not created by
  * the <code>Mutator</code>
  */
-final class MoveLatchList
+final class MoveLatchIterator
 {
     /**
      * Records the moves encountered while running guarded methods through this
@@ -66,7 +66,7 @@ final class MoveLatchList
     /**
      * Construct the main move latch list that is managed by the pager.
      */
-    public MoveLatchList()
+    public MoveLatchIterator()
     {
         this.recorder = new NullMoveRecorder();
         this.headMoveLatch = new MoveLatch(false);
@@ -78,7 +78,7 @@ final class MoveLatchList
      * Construct a move latch list that records move using the given move
      * recorder and begins at the head of the given move latch list.
      */
-    public MoveLatchList(MoveRecorder recorder, MoveLatchList moveLatchList)
+    public MoveLatchIterator(MoveRecorder recorder, MoveLatchIterator moveLatchList)
     {
         this.recorder = recorder;
         this.headMoveLatch = moveLatchList.headMoveLatch;
