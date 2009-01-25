@@ -7,7 +7,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * A linked list of latches that guard page moves.
- * 
  * <p>
  * The move list is extended by appending a list of move latch nodes, so that
  * the move latch nodes in the move list itself are chains of related moves.
@@ -29,7 +28,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 final class MoveLatchList
 {
-    // FIXME Document.
+    /**
+     * Records the moves encountered while running guarded methods through this
+     * move latch list.
+     */
     private final MoveRecorder recorder;
 
     /**
@@ -44,16 +46,26 @@ final class MoveLatchList
      */
     private final List<MoveLatch> userMoveLatches;
     
-    // FIXME Document.
+    /** The head of the move latch list. */
     private MoveLatch headMoveLatch;
-    
-    // FIXME Document.
-    private boolean wasLocked;
-    
-    // FIXME Document.
+
+    /**
+     * This is saying that there is only ever supposed to be one string of move
+     * nodes on user pages that has an locked latch, asserting that only one
+     * thread at a time is moving user pages.
+     */
+    private boolean userPageWasLocked;
+
+    /**
+     * If true, we skip testing to see if the moved page is of interest to the
+     * move recorder until the next start of a list of move latches is
+     * encountered.
+     */
     private boolean skipping;
     
-    // FIXME Document.
+    /**
+     * Construct the main move latch list that is managed by the pager.
+     */
     public MoveLatchList()
     {
         this.recorder = new NullMoveRecorder();
@@ -62,13 +74,16 @@ final class MoveLatchList
         this.userMoveLatches = new ArrayList<MoveLatch>();
     }
 
-    // FIXME Document.
-    public MoveLatchList(MoveRecorder recorder, MoveLatchList listOfMoves)
+    /**
+     * Construct a move latch list that records move using the given move
+     * recorder and begins at the head of the given move latch list.
+     */
+    public MoveLatchList(MoveRecorder recorder, MoveLatchList moveLatchList)
     {
         this.recorder = recorder;
-        this.headMoveLatch = listOfMoves.headMoveLatch;
-        this.readWriteLock = listOfMoves.readWriteLock;
-        this.userMoveLatches = new ArrayList<MoveLatch>(listOfMoves.userMoveLatches);
+        this.headMoveLatch = moveLatchList.headMoveLatch;
+        this.readWriteLock = moveLatchList.readWriteLock;
+        this.userMoveLatches = new ArrayList<MoveLatch>(moveLatchList.userMoveLatches);
     }
 
     /**
@@ -117,15 +132,20 @@ final class MoveLatchList
             readWriteLock.writeLock().unlock();
         }
     }
-    
+
     /**
-     * Advance the 
+     * Advance the move latch list head pointer, when the specific list of moves
+     * that begins with the given move latch node is encountered, do not invoke
+     * the enter method for any of the latches. This method is used by mutators
+     * to skip over the latches that they themselves have added.
+     * 
      * @param skip
+     *            The head move latch of a specific list of move latches to
+     *            skip.
      */
-    // FIXME Document.
     public void skip(MoveLatch skip)
     {
-        wasLocked = false;
+        userPageWasLocked = false;
         skipping = false;
         readWriteLock.readLock().lock();
         try
@@ -140,10 +160,22 @@ final class MoveLatchList
         }
     }
 
-    // FIXME Document.
+    /**
+     * Locks the move latch list to prevent the addition of new moves, then
+     * updates the associated move recorder with the move append to list since
+     * the last call to <code>skip</code> or <code>guarded</code>, before
+     * performing the given guarded action. This method will return the value
+     * returned by the given guarded action.
+     * 
+     * @param <T>
+     *            The return type of the guarded action.
+     * @param guarded
+     *            The guarded action to perform.
+     * @return The value returned by running the given guarded action.
+     */
     public <T> T mutate(final Guarded<T> guarded)
     {
-        wasLocked = false;
+        userPageWasLocked = false;
         skipping = false;
         readWriteLock.readLock().lock();
         try
@@ -161,11 +193,20 @@ final class MoveLatchList
             readWriteLock.readLock().unlock();
         }
     }
-    
-    // FIXME Document.
+
+    /**
+     * Locks the move latch list to prevent the addition of new moves, then
+     * updates the associated move recorder with the move append to list since
+     * the last call to <code>skip</code> or <code>guarded</code>, before
+     * performing the given guarded action. This version of <code>guarded</code>
+     * is for action that do not return a value.
+     * 
+     * @param guarded
+     *            The guarded action to perform.
+     */
     public void mutate(GuardedVoid guarded)
     {
-        wasLocked = false;
+        userPageWasLocked = false;
         skipping = false;
         readWriteLock.readLock().lock();
         try
@@ -186,11 +227,19 @@ final class MoveLatchList
     }
 
     /**
-     * Advance the head latch node forward by assigning it the value of
-     * its next property returning false if there are no more latch
-     * nodes.
-     *
-     * @param skip 
+     * Advance the head latch node forward by assigning it the value of its next
+     * property returning false if there are no more latch nodes.
+     * <p>
+     * The <code>skip</code> move latch indicates the first node in a specific
+     * list of move latch nodes that will not be tested for involvement, their
+     * latches will not be entered. This is used by mutators to skip the move
+     * latch nodes that they themselves have appended to the per pager. list of
+     * move latches.
+     * 
+     * @param skip
+     *            The first node of a specific list of latch nodes whose that
+     *            not be tested for involvement or entered.
+     * 
      * @return False if there are no more latches.
      */
     private boolean advance(MoveLatch skip)
@@ -206,7 +255,7 @@ final class MoveLatchList
         {
             if (headMoveLatch.isUser())
             {
-                if (wasLocked)
+                if (userPageWasLocked)
                 {
                     throw new IllegalStateException();
                 }
@@ -222,14 +271,14 @@ final class MoveLatchList
                 {
                     if (headMoveLatch.isUser() && headMoveLatch.isLocked())
                     {
-                        wasLocked = true;
+                        userPageWasLocked = true;
                     }
                 }
                 else if (headMoveLatch.enter())
                 {
                     if (headMoveLatch.isUser())
                     {
-                        wasLocked = true;
+                        userPageWasLocked = true;
                     }
                 }
                 recorder.record(headMoveLatch.getMove(), false);
@@ -240,7 +289,7 @@ final class MoveLatchList
                 {
                     if (headMoveLatch.isLocked())
                     {
-                        wasLocked = true;
+                        userPageWasLocked = true;
                     }
                     userMoveLatches.add(headMoveLatch);
                 }

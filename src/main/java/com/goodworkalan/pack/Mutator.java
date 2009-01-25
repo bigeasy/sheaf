@@ -74,9 +74,28 @@ public final class Mutator
      * @see Pager#getAddressPage(long)
      */
     long lastAddressPage;
-    
-    // FIXME Document.
-    public Mutator(Pager pager, MoveLatchList listOfMoves, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
+
+    /**
+     * Create a new mutator to alter the contents of a specific pagers.
+     * 
+     * @param pager
+     *            The page manager of the pack to mutate.
+     * @param moveLatchList
+     *            A reference to the per pager linked list of latched page
+     *            moves.
+     * @param moveNodeRecorder
+     *            The per mutator recorder of move nodes that appends the page
+     *            moves to a linked list of move nodes.
+     * @param pageRecorder
+     *            The per mtuator recorder of move nodes that adjusts the file
+     *            positions of referenced pages.
+     * @param journal
+     *            A journal to record the isolated mutations of the associated
+     *            pack.
+     * @param dirtyPages
+     *            The set of dirty pages.
+     */
+    Mutator(Pager pager, MoveLatchList moveLatchList, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
         Journal journal, DirtyPageSet dirtyPages)
     {
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
@@ -97,11 +116,16 @@ public final class Mutator
         this.dirtyPages = dirtyPages;
         this.mapOfAddresses = new TreeMap<Long, Movable>();
         this.moveNodeRecorder = moveNodeRecorder;
-        this.moveLatchList = new MoveLatchList(moveRecorder, listOfMoves);
+        this.moveLatchList = new MoveLatchList(moveRecorder, moveLatchList);
         this.pageRecorder = pageRecorder;
         this.temporaries = new ArrayList<Temporary>();
     }
     
+    /**
+     * Return the pack that this mutator alters.
+     * 
+     * @return The pack.
+     */
     public Pack getPack()
     {
         return pager;
@@ -316,9 +340,19 @@ public final class Mutator
         return bytes;
     }
     
-    // FIXME Document.
+    /**
+     * Read the block referenced by the given address into the
+     * given byte buffer.
+     * 
+     * @param address The address of the block.
+     * @param bytes The destination byte buffer.
+     */
     public void read(long address, ByteBuffer bytes)
     {
+        if (bytes == null)
+        {
+            throw new NullPointerException();
+        }
         tryRead(address, bytes);
     }
 
@@ -327,7 +361,7 @@ public final class Mutator
     {
         return moveLatchList.mutate(new Guarded<ByteBuffer>()
         {
-            public ByteBuffer run(List<MoveLatch> listOfMoveLatches)
+            public ByteBuffer run(List<MoveLatch> userMoveLatches)
             {
                 ByteBuffer out = null;
                 Movable movable = mapOfAddresses.get(address);
