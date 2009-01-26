@@ -11,7 +11,7 @@ import java.lang.ref.WeakReference;
  * TODO Rename RawPageReference.
  */
 final class PageReference
-extends WeakReference<RawPage> implements Positionable
+extends WeakReference<RawPage>
 {
     /**
      * The position of the page.

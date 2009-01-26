@@ -389,7 +389,15 @@ public final class Mutator
             }
         });
     }
-    
+
+    /**
+     * Read the block at the given address into the a buffer and return the
+     * buffer. This method will allocate a byte buffer of the block size.
+     * 
+     * @param address
+     *            The block address.
+     * @return A buffer containing the contents of the block.
+     */
     public ByteBuffer read(long address)
     {
         ByteBuffer bytes = tryRead(address, null);
@@ -421,14 +429,15 @@ public final class Mutator
     }
 
     /**
-     * Read the block at the given address into the given destination buffer.
-     * If the tiven destination buffer is null, this method will allocate a byte
+     * Read the block at the given address into the given destination buffer. If
+     * the given destination buffer is null, this method will allocate a byte
      * buffer of the block size. If the given destination buffer is not null and
      * the block size is greater than the bytes remaining in the destination
      * buffer, size of the addressed block, no bytes are transferred and a
      * <code>BufferOverflowException</code> is thrown.
      * 
-     * @param address The block address.
+     * @param address
+     *            The block address.
      * @param destination
      *            The destination buffer or null to indicate that the method
      *            should allocate a destination buffer of block size.
@@ -639,7 +648,12 @@ public final class Mutator
         moveLatches = null;
     }
 
-    // FIXME Document.
+    /**
+     * Rollback the changes made to the file by this mutator. Rollback will
+     * reset the mutator discarding any changes made to the file.
+     * <p>
+     * After the rollback is complete, the mutator can be reused.
+     */
     public void rollback()
     {
         // Obtain shared lock on the compact lock, preventing pack file
@@ -663,10 +677,10 @@ public final class Mutator
         }
         clear(new Commit(pageRecorder, journal, moveNodeRecorder));
     }
-    
+
     /**
-     * Return the count of pages between the address to user boundary
-     * and the user to interim boundary.
+     * Return the count of pages between the address to user boundary and the
+     * user to interim boundary.
      * 
      * @return The count of user pages.
      */
@@ -758,7 +772,12 @@ public final class Mutator
     }
 
     /**
-     * Add the interim moves to the per pager list of move latches.
+     * Add the interim moves to the per pager list of move latches. This method
+     * obtains a new blank interim page from the pager for each of the interim
+     * pages that need to be moved to accommodate user region expansion. A move
+     * latch is appended to the given head of linked list of move latches
+     * indicating the move from the location that will consumed by the user
+     * region to the new blank interim page.
      * 
      * @param moveList
      *            The move list.
@@ -771,7 +790,15 @@ public final class Mutator
     {
         if (userFromInterimPagesToMove.size() != 0)
         {
-            buildInterimMoveLatchList(userFromInterimPagesToMove, iterimMoveLatches);
+            for (long from : userFromInterimPagesToMove)
+            {
+                long to = pager.newBlankInterimPage();
+                if (userFromInterimPagesToMove.contains(to))
+                {
+                    throw new IllegalStateException();
+                }
+                iterimMoveLatches.getLast().extend(new MoveLatch(new Move(from, to), false));
+            }
             pager.getMoveLatchList().add(iterimMoveLatches);
             moveList.skip(iterimMoveLatches);
         }
@@ -877,6 +904,9 @@ public final class Mutator
             });
         }
         
+        // The set of newly created address pages.
+        SortedSet<Long> newAddressPages = new TreeSet<Long>();
+        
         // Now we know we have enough user pages to accommodate our creation of
         // address pages. That is we have enough user pages, full stop. We have
         // not looked at whether they are free or in use.
@@ -891,7 +921,7 @@ public final class Mutator
             long position = pager.getUserBoundary().getPosition();
             
             // Record the new address page.
-            commit.getAddressSet().add(position);
+            newAddressPages.add(position);
             
             // If new address page was not just created by relocating an interim
             // page, then we do not need to reserve it.
@@ -903,13 +933,13 @@ public final class Mutator
 
                 if (pager.getFreePageBySize().reserve(position))
                 {
+                    // This user page needs to be moved.
+                    commit.getAddressFromUserPagesToMove().add(position);
+                    
                     // Remember that free user pages is a FreeSet which will
                     // remove from a set of available, or add to a set of
                     // positions that should not be made available. 
-                    
                     pager.getFreeUserPages().reserve(position);
-                    
-                    // TODO Doesn't this mean that it is in use?
                 }
                 else
                 {
@@ -919,15 +949,12 @@ public final class Mutator
                     {
                         // Was not in set of empty, so it is in use.
 
-                        // TODO Rename getInUseAddressSet.
-                        
                         commit.getAddressFromUserPagesToMove().add(position);
                     }
                 }
             }
 
             // Move the boundary for user pages.
-
             pager.getUserBoundary().increment();
         }
 
@@ -943,7 +970,7 @@ public final class Mutator
         // write out our address page initializations now and they will occur
         // after the blocks are copied.
         
-        for (long position : commit.getAddressSet())
+        for (long position : newAddressPages)
         {
             journal.write(new CreateAddressPage(position));
         }
@@ -970,15 +997,16 @@ public final class Mutator
 
         tryCommit(moveList, commit);
         
-        return commit.getAddressSet();
+        return newAddressPages;
     }
 
     /**
-     * Create address pages, extending the address page region by moving
-     * the user pages immediately follow after locking the pager to
-     * prevent compaction and close.  
-     *
-     * @param count The number of address pages to create.
+     * Create address pages, extending the address page region by moving the
+     * user pages immediately follow after locking the pager to prevent
+     * compaction and close.
+     * 
+     * @param count
+     *            The number of address pages to create.
      */
     SortedSet<Long> newAddressPages(int count)
     {
@@ -996,24 +1024,6 @@ public final class Mutator
         {
             pager.getCompactLock().readLock().unlock();
         }
-    }
-    
-    // FIXME Document.
-    private Map<Long, Long> associate(Commit commit)
-    {
-        SortedSet<Long> setOfGathered = new TreeSet<Long>(commit.getUserFromInterimPages());
-        Map<Long, Long> mapOfCopies = new TreeMap<Long, Long>();
-        while (commit.getUnassignedInterimBlockPages().size() != 0)
-        {
-            long interimAllocation = commit.getUnassignedInterimBlockPages().first();
-            commit.getUnassignedInterimBlockPages().remove(interimAllocation);
-            
-            long soonToBeCreatedUser = setOfGathered.first();
-            setOfGathered.remove(soonToBeCreatedUser);
-            
-            mapOfCopies.put(interimAllocation, soonToBeCreatedUser);
-        }
-        return mapOfCopies;
     }
 
     /**
@@ -1078,56 +1088,53 @@ public final class Mutator
             head.unlatch();
         }
     }
-    
-    // FIXME Document.
-    private void buildInterimMoveLatchList(SortedSet<Long> userFromInterimPagesToMove, MoveLatch iterimMoveLatches)
-    {
-        // For the set of pages in use, add the page to the move list.
-        for (long from : userFromInterimPagesToMove)
-        {
-            long to = pager.newBlankInterimPage();
-            if (userFromInterimPagesToMove.contains(to))
-            {
-                throw new IllegalStateException();
-            }
-            iterimMoveLatches.getLast().extend(new MoveLatch(new Move(from, to), false));
-        }
-    }
 
-    // FIXME Document.
+    /**
+     * Assign each remaining unassigned interim block pages to one of the user
+     * pages newly created by moving an interim page.
+     * 
+     * @param commit
+     *            The state of the commit.
+     */
     private void asssignAllocations(Commit commit)
     {
-        Map<Long, Long> mapOfCopies = associate(commit);
+        // Create a copy of the set of user from interim pages so you can use
+        // it as a queue.
+        SortedSet<Long> userFromInterimPages = new TreeSet<Long>(commit.getUserFromInterimPages());
         
-        for (Map.Entry<Long, Long> copy: mapOfCopies.entrySet())
+        // While there are unassigned interim block pages, assign a user page
+        // created from a moved interim page.
+        while (commit.getUnassignedInterimBlockPages().size() != 0)
         {
-            long iterimAllocation = copy.getKey();
-            long soonToBeCreatedUser = copy.getValue();
+            // Shift an unassigned interim page.
+            long unassignedInterimPage = commit.getUnassignedInterimBlockPages().first();
+            commit.getUnassignedInterimBlockPages().remove(unassignedInterimPage);
+            
+            // Shift a page created by moving an interim page.
+            long userFromInterimPage = userFromInterimPages.first();
+            userFromInterimPages.remove(userFromInterimPage);
+            
+            // Create a movable reference to the user page.
+            Movable movable = new Movable(moveNodeRecorder.getMoveNode(), userFromInterimPage, 0);
 
-            Movable movable = new Movable(moveNodeRecorder.getMoveNode(), soonToBeCreatedUser, 0);
+            // Add the user page to the set of user pages involved in the
+            // commit. 
+            pageRecorder.getUserPageSet().add(userFromInterimPage);
 
-            // Add the page to the set of pages used to track the pages
-            // referenced in regards to the move list. We are going to move
-            // this page and we are aware of this move. Negating the value
-            // tells us not adjust our own move list for the first move
-            // detected for this position.
-
-            // TODO Only add as negative if we are going to observe the move.
-            pageRecorder.getUserPageSet().add(soonToBeCreatedUser);
-
-            commit.getEmptyMap().put(iterimAllocation, movable);
+            // Add the mapping of the interim page to an empty user page.
+            commit.getInterimToEmptyUserPage().put(userFromInterimPage, movable);
         }
     }
-    
+
     /**
-     * Find the user page choosen by the commit method as the destination for
-     * the allocation page used to mirror a moving user page and add a move
-     * latch to indicate the from the of the user page at the new address page
-     * position to the choosen user page. 
+     * Find the user page chosen by the commit method as the destination for the
+     * allocation page used to mirror a moving user page and add a move latch to
+     * indicate the from the of the user page at the new address page position
+     * to the chosen user page.
      * <p>
-     * Actual mirroring takes place while writing the journal by calling {@link
-     * #mirrorUserPagesForMove}.
-     * <p> 
+     * Actual mirroring takes place while writing the journal by calling
+     * {@link #mirrorUserPagesForMove}.
+     * <p>
      * There is no need to record the move addresses in the user page set, since
      * the only move of the page will be the move recored here.
      * 
@@ -1150,10 +1157,10 @@ public final class Mutator
             long addressFromUserPage = entry.getKey();
             long mirroredAsAllocation = entry.getValue().getPosition(pager);
             
-            Movable movable = commit.getVacuumMap().get(mirroredAsAllocation);
+            Movable movable = commit.getInterimToSharedUserPage().get(mirroredAsAllocation);
             if (movable == null)
             {
-                movable = commit.getEmptyMap().get(mirroredAsAllocation);
+                movable = commit.getInterimToEmptyUserPage().get(mirroredAsAllocation);
             }
             if (movable == null)
             {
@@ -1177,12 +1184,14 @@ public final class Mutator
     }
 
     /**
-     * Mirror user block pages that need to be moved to accomodate address region
-     * expansion into the interim block pages allocated for mirroring.
-     *
-     * @param commit The state of the commit.
-     * @param userPagesMirroredForMove A set of user pages to record the user pages mirrored
-     * by this method.
+     * Mirror user block pages that need to be moved to accommodate address
+     * region expansion into the interim block pages allocated for mirroring.
+     * 
+     * @param commit
+     *            The state of the commit.
+     * @param userPagesMirroredForMove
+     *            A set of user pages to record the user pages mirrored by this
+     *            method.
      */
     private void mirrorUserPagesForMove(Commit commit, Set<UserPage> userPagesMirroredForMove)
     {
@@ -1203,10 +1212,16 @@ public final class Mutator
         }
     }
 
-    // FIXME Document.
-    private void journalCommits(Map<Long, Movable> mapOfCommits)
+    /**
+     * For each mapping of an interim block page to a destination user block
+     * page, write a copy operation for each block in the interim block page.
+     * 
+     * @param commits
+     *            A map of interim block pages to destination user block pages.
+     */
+    private void journalCommits(Map<Long, Movable> commits)
     {
-        for (Map.Entry<Long, Movable> entry: mapOfCommits.entrySet())
+        for (Map.Entry<Long, Movable> entry: commits.entrySet())
         {
             InterimPage interim = pager.getPage(entry.getKey(), InterimPage.class, new InterimPage());
             for (long address: interim.getAddresses())
@@ -1215,13 +1230,14 @@ public final class Mutator
             }
         }
     }
-    
+
     /**
      * Unlock mirrored pages by calling the {@link UserPage#unmirrored} method
      * on all of the user pages in the mirrored set and release the hard
-     * refernece to the user page implicit in the set by clearing the set.
-     *
-     * @param mirrored A set of mirrored user pages.
+     * reference to the user page implicit in the set by clearing the set.
+     * 
+     * @param mirrored
+     *            A set of mirrored user pages.
      */
     private void unlockMirrored(Set<UserPage> mirrored)
     {
@@ -1236,7 +1252,7 @@ public final class Mutator
      * Commit the mutations.
      * 
      * @param moveLatchList
-     *            The per pager list of move latches assocated with a move
+     *            The per pager list of move latches associated with a move
      *            recorder specific to this commit method.
      * @param commit
      *            The state of this commit.
@@ -1264,14 +1280,14 @@ public final class Mutator
                     // Consolidate pages by using existing, partially filled
                     // pages to store our new block allocations.
     
-                    pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getVacuumMap(), moveNodeRecorder.getMoveNode());
-                    commit.getUnassignedInterimBlockPages().removeAll(commit.getVacuumMap().keySet());
+                    pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getInterimToSharedUserPage(), moveNodeRecorder.getMoveNode());
+                    commit.getUnassignedInterimBlockPages().removeAll(commit.getInterimToSharedUserPage().keySet());
                     
                     // Use free data pages to store the interim pages whose
                     // blocks would not fit on an existing page.
                     
                     pager.newUserPages(commit.getUnassignedInterimBlockPages(), pageRecorder.getUserPageSet(),
-                                       commit.getEmptyMap(), moveNodeRecorder.getMoveNode());
+                                       commit.getInterimToEmptyUserPage(), moveNodeRecorder.getMoveNode());
                 }
             });
         }
@@ -1309,7 +1325,7 @@ public final class Mutator
                 addIterimMoveLatches(moveLatchList, interimMoveLatches, userFromInterimPagesToMove);
 
                 // Allocate a new interim page for each interim page currently
-                // in use whose contents needs to be moved to accomodate the
+                // in use whose contents needs to be moved to accommodate the
                 // moved user to interim boundary.
                 asssignAllocations(commit);
             }
@@ -1370,29 +1386,33 @@ public final class Mutator
             {
                 // Write a terminate to end the playback loop. This
                 // terminate is the true end of the journal.
-    
                 journal.write(new Terminate());
     
                 // Grab the current position of the journal. This is the
                 // actual start of playback.
-    
                 long beforeVacuum = journal.getJournalPosition();
                 
-                // Create a vacuum operation for all the vacuums.
-                Set<UserPage> setOfMirroredVacuumPages = new HashSet<UserPage>();
+                // The set of pages mirrored for vacuum.
+                Set<UserPage> pagesMirroredForVacuum = new HashSet<UserPage>();
                 
-                // TODO Do I make sure that mirroring in included before vacuum
-                // in recovery as well?
-                // TODO No. Just make addresses go first. Negative journal.
-
-                for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
+                    
+                // For each of the interim pages mapped to a user page that
+                // already contains user blocks from other mutators, attempt to
+                // mirror the page for vaccum.
+                for (Map.Entry<Long, Movable> entry: commit.getInterimToSharedUserPage().entrySet())
                 {
+                    // Mirror the shared user page.
                     UserPage user = pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage());
                     Mirror mirror = user.mirror(true, pager, null, dirtyPages);
+
+                    // If mirror returns null, the user page did not need a
+                    // vacuum, there were no free blocks surrounded by employed
+                    // bocks. If mirror returns non null, then we note that the
+                    // joruanl needs to add the vacuum to the list of vacuums.
                     if (mirror != null)
                     {
                         journal.write(new AddVacuum(mirror, user));
-                        setOfMirroredVacuumPages.add(user);
+                        pagesMirroredForVacuum.add(user);
                     }
                 }
                 
@@ -1400,21 +1420,14 @@ public final class Mutator
                 // Once vacuum is performed, we force the file and update the
                 // journal so that playback begins at the vacuum operation,
                 // which does nothing, since we skipped the list of add vacuums.
+                // The vacuum operation will copy the mirrored pages in the
+                // interim region back into their user block pages, but
+                // appending them, eliminating the free block gaps.
                 long afterVacuum = journal.getJournalPosition(); 
-                
-                // Here we insert the vacuum break. During a recovery, the data
-                // pages will be recreated without a reference to their vacuumed
-                // page.
-    
-                // Although, I suppose the vacuum page reference could simply be
-                // a reference to the data page.
-    
-                // Two ways to deal with writing to a vacuumed page. One it to
-                // overwrite the vacuum journal. The other is to wait until the
-                // vacuumed journal is written.
-    
                 journal.write(new Vacuum(afterVacuum));
                 
+                // Currently a three stage commit, stopping after vacuum, as
+                // well as after the initial journal write.
                 journal.write(new Terminate());
                 
                 // The list of user pages that were mirrored for relocation.
@@ -1426,13 +1439,17 @@ public final class Mutator
                     mirrorUserPagesForMove(commit, userPagesMirroredForMove);
                 }
 
-                journalCommits(commit.getVacuumMap());
-                journalCommits(commit.getEmptyMap());
+                // Write out a copy operation for each of the interim blocks in
+                // both of the maps of interim block pages to destination user
+                // block pages.
+                journalCommits(commit.getInterimToSharedUserPage());
+                journalCommits(commit.getInterimToEmptyUserPage());
                
-                // Interim block pages allocated to store writes need only be
-                // written into place using address lookup to find the user
-                // block page.
-
+                // Interim block pages allocated to store writes are written
+                // into place using address lookup to find the destination user
+                // block page. No vacuum of destination pages.
+                
+                // (TODO Why not vacuum? Can't you check and see if necessary?)
                 for (long position: pageRecorder.getWriteBlockPages())
                 {
                     InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
@@ -1442,17 +1459,21 @@ public final class Mutator
                     }
                 }
     
-                // Create the list of moves.
-                MoveNode iterator = moveNodeRecorder.getFirstMoveNode();
-                while (iterator.getNext() != null)
+                // Record all of the user moves now. The moves are not used to
+                // determine the location of the vacuums and block commits
+                // above. Those are written with adjusted page positions. We
+                // write the move list here, then jump to the start of the
+                // journal, where the recored free and temporary operations have
+                // been written.
+                MoveNode moveNode = moveNodeRecorder.getFirstMoveNode();
+                while (moveNode.getNext() != null)
                 {
-                    iterator = iterator.getNext();
-                    journal.write(new AddMove(iterator.getMove()));
+                    moveNode = moveNode.getNext();
+                    journal.write(new AddMove(moveNode.getMove()));
                 }
     
                 // Need to use the entire list of moves since the start
                 // of the journal to determine the actual journal start.
-                
                 long journalStart = journal.getJournalStart().getPosition(pager);
                 journal.write(new NextOperation(journalStart));
     
@@ -1461,18 +1482,19 @@ public final class Mutator
                 header.getByteBuffer().putLong(beforeVacuum);
                 dirtyPages.flush(header);
                 
+                // Create a journal player.
                 Player player = new Player(pager, header, dirtyPages);
                 
-                // Obtain a journal header and record the head.
-                
-                // First do the vacuums.
+                // First do the vacuums. We'll hit a terimate.
                 player.vacuum();
                 
-                unlockMirrored(setOfMirroredVacuumPages);
+                // We can unlock any user block pages mirrored for vacuum.
+                unlockMirrored(pagesMirroredForVacuum);
 
                 // Then do everything else.
                 player.commit();
 
+                // We can unlock any user block pages mirroed for address move.
                 unlockMirrored(userPagesMirroredForMove);
 
                 // Unlock any addresses that were returned as free to their
@@ -1481,24 +1503,24 @@ public final class Mutator
 
                 pager.getAddressLocker().unlock(player.getAddressSet());
                 
-                if (commit.isAddressExpansion())
+                // TODO Are there special user pages to return for address
+                // expansion?
+                
+                // TODO Make this a method.
+                // Return all the interim pages. TODO Who resets them to zero?
+                pager.getFreeInterimPages().free(commit.getInterimToSharedUserPage().keySet());
+                for (Map.Entry<Long, Movable> entry: commit.getInterimToSharedUserPage().entrySet())
                 {
-                    // TODO Which pages to I return here?
+                    pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
                 }
-                else
+
+                pager.getFreeInterimPages().free(commit.getInterimToEmptyUserPage().keySet());
+                for (Map.Entry<Long, Movable> entry: commit.getInterimToEmptyUserPage().entrySet())
                 {
-                    pager.getFreeInterimPages().free(commit.getVacuumMap().keySet());
-                    pager.getFreeInterimPages().free(commit.getEmptyMap().keySet());
-                    for (Map.Entry<Long, Movable> entry: commit.getVacuumMap().entrySet())
-                    {
-                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
-                    }
-                    for (Map.Entry<Long, Movable> entry: commit.getEmptyMap().entrySet())
-                    {
-                        pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
-                    }
+                    pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
                 }
                 
+                // TODO Make this a method?
                 pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
                 pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
             }
@@ -1518,9 +1540,10 @@ public final class Mutator
     }
 
     /**
-     * Commit the changes made to the pack by this mutator. Commit will make the
-     * changes made by this mutator visible to all other mutators. After the
-     * commit is complete, the mutator may be reused.
+     * Commit the changes made to the file by this mutator. Commit will make the
+     * changes made by this mutator visible to all other mutators.
+     * <p>
+     * After the commit is complete, the mutator may be reused.
      */
     public void commit()
     {

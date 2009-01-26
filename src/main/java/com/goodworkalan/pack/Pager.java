@@ -470,10 +470,10 @@ final class Pager implements Pack
     // FIXME Document.
     private synchronized void collect()
     {
-        Positionable positionable = null;
-        while ((positionable = (Positionable) queue.poll()) != null)
+        PageReference pageReference = null;
+        while ((pageReference = (PageReference) queue.poll()) != null)
         {
-            rawPageByPosition.remove(positionable.getPosition());
+            rawPageByPosition.remove(pageReference.getPosition());
         }
     }
 

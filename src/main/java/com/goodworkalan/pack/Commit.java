@@ -5,53 +5,40 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-
-final class Commit
-extends CompositeMoveRecorder
+final class Commit extends CompositeMoveRecorder
 {
-    private final MapRecorder vacuumMap;
-    
-    private final MapRecorder emptyMap;
-    
-    private final SortedSet<Long> addressSet;
-    
+    /**
+     * A map of interim pages containing new allocations to destination user
+     * blocks pages that already contain blocks from other mutators.
+     */
+    private final MapRecorder interimToSharedUserPage;
+
+    /**
+     * A map of interim pages containing new allocations to destination user
+     * blocks pages that contain no blocks from other mutators.
+     */
+    private final MapRecorder interimToEmptyUserPage;
+
     private final SortedSet<Long> userFromInterimPages;
-    
+
     private final SortedSet<Long> addressFromUserPagesToMove;
-    
+
     private final SetRecorder unassignedInterimBlockPages;
-    
+
     private final SortedMap<Long, Movable> movingUserPageMirrors;
-    
-    public Commit(PageRecorder pageRecorder, Journal journal, MoveNodeRecorder moveNodeRecorder)
+
+    public Commit(PageRecorder pageRecorder, Journal journal,
+            MoveNodeRecorder moveNodeRecorder)
     {
-        this.addressSet = new TreeSet<Long>();
         this.userFromInterimPages = new TreeSet<Long>();
         this.addressFromUserPagesToMove = new TreeSet<Long>();
         this.movingUserPageMirrors = new TreeMap<Long, Movable>();
         add(unassignedInterimBlockPages = new SetRecorder());
         add(pageRecorder);
-        add(vacuumMap = new MapRecorder());
-        add(emptyMap = new MapRecorder());
+        add(interimToSharedUserPage = new MapRecorder());
+        add(interimToEmptyUserPage = new MapRecorder());
         add(moveNodeRecorder);
         add(new JournalRecorder(journal));
-    }
-    
-    @Override
-    public boolean involves(long position)
-    {
-        return addressSet.contains(position)
-            || super.involves(position);
-    }
-    
-    public boolean isAddressExpansion()
-    {
-        return addressSet.size() != 0;
-    }
-
-    public SortedSet<Long> getAddressSet()
-    {
-        return addressSet;
     }
 
     /**
@@ -65,12 +52,12 @@ extends CompositeMoveRecorder
     {
         return userFromInterimPages;
     }
-    
+
     public SortedMap<Long, Movable> getMovingUserPageMirrors()
     {
         return movingUserPageMirrors;
     }
-    
+
     public SortedSet<Long> getAddressFromUserPagesToMove()
     {
         return addressFromUserPagesToMove;
@@ -87,13 +74,27 @@ extends CompositeMoveRecorder
         return unassignedInterimBlockPages;
     }
 
-    public SortedMap<Long, Movable> getVacuumMap()
+    /**
+     * Return a map of interim pages containing new allocations to destination
+     * user blocks pages that are already in use and contain user blocks
+     * allocated by other mutators.
+     * 
+     * @return The map of shared user pages.
+     */
+    public SortedMap<Long, Movable> getInterimToSharedUserPage()
     {
-        return vacuumMap;
+        return interimToSharedUserPage;
     }
-    
-    public SortedMap<Long, Movable> getEmptyMap()
+
+    /**
+     * Return a map of interim pages containing new allocations to destination
+     * user blocks pages that are not currently in use and contain no blocks
+     * from other mutators.
+     * 
+     * @return The map of empty user pages.
+     */
+    public SortedMap<Long, Movable> getInterimToEmptyUserPage()
     {
-        return emptyMap;
+        return interimToEmptyUserPage;
     }
 }
