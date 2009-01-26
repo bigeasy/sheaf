@@ -1,5 +1,6 @@
 package com.goodworkalan.pack;
 
+import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -255,6 +256,10 @@ extends RelocatablePage
         return listOfAddresses;
     }
 
+    /**
+     * @throws BufferOverflowException If there is insufficient space in the
+     * block for the remaining bytes in the source buffer.
+     */
     public boolean write(long address, ByteBuffer data, DirtyPageSet dirtyPages)
     {
         synchronized (getRawPage())
@@ -279,16 +284,48 @@ extends RelocatablePage
         }
     }
 
-    public ByteBuffer read(long address, ByteBuffer dst)
+    /**
+     * Find the block referenced by the given address in this block page and
+     * read the contents into the given destination buffer. If the given
+     * destination buffer is null, this method will allocate a byte buffer of
+     * the block size. If the given destination buffer is not null and the block
+     * size is greater than the bytes remaining in the destination buffer, size
+     * of the addressed block, no bytes are transferred and a
+     * <code>BufferOverflowException</code> is thrown.
+     * <p>
+     * Returns the destination block given or created, or null if the block is
+     * not found in page. The block might not be found if the block has been
+     * moved. In this case, the caller is supposed to try dereferencing the
+     * block address again. More on address races at {@link Mutator#tryRead}.
+     * <p>
+     * The block referenced by the given address is found by iterating through
+     * the blocks in the page and finding the block with the given address as
+     * its back-reference address.
+     * <p>
+     * This method synchronizes using the the underlying <code>RawPage</code>
+     * object as a mutex.
+     * 
+     * @param address
+     *            The block address to find.
+     * @param destination
+     *            The destination buffer or null to indicate that the method
+     *            should allocate a destination buffer of block size.
+     * @return The given or created destination buffer, or null if the the block
+     *         is not found in the page.
+     * @throws BufferOverflowException
+     *             If the size of the block is greater than the bytes remaining
+     *             in the destination buffer.
+     */
+    public ByteBuffer read(long address, ByteBuffer destination)
     {
         synchronized (getRawPage())
         {
             ByteBuffer bytes = getRawPage().getByteBuffer();
             if (seek(bytes, address))
             {
-                if (dst == null)
+                if (destination == null)
                 {
-                    dst = ByteBuffer.allocateDirect(getBlockSize(address) - Pack.BLOCK_HEADER_SIZE);
+                    destination = ByteBuffer.allocateDirect(getBlockSize(address) - Pack.BLOCK_HEADER_SIZE);
                 }
                 int offset = bytes.position();
                 int size = bytes.getInt();
@@ -297,10 +334,10 @@ extends RelocatablePage
                     throw new IllegalStateException();
                 }
                 bytes.limit(offset + size);
-                dst.put(bytes);
+                destination.put(bytes);
                 bytes.limit(bytes.capacity());
-                return dst;
-            }
+                return destination;
+            } 
         }
         return null;
     }

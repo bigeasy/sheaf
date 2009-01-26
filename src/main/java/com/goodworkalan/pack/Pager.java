@@ -19,8 +19,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * A container for outstanding <code>Page</code> objects that maps addresses to
  * soft referenced <code>Page</code> objects.
- * 
- * FIXME Javadoc for this class must be done first.
  */
 final class Pager implements Pack
 {
@@ -86,7 +84,7 @@ final class Pager implements Pack
      * A reference to linked list of move nodes used as a prototype for the per
      * mutator move list reference.
      */
-    private final MoveLatchIterator moveLatchList;
+    private final MoveLatchList moveLatchList;
 
     /** A set of address pages with available free addresses. */
     private final SortedSet<Long> addressPages;
@@ -102,8 +100,16 @@ final class Pager implements Pack
      * from overwriting reallocations.
      */
     private final AddressLocker addressLocker;
-    
-    // FIXME Document.
+
+    /**
+     * A table that orders user pages with block space available by the size of
+     * bytes remaining. During commit, this table is checked for user pages that
+     * can accommodate block allocations. To use user page, the page is removed
+     * from the table, so that no other mutator will attempt to use it to write
+     * block allocations. Once the commit is complete, all user pages with space
+     * remaining are added to the free page by size table, or the free page set
+     * if the user page is completely empty.
+     */
     private final BySizeTable freePageBySize;
     
     /**
@@ -117,7 +123,14 @@ final class Pager implements Pack
      */
     private final Map<Long, Long> temporaries;
 
-    /** Set of empty user pages. */
+    /**
+     * Set of empty user pages. This set is checked for empty pages to store
+     * allocations during commit. To reuse an empty user page, the page is
+     * removed from the set, so that no other mutator will attempt to use it to
+     * write block allocations. Once the commit is complete, all user pages with
+     * space remaining are added to the free page by size table, or the free
+     * page set if the user page is completely empty.
+     */
     private final FreeSet freeUserPages;
 
     /**
@@ -203,7 +216,7 @@ final class Pager implements Pack
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
         this.expandMutex = new Object();
-        this.moveLatchList = new MoveLatchIterator();
+        this.moveLatchList = new MoveLatchList();
         this.journalHeaders = new PositionSet(Pack.FILE_HEADER_SIZE, header.getInternalJournalCount());
         this.addressPages = addressPages;
         this.returningAddressPages = new HashSet<Long>();
@@ -335,8 +348,18 @@ final class Pager implements Pack
         return interimBoundary;
     }
 
-    // FIXME Document.
-    public MoveLatchIterator getMoveLatchList()
+    /**
+     * Return the linked list of move latches used to block pages from reading
+     * pages while they are moving. Pages are moved during during commit or
+     * address region expansion. To prevent mutators from writing blocks to
+     * moving pages, a linked list of move latches are appended to this master
+     * linked list of move latches. This list is the per pager list. The move
+     * latch lists are appended here and iterators are created using this move
+     * latch list.
+     * 
+     * @return The per pager move latch list.
+     */
+    public MoveLatchList getMoveLatchList()
     {
         return moveLatchList;
     }
@@ -463,15 +486,15 @@ final class Pager implements Pack
     public Mutator mutate()
     {
         final PageRecorder pageRecorder = new PageRecorder();
-        final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
-        return listOfMoves.mutate(new Guarded<Mutator>()
+        final MoveLatchIterator moveLatchIterator = getMoveLatchList().newIterator(pageRecorder);
+        return moveLatchIterator.mutate(new Guarded<Mutator>()
         {
             public Mutator run(List<MoveLatch> listOfMoveLatches)
             {
                 MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
                 DirtyPageSet dirtyPages = new DirtyPageSet(Pager.this, 16);
                 Journal journal = new Journal(Pager.this, moveNodeRecorder, pageRecorder, dirtyPages);
-                return new Mutator(Pager.this, listOfMoves, moveNodeRecorder, pageRecorder, journal, dirtyPages);
+                return new Mutator(Pager.this, moveLatchIterator, moveNodeRecorder, pageRecorder, journal, dirtyPages);
             }
         });
     }
@@ -670,7 +693,7 @@ final class Pager implements Pack
      * pages and it comes back as a block page?
      * 
      * @param position
-     *            The page postion.
+     *            The page position.
      * @param pageClass
      *            A type token indicating the type of page, used to cast the
      *            page.
@@ -804,7 +827,7 @@ final class Pager implements Pack
 
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
+                final MoveLatchIterator listOfMoves = getMoveLatchList().newIterator(pageRecorder);
                 Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
@@ -975,15 +998,15 @@ final class Pager implements Pack
                 }
                 final Pager pack = this;
                 final PageRecorder pageRecorder = new PageRecorder();
-                final MoveLatchIterator listOfMoves = new MoveLatchIterator(pageRecorder, getMoveLatchList());
-                Mutator mutator = listOfMoves.mutate(new Guarded<Mutator>()
+                final MoveLatchIterator moveLatches = getMoveLatchList().newIterator(pageRecorder);
+                Mutator mutator = moveLatches.mutate(new Guarded<Mutator>()
                 {
                     public Mutator run(List<MoveLatch> listOfMoveLatches)
                     {
                         MoveNodeRecorder moveNodeRecorder = new MoveNodeRecorder();
                         DirtyPageSet dirtyPages = new DirtyPageSet(pack, 16);
                         Journal journal = new Journal(pack, moveNodeRecorder, pageRecorder, dirtyPages);
-                        return new Mutator(pack, listOfMoves, moveNodeRecorder, pageRecorder, journal,dirtyPages);
+                        return new Mutator(pack, moveLatches, moveNodeRecorder, pageRecorder, journal,dirtyPages);
                     }
                 });
                 
@@ -1246,7 +1269,6 @@ final class Pager implements Pack
     
     public void copacetic()
     {
-        // TODO Auto-generated method stub
     }
 
     /**

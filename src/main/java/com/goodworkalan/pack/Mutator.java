@@ -15,56 +15,54 @@ import java.util.TreeSet;
  * An isolated view of an atomic alteration the contents of a {@link Pack}. In
  * order to allocate, read, write or free blocks, one must create a
  * <code>Mutator</code> by calling {@link Pack#mutate()}.
- * 
- * FIXME Javadoc for this class must be done first.
  */
 public final class Mutator
 {
     /** The page manager of the pack to mutate. */
-    final Pager pager;
+    private final Pager pager;
     
     /** A journal to record the isolated mutations of the associated pack. */
-    final Journal journal;
+    private final Journal journal;
 
     /** A table that orders allocation pages by the size of bytes remaining. */
-    final BySizeTable allocPagesBySize;
+    private final BySizeTable allocPagesBySize;
     
     /** A table that orders write pages by the size of bytes remaining. */
-    final BySizeTable writePagesBySize;
+    private final BySizeTable writePagesBySize;
 
     /**
      * A map of addresses to movable position references to the blocks the
      * addresses reference.
      */
-    final SortedMap<Long, Movable> addresses;
+    private final SortedMap<Long, Movable> addresses;
 
     /** A set of pages that need to be flushed to the disk.  */
-    final DirtyPageSet dirtyPages;
+    private final DirtyPageSet dirtyPages;
     
     /**
      * The per mutator recorder of move nodes that appends the page moves to a
      * linked list of move nodes.
      */
-    final MoveNodeRecorder moveNodeRecorder;
+    private final MoveNodeRecorder moveNodeRecorder;
     
     /**
-     * The per mtuator recorder of move nodes that adjusts the file positions of
+     * The per mutator recorder of move nodes that adjusts the file positions of
      * referenced pages.
      */
-    final PageRecorder pageRecorder;
+    private final PageRecorder pageRecorder;
 
     /**
-     * A reference to the per pager linked list of latched page moves.
+     * An iterator over the per pager linked list of latched page moves.
      * Operations that reference pages will used the mutate methods of this move
      * latch list to guard against page movement.
      */
-    final MoveLatchIterator moveLatchList;
+    private MoveLatchIterator moveLatches;
 
     /**
      * A list of journal entries that write temporary node references for the
      * temporary block allocations of this mutator.
      */
-    final List<Temporary> temporaries;
+    private final List<Temporary> temporaries;
 
     /**
      * The address of the last address page used to allocate an address. We give
@@ -73,7 +71,7 @@ public final class Mutator
      * 
      * @see Pager#getAddressPage(long)
      */
-    long lastAddressPage;
+    private long lastAddressPage;
 
     /**
      * Create a new mutator to alter the contents of a specific pagers.
@@ -101,13 +99,7 @@ public final class Mutator
         BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
         BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
 
-        CompositeMoveRecorder moveRecorder = new CompositeMoveRecorder();
-        
-        moveRecorder.add(pageRecorder);
-        moveRecorder.add(moveNodeRecorder);
-        moveRecorder.add(new BySizeTableRecorder(allocPagesBySize));
-        moveRecorder.add(new BySizeTableRecorder(writePagesBySize));
-        moveRecorder.add(new JournalRecorder(journal));
+
 
         this.pager = pager;
         this.journal = journal;
@@ -116,11 +108,46 @@ public final class Mutator
         this.dirtyPages = dirtyPages;
         this.addresses = new TreeMap<Long, Movable>();
         this.moveNodeRecorder = moveNodeRecorder;
-        this.moveLatchList = new MoveLatchIterator(moveRecorder, moveLatchList);
         this.pageRecorder = pageRecorder;
         this.temporaries = new ArrayList<Temporary>();
     }
-    
+
+    /**
+     * Return the move latch iterator over the per pager list of move latches.
+     * <p>
+     * The move latch iterator is lazily constructed to conserve memory and
+     * prevent leaks. Each move latch iterator holds a reference to the nodes of
+     * the per pager linked list. It will advance through the list when a
+     * guarded method is called. The list of move latches itself advances
+     * through the list, so that the head moves forward, and the previous nodes
+     * are no longer referenced. They can then be reclaimed by the garbage
+     * collector.
+     * <p>
+     * However, if we keep an iterator around after a rollback or commit, it
+     * will hold a node reference, but it will not be tracking any pages. We
+     * only want to hold node references when the client programmer is actually
+     * using the mutator.
+     * 
+     * @return The move latch iterator over the per pager list of move latches.
+     */
+    private MoveLatchIterator getMoveLatches()
+    {
+        if (moveLatches == null)
+        {
+            CompositeMoveRecorder moveRecorder = new CompositeMoveRecorder();
+            
+            moveRecorder.add(pageRecorder);
+            moveRecorder.add(moveNodeRecorder);
+            moveRecorder.add(new BySizeTableRecorder(allocPagesBySize));
+            moveRecorder.add(new BySizeTableRecorder(writePagesBySize));
+            moveRecorder.add(new JournalRecorder(journal));
+            
+            moveLatches = pager.getMoveLatchList().newIterator(moveRecorder);
+        }
+        
+        return moveLatches;
+    }
+
     /**
      * Return the pack that this mutator alters.
      * 
@@ -150,7 +177,7 @@ public final class Mutator
         
         final Temporary temporary = pager.getTemporary(address);
 
-        moveLatchList.mutate(new GuardedVoid()
+        getMoveLatches().mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoves)
             {
@@ -191,7 +218,7 @@ public final class Mutator
                 
         final int fullSize = blockSize + Pack.BLOCK_HEADER_SIZE;
        
-        return moveLatchList.mutate(new Guarded<Long>()
+        return getMoveLatches().mutate(new Guarded<Long>()
         {
             public Long run(List<MoveLatch> listOfMoves)
             {
@@ -241,18 +268,35 @@ public final class Mutator
         });
     }
 
-    // FIXME Document.
-    private UserPage dereference(long address, List<MoveLatch> listOfMoveLatches)
+    /**
+     * Dereferences the page referenced by the address, adjusting the file
+     * position of the page according the list of user move latches.
+     * 
+     * @param address
+     *            The block address.
+     * @param userMoveLatches
+     *            A list of the move latches that guarded the most recent user
+     *            page moves.
+     * @return The user block page.
+     */
+    private UserPage dereference(long address, List<MoveLatch> userMoveLatches)
     {
+        // Get the address page.
         AddressPage addresses = pager.getPage(address, AddressPage.class, new AddressPage());
 
+        // Assert that address is not a free address.
         long position = addresses.dereference(address);
         if (position == 0L || position == Long.MAX_VALUE)
         {
             throw new PackException(Pack.ERROR_FREED_FREE_ADDRESS);
         }
         
-        for (MoveLatch latch: listOfMoveLatches)
+        // For each move latch in the list of the most recent moves of user
+        // pages, enter the latch and record the move. Since user pages only
+        // move forward from address region to user region, we are assured that
+        // if the from position matches the dereferenced position, that is
+        // our dereferenced position is indeed out of date.
+        for (MoveLatch latch: userMoveLatches)
         {
             if (latch.getMove().getFrom() == position)
             {
@@ -264,11 +308,25 @@ public final class Mutator
         return pager.getPage(position, UserPage.class, new UserPage());
     }
 
-    // TODO Write at offset.
-    // FIXME Document.
-    public void write(final long address, final ByteBuffer src)
+    /**
+     * Write the remaining bytes of the given source buffer to the block
+     * referenced by the given block address. If there are more bytes remaining
+     * in the source buffer than the size of the addressed block, no bytes are
+     * transferred and a <code>BufferOverflowException</code> is thrown.
+     * 
+     * @param address
+     *            The block address.
+     * @param source
+     *            The buffer whose remaining bytes are written to the block
+     *            referenced by the address.
+     * 
+     * @throws BufferOverflowException
+     *             If there is insufficient space in the block for the remaining
+     *             bytes in the source buffer.
+     */
+    public void write(final long address, final ByteBuffer source)
     {
-        moveLatchList.mutate(new GuardedVoid()
+        getMoveLatches().mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -305,7 +363,7 @@ public final class Mutator
                     
                     interim.allocate(address, blockSize, dirtyPages);
                     
-                    if (blockSize < src.remaining() + Pack.BLOCK_HEADER_SIZE)
+                    if (blockSize < source.remaining() + Pack.BLOCK_HEADER_SIZE)
                     {
                         ByteBuffer copy = ByteBuffer.allocateDirect(blockSize - Pack.BLOCK_HEADER_SIZE);
                         if (blocks.read(address, copy) == null)
@@ -324,7 +382,7 @@ public final class Mutator
                     interim = pager.getPage(movable.getPosition(pager), InterimPage.class, new InterimPage());
                 }
     
-                if (!interim.write(address, src, dirtyPages))
+                if (!interim.write(address, source, dirtyPages))
                 {
                     throw new IllegalStateException();
                 }
@@ -332,7 +390,6 @@ public final class Mutator
         });
     }
     
-    // FIXME Document.
     public ByteBuffer read(long address)
     {
         ByteBuffer bytes = tryRead(address, null);
@@ -341,27 +398,48 @@ public final class Mutator
     }
 
     /**
-     * Read the block referenced by the given address into the given byte
-     * buffer.
+     * Read the block referenced by the given address into the given destination
+     * buffer. If the block size is greater than the bytes remaining in the
+     * destination buffer, size of the addressed block, no bytes are transferred
+     * and a <code>BufferOverflowException</code> is thrown.
      * 
      * @param address
      *            The address of the block.
-     * @param bytes
+     * @param destination
      *            The destination byte buffer.
+     * @throws BufferOverflowException
+     *             If the size of the block is greater than the bytes remaining
+     *             in the destination buffer.
      */
-    public void read(long address, ByteBuffer bytes)
+    public void read(long address, ByteBuffer destination)
     {
-        if (bytes == null)
+        if (destination == null)
         {
             throw new NullPointerException();
         }
-        tryRead(address, bytes);
+        tryRead(address, destination);
     }
 
-    // FIXME Document.
-    private ByteBuffer tryRead(final long address, final ByteBuffer bytes)
+    /**
+     * Read the block at the given address into the given destination buffer.
+     * If the tiven destination buffer is null, this method will allocate a byte
+     * buffer of the block size. If the given destination buffer is not null and
+     * the block size is greater than the bytes remaining in the destination
+     * buffer, size of the addressed block, no bytes are transferred and a
+     * <code>BufferOverflowException</code> is thrown.
+     * 
+     * @param address The block address.
+     * @param destination
+     *            The destination buffer or null to indicate that the method
+     *            should allocate a destination buffer of block size.
+     * @return The given or created destination buffer.
+     * @throws BufferOverflowException
+     *             If the size of the block is greater than the bytes remaining
+     *             in the destination buffer.
+     */
+    private ByteBuffer tryRead(final long address, final ByteBuffer destination)
     {
-        return moveLatchList.mutate(new Guarded<ByteBuffer>()
+        return getMoveLatches().mutate(new Guarded<ByteBuffer>()
         {
             public ByteBuffer run(List<MoveLatch> userMoveLatches)
             {
@@ -386,7 +464,7 @@ public final class Mutator
                         if (actual != lastPosition)
                         {
                             UserPage user = pager.getPage(actual, UserPage.class, new UserPage());
-                            out = user.read(address, bytes);
+                            out = user.read(address, destination);
                             if (out != null)
                             {
                                 break;
@@ -402,7 +480,7 @@ public final class Mutator
                 else
                 {
                     InterimPage interim = pager.getPage(movable.getPosition(pager), InterimPage.class, new InterimPage());
-                    out = interim.read(address, bytes);
+                    out = interim.read(address, destination);
                 }
 
                 return out;
@@ -435,7 +513,7 @@ public final class Mutator
         }
 
         // Ensure that no pages move.
-        moveLatchList.mutate(new GuardedVoid()
+        getMoveLatches().mutate(new GuardedVoid()
         {
             public void run(List<MoveLatch> listOfMoveLatches)
             {
@@ -544,10 +622,6 @@ public final class Mutator
     
     /**
      * Reset this mutator for reuse.
-     * <p>
-     * TODO Ensure that the move list does not grow from here and leak.
-     * <p>
-     * TODO Ensure that the move latch list does not grow from here and leak.
      *
      * @param commit The state of the commit.
      */
@@ -562,6 +636,7 @@ public final class Mutator
         pageRecorder.clear();
         temporaries.clear();
         lastAddressPage = 0;
+        moveLatches = null;
     }
 
     // FIXME Document.
@@ -574,7 +649,7 @@ public final class Mutator
 
         try
         {
-            moveLatchList.mutate(new GuardedVoid()
+            getMoveLatches().mutate(new GuardedVoid()
             {
                 public void run(List<MoveLatch> listOfMoveLatches)
                 {
@@ -915,7 +990,7 @@ public final class Mutator
         try
         {
             final Commit commit = new Commit(pageRecorder, journal, moveNodeRecorder);
-            return tryNewAddressPage(new MoveLatchIterator(commit, moveLatchList), commit, count); 
+            return tryNewAddressPage(pager.getMoveLatchList().newIterator(commit), commit, count); 
         }
         finally
         {
@@ -1406,7 +1481,7 @@ public final class Mutator
 
                 pager.getAddressLocker().unlock(player.getAddressSet());
                 
-                if (!commit.isAddressExpansion())
+                if (commit.isAddressExpansion())
                 {
                     // TODO Which pages to I return here?
                 }
@@ -1462,7 +1537,7 @@ public final class Mutator
             // Create a move latch list from our move latch list, with the
             // commit structure as the move recoder, so that page moves by other
             // committing mutators will be reflected in state of the commit.
-            tryCommit(new MoveLatchIterator(commit, moveLatchList), commit);
+            tryCommit(pager.getMoveLatchList().newIterator(commit), commit);
         }
         finally
         {

@@ -3,7 +3,6 @@ package com.goodworkalan.pack;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * A linked list of latches that guard page moves.
@@ -39,7 +38,7 @@ final class MoveLatchIterator
      * the shared iteration of the latches or the exclusive addition of
      * new latches.
      */
-    private final ReadWriteLock readWriteLock;
+    private final ReadWriteLock iterateAppendLock;
     
     /**
      * A list of the last series of user page moves.
@@ -64,73 +63,15 @@ final class MoveLatchIterator
     private boolean skipping;
     
     /**
-     * Construct the main move latch list that is managed by the pager.
-     */
-    public MoveLatchIterator()
-    {
-        this.recorder = new NullMoveRecorder();
-        this.headMoveLatch = new MoveLatch(false);
-        this.readWriteLock = new ReentrantReadWriteLock();
-        this.userMoveLatches = new ArrayList<MoveLatch>();
-    }
-
-    /**
      * Construct a move latch list that records move using the given move
      * recorder and begins at the head of the given move latch list.
      */
-    public MoveLatchIterator(MoveRecorder recorder, MoveLatchIterator moveLatchList)
+    public MoveLatchIterator(MoveRecorder recorder, ReadWriteLock iterateAppendLock, MoveLatch headMoveLatch, List<MoveLatch> userMoveLatches)
     {
         this.recorder = recorder;
-        this.headMoveLatch = moveLatchList.headMoveLatch;
-        this.readWriteLock = moveLatchList.readWriteLock;
-        this.userMoveLatches = new ArrayList<MoveLatch>(moveLatchList.userMoveLatches);
-    }
-
-    /**
-     * This method is only ever called on the <code>MoveList</code> contained in
-     * the <code>Pager</code>.
-     * 
-     * @param next
-     *            A list of move latch nodes to append to the per pager move
-     *            list.
-     */
-    public void add(MoveLatch next)
-    {
-        readWriteLock.writeLock().lock();
-        try
-        {
-            MoveLatch latch = headMoveLatch;
-            while (latch.getNext() != null)
-            {
-                latch = latch.getNext();
-                
-                // If the latch references a user page, then we need to
-                // record it in the list of user move latches.
-
-                // There is only ever one series of user page moves,
-                // moving to create space for address pages. If we see
-                // the head of a chain of user latch nodes 
-
-                if (latch.isUser())
-                {
-                    if (latch.isHead())
-                    {
-                        userMoveLatches.clear();
-                    }
-                    else
-                    {
-                        userMoveLatches.add(latch);
-                    }
-                }
-            }
-            latch.extend(next);
-            
-            headMoveLatch = latch;
-        }
-        finally
-        {
-            readWriteLock.writeLock().unlock();
-        }
+        this.headMoveLatch = headMoveLatch;
+        this.iterateAppendLock = iterateAppendLock;
+        this.userMoveLatches = new ArrayList<MoveLatch>(userMoveLatches);
     }
 
     /**
@@ -147,7 +88,7 @@ final class MoveLatchIterator
     {
         userPageWasLocked = false;
         skipping = false;
-        readWriteLock.readLock().lock();
+        iterateAppendLock.readLock().lock();
         try
         {
             while (advance(skip))
@@ -156,7 +97,7 @@ final class MoveLatchIterator
         }
         finally
         {
-            readWriteLock.readLock().unlock();
+            iterateAppendLock.readLock().unlock();
         }
     }
 
@@ -177,7 +118,7 @@ final class MoveLatchIterator
     {
         userPageWasLocked = false;
         skipping = false;
-        readWriteLock.readLock().lock();
+        iterateAppendLock.readLock().lock();
         try
         {
             for (;;)
@@ -190,7 +131,7 @@ final class MoveLatchIterator
         }
         finally
         {
-            readWriteLock.readLock().unlock();
+            iterateAppendLock.readLock().unlock();
         }
     }
 
@@ -208,7 +149,7 @@ final class MoveLatchIterator
     {
         userPageWasLocked = false;
         skipping = false;
-        readWriteLock.readLock().lock();
+        iterateAppendLock.readLock().lock();
         try
         {
             for (;;)
@@ -222,7 +163,7 @@ final class MoveLatchIterator
         }
         finally
         {
-            readWriteLock.readLock().unlock();
+            iterateAppendLock.readLock().unlock();
         }
     }
 
