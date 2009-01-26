@@ -259,10 +259,12 @@ implements Page
             dirtyPages.add(getRawPage());
         }
     }
-    
+
     /**
      * Return the page position associated with the address.
-     *
+     * 
+     * @param The
+     *            address.
      * @return The page position associated with the address.
      */
     public long dereference(long address)

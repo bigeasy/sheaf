@@ -20,7 +20,7 @@ final class Player
     
     private final SortedSet<Long> setOfAddresses;
     
-    private final Set<AddVacuum> setOfVacuums; 
+    private final Set<Vacuum> setOfVacuums; 
     
     private final LinkedList<Move> listOfMoves;
     
@@ -36,7 +36,7 @@ final class Player
         this.entryPosition = bytes.getLong();
         this.dirtyPages = dirtyPages;
         this.setOfAddresses = new TreeSet<Long>();
-        this.setOfVacuums = new HashSet<AddVacuum>();
+        this.setOfVacuums = new HashSet<Vacuum>();
         this.listOfMoves = new LinkedList<Move>();
     }
     
@@ -60,7 +60,7 @@ final class Player
         return setOfAddresses;
     }
     
-    public Set<AddVacuum> getVacuumSet()
+    public Set<Vacuum> getVacuumSet()
     {
         return setOfVacuums;
     }

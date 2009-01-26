@@ -1411,7 +1411,7 @@ public final class Mutator
                     // joruanl needs to add the vacuum to the list of vacuums.
                     if (mirror != null)
                     {
-                        journal.write(new AddVacuum(mirror, user));
+                        journal.write(new Vacuum(mirror, user));
                         pagesMirroredForVacuum.add(user);
                     }
                 }
@@ -1424,7 +1424,7 @@ public final class Mutator
                 // interim region back into their user block pages, but
                 // appending them, eliminating the free block gaps.
                 long afterVacuum = journal.getJournalPosition(); 
-                journal.write(new Vacuum(afterVacuum));
+                journal.write(new VacuumCheckpoint(afterVacuum));
                 
                 // Currently a three stage commit, stopping after vacuum, as
                 // well as after the initial journal write.
