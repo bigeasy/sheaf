@@ -38,10 +38,10 @@ extends Operation
     }
 
     /**
-     * Called by the {@link VacuumCheckpoint} journal entry to actually perform the vacuum
-     * by calling {@link InterimPage#vacuum(UserPage, DirtyPageSet, int, long)
-     * vacuum} on the interim page that stores the mirror of the vacuumed user
-     * page.
+     * Called by the {@link VacuumCheckpoint} journal entry to actually perform
+     * the vacuum by calling
+     * {@link InterimPage#vacuum(UserPage, DirtyPageSet, int, long) vacuum} on
+     * the interim page that stores the mirror of the vacuumed user page.
      * 
      * @param player
      *            The journal player.

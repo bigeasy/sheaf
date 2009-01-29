@@ -1,16 +1,13 @@
 package com.goodworkalan.pack;
 
-import java.util.HashSet;
 import java.util.Set;
 
 final class PageRecorder
 extends CompositeMoveRecorder
 {
-    private final Set<Long> addressPageSet;
+    private final SetRecorder trackedUserPages;
 
-    private final SetRecorder userPageSet;
-
-    private final SetRecorder journalPageSet;
+    private final SetRecorder journalPages;
     
     private final SetRecorder writeBlockPages;
     
@@ -18,26 +15,20 @@ extends CompositeMoveRecorder
     
     public PageRecorder()
     {
-        this.addressPageSet = new HashSet<Long>();
-        add(this.userPageSet = new SetRecorder());
-        add(this.journalPageSet = new SetRecorder());
+        add(this.trackedUserPages = new SetRecorder());
+        add(this.journalPages = new SetRecorder());
         add(this.writeBlockPages = new SetRecorder());
         add(this.allocBlockPages = new SetRecorder());
     }
     
-    public Set<Long> getAddressPageSet()
+    public Set<Long> getTrackedUserPages()
     {
-        return addressPageSet;
+        return trackedUserPages;
     }
     
-    public Set<Long> getUserPageSet()
+    public Set<Long> getJournalPages()
     {
-        return userPageSet;
-    }
-    
-    public Set<Long> getJournalPageSet()
-    {
-        return journalPageSet;
+        return journalPages;
     }
 
     /**
@@ -57,14 +48,8 @@ extends CompositeMoveRecorder
      * 
      * @return The set of interim block pages containing block allocations.
      */
-   public Set<Long> getAllocBlockPages()
+    public Set<Long> getAllocBlockPages()
     {
         return allocBlockPages;
-    }
-    
-    public void clear()
-    {
-        addressPageSet.clear();
-        super.clear();
     }
 }

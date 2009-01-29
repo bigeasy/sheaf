@@ -4,6 +4,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.SortedSet;
 
+// FIXME Not in use, implement an iterator by size descending.
 final class BySizeTableIterator implements Iterator<Long>
 {
     private Iterator<SortedSet<Long>> setsOfPages;

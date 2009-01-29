@@ -241,8 +241,11 @@ public final class Mutator
                 // We know that our already reserved pages are not moving
                 // because our page recorder will wait for them to move.
 
-                // We know that the new iterim page is not moving TODO?
-                
+                // We know that the new interim page is not moving because we
+                // have a shared lock on all moves, so if it is going to move
+                // it will move after this operation. It would not be in the
+                // set of free interim pages if it was also scheduled to move.
+
                 InterimPage interim = null;
                 long bestFit = allocPagesBySize.bestFit(fullSize);
                 if (bestFit == 0L)
@@ -584,7 +587,7 @@ public final class Mutator
                     UserPage user = dereference(address, listOfMoveLatches);
                     long position = user.getRawPage().getPosition();
                     journal.write(new Free(address, position));
-                    pageRecorder.getUserPageSet().add(position);
+                    pageRecorder.getTrackedUserPages().add(position);
                 }
             }
         });
@@ -626,7 +629,7 @@ public final class Mutator
         // pages.
         pager.getFreeInterimPages().free(pageRecorder.getAllocBlockPages());
         pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
-        pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
+        pager.getFreeInterimPages().free(pageRecorder.getJournalPages());
     }
     
     /**
@@ -758,7 +761,7 @@ public final class Mutator
             // However, I'm pretty sure that this is never the case, so
             // I'm going to put an assertion here and think about it.
             
-            if (pageRecorder.getUserPageSet().contains(userFromInterimPage))
+            if (pageRecorder.getTrackedUserPages().contains(userFromInterimPage))
             {
                 throw new IllegalStateException();
             }
@@ -939,13 +942,13 @@ public final class Mutator
                     // Remember that free user pages is a FreeSet which will
                     // remove from a set of available, or add to a set of
                     // positions that should not be made available. 
-                    pager.getFreeUserPages().reserve(position);
+                    pager.getEmptyUserPages().reserve(position);
                 }
                 else
                 {
                     // Was not in set of pages by size.
                     
-                    if (!pager.getFreeUserPages().reserve(position))
+                    if (!pager.getEmptyUserPages().reserve(position))
                     {
                         // Was not in set of empty, so it is in use.
 
@@ -1119,7 +1122,7 @@ public final class Mutator
 
             // Add the user page to the set of user pages involved in the
             // commit. 
-            pageRecorder.getUserPageSet().add(userFromInterimPage);
+            pageRecorder.getTrackedUserPages().add(userFromInterimPage);
 
             // Add the mapping of the interim page to an empty user page.
             commit.getInterimToEmptyUserPage().put(userFromInterimPage, movable);
@@ -1279,15 +1282,27 @@ public final class Mutator
                 {
                     // Consolidate pages by using existing, partially filled
                     // pages to store our new block allocations.
-    
-                    pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getUserPageSet(), commit.getInterimToSharedUserPage(), moveNodeRecorder.getMoveNode());
+                    pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getTrackedUserPages(), commit.getInterimToSharedUserPage(), moveNodeRecorder.getMoveNode());
                     commit.getUnassignedInterimBlockPages().removeAll(commit.getInterimToSharedUserPage().keySet());
                     
                     // Use free data pages to store the interim pages whose
                     // blocks would not fit on an existing page.
-                    
-                    pager.newUserPages(commit.getUnassignedInterimBlockPages(), pageRecorder.getUserPageSet(),
-                                       commit.getInterimToEmptyUserPage(), moveNodeRecorder.getMoveNode());
+                    while (commit.getUnassignedInterimBlockPages().size() != 0)
+                    {
+                        // If there are no empty user pages available, give up.
+                        long position = pager.getEmptyUserPages().allocate();
+                        if (position == 0L)
+                        {
+                            break;
+                        }
+                        // Track the new user page movements.
+                        pageRecorder.getTrackedUserPages().add(position);
+
+                        // Map the interim page to the empty user page.
+                        long source = commit.getUnassignedInterimBlockPages().first();
+                        commit.getUnassignedInterimBlockPages().remove(source);
+                        commit.getInterimToEmptyUserPage().put(source, new Movable(moveNodeRecorder.getMoveNode(), position, 0));
+                    }
                 }
             });
         }
@@ -1302,10 +1317,8 @@ public final class Mutator
 
         if (commit.getUnassignedInterimBlockPages().size() != 0)
         {
-
             // Grab the expand mutex to prevent anyone else from adjusting the
             // user to interim boundary.
-
             synchronized (pager.getUserExpandMutex())
             {
                 // Lock obtained. We might actually have enough pages now, but
@@ -1504,10 +1517,11 @@ public final class Mutator
                 pager.getAddressLocker().unlock(player.getAddressSet());
                 
                 // TODO Are there special user pages to return for address
-                // expansion?
+                // expansion? (Only the mirror pages, where are they?)
                 
                 // TODO Make this a method.
-                // Return all the interim pages. TODO Who resets them to zero?
+                // Return all the interim pages.
+                // TODO Who resets them to zero? (Document: They are blank, position only.)
                 pager.getFreeInterimPages().free(commit.getInterimToSharedUserPage().keySet());
                 for (Map.Entry<Long, Movable> entry: commit.getInterimToSharedUserPage().entrySet())
                 {
@@ -1521,7 +1535,7 @@ public final class Mutator
                 }
                 
                 // TODO Make this a method?
-                pager.getFreeInterimPages().free(pageRecorder.getJournalPageSet());
+                pager.getFreeInterimPages().free(pageRecorder.getJournalPages());
                 pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
             }
         });
@@ -1530,7 +1544,6 @@ public final class Mutator
         // will only contain user move latches if this is an address region
         // expansion and user pages were moved to accomodate the address region
         // expansion.
-        
         MoveLatch userMoveLatch = userMoveLatches;
         while (userMoveLatch.getNext() != null && !userMoveLatch.getNext().isHead())
         {

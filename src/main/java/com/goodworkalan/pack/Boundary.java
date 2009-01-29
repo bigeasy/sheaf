@@ -3,7 +3,7 @@ package com.goodworkalan.pack;
 /**
  * Tracks one of the two boundaries between the three sections of the Pack file.
  * 
- * @author Alan Gutierrrez
+ * @author Alan Gutierrez
  */
 final class Boundary
 {

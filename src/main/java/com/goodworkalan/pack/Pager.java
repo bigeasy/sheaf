@@ -131,7 +131,7 @@ final class Pager implements Pack
      * space remaining are added to the free page by size table, or the free
      * page set if the user page is completely empty.
      */
-    private final FreeSet freeUserPages;
+    private final FreeSet emptyUserPages;
 
     /**
      * A sorted set of of free interim pages sorted in descending order so that
@@ -211,7 +211,7 @@ final class Pager implements Pack
         this.rawPageByPosition = new HashMap<Long, PageReference>();
         this.freePageBySize = new BySizeTable(pageSize, alignment);
         this.staticPages = Collections.unmodifiableMap(staticPages);
-        this.freeUserPages = new FreeSet();
+        this.emptyUserPages = new FreeSet();
         this.freeInterimPages = new FreeSet();
         this.queue = new ReferenceQueue<RawPage>();
         this.compactLock = new ReentrantReadWriteLock();
@@ -302,6 +302,14 @@ final class Pager implements Pack
         return alignment;
     }
     
+    /**
+     * Return a map of named pages that maps a URI to the address of a static
+     * page.
+     * 
+     * @return The map of named static pages.
+     * 
+     * @see com.goodworkalan.pack.Pack#getStaticPages()
+     */
     public Map<URI, Long> getStaticPages()
     {
         return staticPages;
@@ -415,9 +423,9 @@ final class Pager implements Pack
      * 
      * @return The set of free user pages.
      */
-    public FreeSet getFreeUserPages()
+    public FreeSet getEmptyUserPages()
     {
-        return freeUserPages;
+        return emptyUserPages;
     }
     
     /**
@@ -467,7 +475,10 @@ final class Pager implements Pack
         return compactLock;
     }
     
-    // FIXME Document.
+    /**
+     * Remove the references to pages that have garbage collected from their
+     * reference queue and from the map of raw pages by position. 
+     */
     private synchronized void collect()
     {
         PageReference pageReference = null;
@@ -840,8 +851,11 @@ final class Pager implements Pack
                 });
 
                 // See the source of Mutator.newAddressPage.
-
-                position = mutator.newAddressPages(1).first();
+                addressPages.addAll(mutator.newAddressPages(1));
+                
+                // There are more pages now, return null indicating we need to
+                // try again.
+                return null;
             }
             else
             {
@@ -903,7 +917,25 @@ final class Pager implements Pack
         }
     }
 
-    // FIXME Document.
+    /**
+     * Return an address page with one or more free addresses available for
+     * allocation. If the given last selected address page has one or more free
+     * addresses available for allocation and it is not in use with another
+     * mutator, then it is returned, hopefully helping locality of reference.
+     * <p>
+     * This method will block if all of the available address pages are in use
+     * by other mutators, until one of the other address pages returns an
+     * address page. If there are fewer address pages than the minium number of
+     * available address pages for allocation outstanding, then a new address
+     * page is created by expanding the address page region.
+     * <p>
+     * TODO Specify a minimum address page pool.
+     * 
+     * @param lastSelected
+     *            The address of the last selected address page.
+     * @return An address page with one or more free addresses available for
+     *         allocation.
+     */
     public AddressPage getAddressPage(long lastSelected)
     {
         for (;;)
@@ -915,34 +947,26 @@ final class Pager implements Pack
             }
         }
     }
-    
-    // FIXME Document.
+
+    /**
+     * Return an address page to the set of address pages with one or more free
+     * addresses available for allocation.
+     * <p>
+     * The set of free address pages is used as the mutex for threads requesting
+     * an address page. If the address page is in the set of returning address
+     * pages, the address page is added to the set of free address pages and all
+     * threads waiting on the set of address page mutex are notified.
+     * 
+     * @param addressPage
+     *            The address page with one or more free addresses available for
+     *            allocation.
+     */
     public void returnAddressPage(AddressPage addressPage)
     {
         long position = addressPage.getRawPage().getPosition();
         synchronized (addressPages)
         {
             if (returningAddressPages.remove(position))
-            {
-                addressPages.add(position);
-                addressPages.notifyAll();
-            }
-        }
-    }
-
-    // FIXME Document.
-    public void addAddressPage(AddressPage addressPage)
-    {
-        // TODO Convince yourself that this works. That you're not really
-        // using the count, but rather the check in and checkout. You
-        // could be checking the available, but you'll only determine
-        // not to come back, in fact, check in only one place, the the
-        // tryGetAddressPage method.
-        long position = addressPage.getRawPage().getPosition();
-        synchronized (addressPages)
-        {
-            if (!returningAddressPages.contains(position)
-                && !addressPages.contains(position))
             {
                 addressPages.add(position);
                 addressPages.notifyAll();
@@ -1120,35 +1144,23 @@ final class Pager implements Pack
         }
     }
 
-    // FIXME Document.
-    public void newUserPages(SortedSet<Long> setOfSourcePages, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
+    /**
+     * Return a user page to the free page accounting, if the page has any 
+     * space remaining for blocks. If the block page is empty, it is added
+     * to the set of empty user pages. If it has block space remaining that
+     * is greater than the alignment, then it is added to by size lookup table.
+     * 
+     * @param userPage The user block page.
+     */
+    public void returnUserPage(UserPage userPage)
     {
-        while (setOfSourcePages.size() != 0)
+        if (userPage.getCount() == 0)
         {
-            long position = freeUserPages.allocate();
-            if (position == 0L)
-            {
-                break;
-            }
-            setOfDataPages.add(position);
-            long source = setOfSourcePages.first();
-            setOfSourcePages.remove(source);
-            mapOfPages.put(source, new Movable(moveNode, position, 0));
+            emptyUserPages.free(userPage.getRawPage().getPosition());
         }
-    }
-
-    // FIXME Document.
-    public void returnUserPage(BlockPage blocks)
-    {
-        // TODO Is it not the case that the block changes can mutated by virtue
-        // of a deallocation operation?
-        if (blocks.getCount() == 0)
+        else if (userPage.getRemaining() > getAlignment())
         {
-            freeUserPages.free(blocks.getRawPage().getPosition());
-        }
-        else if (blocks.getRemaining() > getAlignment())
-        {
-            getFreePageBySize().add(blocks);
+            getFreePageBySize().add(userPage);
         }
     }
 
@@ -1295,7 +1307,7 @@ final class Pager implements Pack
             int size = 0;
             
             size += Pack.COUNT_SIZE + addressPages.size() * Pack.POSITION_SIZE;
-            size += Pack.COUNT_SIZE + (freeUserPages.size() + getFreePageBySize().getSize()) * Pack.POSITION_SIZE;
+            size += Pack.COUNT_SIZE + (emptyUserPages.size() + getFreePageBySize().getSize()) * Pack.POSITION_SIZE;
             
             ByteBuffer reopen = ByteBuffer.allocateDirect(size);
             
@@ -1305,8 +1317,8 @@ final class Pager implements Pack
                 reopen.putLong(position);
             }
            
-            reopen.putInt(freeUserPages.size() + getFreePageBySize().getSize());
-            for (long position: freeUserPages)
+            reopen.putInt(emptyUserPages.size() + getFreePageBySize().getSize());
+            for (long position: emptyUserPages)
             {
                 reopen.putLong(position);
             }

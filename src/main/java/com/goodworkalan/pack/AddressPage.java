@@ -21,9 +21,10 @@ import java.util.zip.Checksum;
  * is in use, there will be a non-zero position value in the slot.
  * <p>
  * When we allocate a new block, because of isolation, we cannot write out the
- * address of the user block page of the new user block until we are playing back a flushed journal.
- * Thus, during the isolated mutation, we reserve the address position by writing
- * the maximum long value as the value of the page position.
+ * address of the user block page of the new user block until we are playing
+ * back a flushed journal. Thus, during the isolated mutation, we reserve the
+ * address position by writing the maximum long value as the value of the page
+ * position.
  */
 final class AddressPage
 implements Page
@@ -263,8 +264,8 @@ implements Page
     /**
      * Return the page position associated with the address.
      * 
-     * @param The
-     *            address.
+     * @param address
+     *            The address.
      * @return The page position associated with the address.
      */
     public long dereference(long address)

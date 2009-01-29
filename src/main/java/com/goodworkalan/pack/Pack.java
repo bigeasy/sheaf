@@ -7,6 +7,8 @@ import java.util.Map;
 
 /**
  * Management of a file as a reusable randomly accessible blocks of data.
+ * <p>
+ * FIXME Can you pull <code>Sheaf</code> out of this?
  */
 public interface Pack
 {
@@ -126,7 +128,16 @@ public interface Pack
     public File getFile();
 
     public void copacetic();
-    
+
+    /**
+     * Return a map of named pages that maps a URI to the address of a static
+     * page. Static pages are defined using the
+     * {@link Creator#addStaticPage(URI, int)} method. They can be used to
+     * specify blocks that contain housekeeping information in application
+     * programs.
+     * 
+     * @return The map of named static pages.
+     */
     public Map<URI, Long> getStaticPages();
 }
 

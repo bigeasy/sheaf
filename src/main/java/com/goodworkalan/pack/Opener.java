@@ -187,7 +187,7 @@ public final class Opener
         for (int i = 0; i < blockPageCount; i++)
         {
             long position = reopen.getLong();
-            BlockPage blockPage = pager.getPage(position, UserPage.class, new UserPage());
+            UserPage blockPage = pager.getPage(position, UserPage.class, new UserPage());
             pager.returnUserPage(blockPage);
         }
         

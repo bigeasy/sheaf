@@ -164,7 +164,7 @@ public final class Creator
         
         DirtyPageSet dirtyPages = new DirtyPageSet(pager, 0);
         pager.setPage(user, UserPage.class, new UserPage(), dirtyPages, false);
-        BlockPage blocks = pager.getPage(user, UserPage.class, new UserPage());
+        UserPage blocks = pager.getPage(user, UserPage.class, new UserPage());
         blocks.getRawPage().invalidate(0, pageSize);
         dirtyPages.flush();
         

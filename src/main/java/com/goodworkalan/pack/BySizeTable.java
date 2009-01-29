@@ -15,6 +15,8 @@ import java.util.TreeSet;
  * A table of pages ordered by size that performs a best fit lookup, returning
  * the page in the collection with the least amount of free space that will
  * accommodate a block of a given size.
+ * <p>
+ * FIXME Document next.
  * 
  * @author Alan Gutierrez
  */
@@ -151,10 +153,10 @@ final class BySizeTable implements Iterable<Long>
         return bestFit;
     }
 
-    // TODO We can compact even further by joining vacuumed pages.
+    // FIXME Remove and push into mutator.
     public synchronized void join(BySizeTable pagesBySize, Set<Long> setOfDataPages, Map<Long, Movable> mapOfPages, MoveNode moveNode)
     {
-        // TODO A better merge if you go in descending order.
+        // FIXME A better merge if you go in descending order.
         int pageSize = listOfSetsOfPages.size() * alignment;
         for (Map.Entry<Long, Integer> entry : pagesBySize.mapOfPageToSize.entrySet())
         {

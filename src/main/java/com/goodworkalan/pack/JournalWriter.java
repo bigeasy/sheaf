@@ -44,7 +44,7 @@ class JournalWriter
     {
         JournalPage nextJournal = pager.newInterimPage(new JournalPage(), dirtyPages);
         journal.write(new NextOperation(nextJournal.getJournalPosition()), 0, dirtyPages);
-        pageRecorder.getJournalPageSet().add(journal.getRawPage().getPosition());
+        pageRecorder.getJournalPages().add(journal.getRawPage().getPosition());
         return new JournalWriter(pager, moveNodeRecorder, pageRecorder, nextJournal, start, dirtyPages);
     }
     

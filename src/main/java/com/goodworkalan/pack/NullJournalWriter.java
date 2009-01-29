@@ -40,7 +40,7 @@ extends JournalWriter
     {
         JournalPage journal = pager.newInterimPage(new JournalPage(), dirtyPages);
         Movable start = new Movable(moveNodeRecorder.getMoveNode(), journal.getJournalPosition(), 0);
-        pageRecorder.getJournalPageSet().add(journal.getRawPage().getPosition());
+        pageRecorder.getJournalPages().add(journal.getRawPage().getPosition());
         return new JournalWriter(pager, moveNodeRecorder, pageRecorder, journal, start, dirtyPages);
     }
 }

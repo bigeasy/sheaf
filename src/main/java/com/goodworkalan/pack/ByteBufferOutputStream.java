@@ -7,6 +7,7 @@ import java.io.OutputStream;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 
+// TODO Move to pack-io.
 public class ByteBufferOutputStream
 extends OutputStream
 {
