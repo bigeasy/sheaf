@@ -65,7 +65,7 @@ final class Pager implements Pack
      * The map of weak references to raw pages keyed on the file position of the
      * raw page.
      */
-    private final Map<Long, PageReference> rawPageByPosition;
+    private final Map<Long, RawPageReference> rawPageByPosition;
 
     /**
      * The queue of weak references to raw pages keyed on the file position of
@@ -208,7 +208,7 @@ final class Pager implements Pack
         this.pageSize = header.getPageSize();
         this.userBoundary = new Boundary(pageSize, userBoundary);
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
-        this.rawPageByPosition = new HashMap<Long, PageReference>();
+        this.rawPageByPosition = new HashMap<Long, RawPageReference>();
         this.freePageBySize = new ByRemainingTable(pageSize, alignment);
         this.staticPages = Collections.unmodifiableMap(staticPages);
         this.emptyUserPages = new FreeSet();
@@ -481,8 +481,8 @@ final class Pager implements Pack
      */
     private synchronized void collect()
     {
-        PageReference pageReference = null;
-        while ((pageReference = (PageReference) queue.poll()) != null)
+        RawPageReference pageReference = null;
+        while ((pageReference = (RawPageReference) queue.poll()) != null)
         {
             rawPageByPosition.remove(pageReference.getPosition());
         }
@@ -570,8 +570,8 @@ final class Pager implements Pack
      */
     private void addRawPageByPosition(RawPage rawPage)
     {
-        PageReference intended = new PageReference(rawPage, queue);
-        PageReference existing = rawPageByPosition.get(intended.getPosition());
+        RawPageReference intended = new RawPageReference(rawPage, queue);
+        RawPageReference existing = rawPageByPosition.get(intended.getPosition());
         if (existing != null)
         {
             existing.enqueue();
@@ -666,7 +666,7 @@ final class Pager implements Pack
     private RawPage getRawPageByPosition(long position)
     {
         RawPage page = null;
-        PageReference chunkReference = rawPageByPosition.get(position);
+        RawPageReference chunkReference = rawPageByPosition.get(position);
         if (chunkReference != null)
         {
             page = chunkReference.get();
@@ -699,9 +699,6 @@ final class Pager implements Pack
      * The given page class is nothing more than a type token, to cast the page
      * to correct page type, without generating unchecked cast compiler
      * warnings.
-     * <p>
-     * TODO What happens when I return a journal page to the set of free interim
-     * pages and it comes back as a block page?
      * 
      * @param position
      *            The page position.
@@ -1149,6 +1146,8 @@ final class Pager implements Pack
      * space remaining for blocks. If the block page is empty, it is added
      * to the set of empty user pages. If it has block space remaining that
      * is greater than the alignment, then it is added to by size lookup table.
+     * <p>
+     * TODO Pull this out and create a pool.
      * 
      * @param userPage The user block page.
      */
@@ -1176,7 +1175,7 @@ final class Pager implements Pack
      */
     private RawPage removeRawPageByPosition(long position)
     {
-        PageReference existing = rawPageByPosition.get(new Long(position));
+        RawPageReference existing = rawPageByPosition.get(new Long(position));
         RawPage p = null;
         if (existing != null)
         {

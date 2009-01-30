@@ -22,8 +22,8 @@ interface MoveRecorder
     /**
      * Record a move returning the given value for moved if this move recorder
      * was not affected by move or true if it was effected by the move.
-     * 
-     * TODO The return value is not used anywhere.
+     * <p>
+     * TODO The return value is referenced in the journal move recorder.
      * 
      * @param move
      *            The move to record.

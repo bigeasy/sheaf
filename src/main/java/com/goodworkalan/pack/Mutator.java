@@ -1,5 +1,6 @@
 package com.goodworkalan.pack;
 
+import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -15,9 +16,6 @@ import java.util.TreeSet;
  * An isolated view of an atomic alteration the contents of a {@link Pack}. In
  * order to allocate, read, write or free blocks, one must create a
  * <code>Mutator</code> by calling {@link Pack#mutate()}.
- * <p>
- * FIXME There should be no TODOs in this code. (You can branch and put your
- * TODOs in the code in a branch.)
  */
 public final class Mutator
 {
@@ -886,11 +884,9 @@ public final class Mutator
                 SortedSet<Long> userFromInterimPagesToMove = new TreeSet<Long>();
 
                 // Create new user pages.
-
                 expandUser(moveList, commit, newAddressPageCount - userPageCount, userFromInterimPagesToMove);
 
                 // Append the linked list of moves to the move list.
-
                 addIterimMoveLatches(moveList, userMoveLatchHead, userFromInterimPagesToMove);
              }
         }
@@ -909,6 +905,9 @@ public final class Mutator
                 }
             });
         }
+        
+        // TODO These pages that you are creating, are they getting into 
+        // the free lists, or are they getting lost?
         
         // The set of newly created address pages.
         SortedSet<Long> newAddressPages = new TreeSet<Long>();
@@ -981,6 +980,9 @@ public final class Mutator
         
         // If the new address page is in the set of free block pages or if it is
         // a block page we've just created the page does not have to be moved.
+        
+        // TODO When you expand, are you putting the user pages back? Are you
+        // releasing them from ignore in the by remaining and empty tables?
 
         if (commit.getAddressFromUserPagesToMove().size() != 0)
         {
@@ -1253,6 +1255,38 @@ public final class Mutator
     }
 
     /**
+     * Return a set of interim pages to the set of free interim pages.
+     * <p>
+     * Freed interim pages are reused as raw pages by subsequent allocations.
+     * The {@link Pager#newInterimPage(Page, DirtyPageSet)} method will
+     * reinitialize them with a new page type.
+     * 
+     * @param pages
+     *            A set of interim pages to free.
+     */
+    private void freeInterimPages(Set<Long> pages)
+    {
+        pager.getFreeInterimPages().free(pages);
+    }
+
+    /**
+     * Free a map of interim block pages to user block pages by freeing the
+     * interim block pages and returning the user block pages to the pool of
+     * user block pages.
+     * 
+     * @param map
+     *            A map of interim block pages to user pages.
+     */
+    private void freeInterimPageMap(Map<Long, Movable> map)
+    {
+        pager.getFreeInterimPages().free(map.keySet());
+        for (Movable reference : map.values())
+        {
+            pager.returnUserPage(pager.getPage(reference.getPosition(pager), UserPage.class, new UserPage()));
+        }
+    }
+
+    /**
      * Commit the mutations.
      * 
      * @param moveLatchList
@@ -1472,9 +1506,10 @@ public final class Mutator
                
                 // Interim block pages allocated to store writes are written
                 // into place using address lookup to find the destination user
-                // block page. No vacuum of destination pages.
-                
-                // (TODO Why not vacuum? Can't you check and see if necessary?)
+                // block page. No vacuum of destination pages. You could vacuum
+                // the destination pages, but it is not necessary for write,
+                // we are not counting on the remaining bytes, they do not need
+                // to be created by vacuuming.
                 for (long position: pageRecorder.getWriteBlockPages())
                 {
                     InterimPage interim = pager.getPage(position, InterimPage.class, new InterimPage());
@@ -1530,25 +1565,11 @@ public final class Mutator
                 
                 // TODO Are there special user pages to return for address
                 // expansion? (Only the mirror pages, where are they?)
+                freeInterimPageMap(commit.getInterimToSharedUserPage());
+                freeInterimPageMap(commit.getInterimToEmptyUserPage());
                 
-                // TODO Make this a method.
-                // Return all the interim pages.
-                // TODO Who resets them to zero? (Document: They are blank, position only.)
-                pager.getFreeInterimPages().free(commit.getInterimToSharedUserPage().keySet());
-                for (Map.Entry<Long, Movable> entry: commit.getInterimToSharedUserPage().entrySet())
-                {
-                    pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
-                }
-
-                pager.getFreeInterimPages().free(commit.getInterimToEmptyUserPage().keySet());
-                for (Map.Entry<Long, Movable> entry: commit.getInterimToEmptyUserPage().entrySet())
-                {
-                    pager.returnUserPage(pager.getPage(entry.getValue().getPosition(pager), UserPage.class, new UserPage()));
-                }
-                
-                // TODO Make this a method?
-                pager.getFreeInterimPages().free(pageRecorder.getJournalPages());
-                pager.getFreeInterimPages().free(pageRecorder.getWriteBlockPages());
+                freeInterimPages(pageRecorder.getJournalPages());
+                freeInterimPages(pageRecorder.getWriteBlockPages());
             }
         });
 

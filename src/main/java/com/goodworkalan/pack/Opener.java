@@ -15,12 +15,8 @@ import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-
 /**
  * Opens pack files and performs recovery.
- * 
- * TODO Pull Medic out of this class.
- * TODO Test temporary pages.
  */
 public final class Opener
 {

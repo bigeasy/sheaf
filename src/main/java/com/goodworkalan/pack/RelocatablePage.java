@@ -35,7 +35,6 @@ implements Page
      */
     public void relocate(long to)
     {
-        // TODO Not enough locking?
         RawPage rawPage = getRawPage();
         Pager pager = rawPage.getPager();
         ByteBuffer bytes = rawPage.getByteBuffer();

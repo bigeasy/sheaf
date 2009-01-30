@@ -17,6 +17,7 @@ implements MoveRecorder
     
     public boolean record(Move move, boolean moved)
     {
+        // TODO Does involves take care of this?
         if (moved)
         {
             journal.write(new ShiftMove());
