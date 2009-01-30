@@ -5,14 +5,14 @@ import java.util.List;
 import java.util.SortedSet;
 
 /**
- * An iterator over the page positions of a {@link BySizeTable} that iterates in
+ * An iterator over the page positions of a {@link ByRemainingTable} that iterates in
  * the ascending order of the amount of bytes remaining for block allocation.
  * The iterator will return the a page positions grouped by the amount of bytes
  * remaining, in the ascending order of the amount of bytes remaining.
  * 
  * @author Alan Gutierrez
  */
-final class BySizeTableIterator implements Iterator<Long>
+final class ByRemainingTableIterator implements Iterator<Long>
 {
     /** An iterator over a list of sets of pages by amount remaining. */
     private Iterator<SortedSet<Long>> pagesBySize;
@@ -29,7 +29,7 @@ final class BySizeTableIterator implements Iterator<Long>
      * @param pagesBySize
      *            The array of sets of pages by remaining.
      */
-    public BySizeTableIterator(List<SortedSet<Long>> pagesBySize)
+    public ByRemainingTableIterator(List<SortedSet<Long>> pagesBySize)
     {
         Iterator<SortedSet<Long>> bySize = pagesBySize.iterator();
         Iterator<Long> pages = bySize.next().iterator();

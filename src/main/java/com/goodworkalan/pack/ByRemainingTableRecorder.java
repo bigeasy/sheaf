@@ -1,11 +1,11 @@
 package com.goodworkalan.pack;
 
-final class BySizeTableRecorder
+final class ByRemainingTableRecorder
 implements MoveRecorder
 {
-    private final BySizeTable bySizeTable;
+    private final ByRemainingTable bySizeTable;
     
-    public BySizeTableRecorder(BySizeTable bySizeTable)
+    public ByRemainingTableRecorder(ByRemainingTable bySizeTable)
     {
         this.bySizeTable = bySizeTable;
     }

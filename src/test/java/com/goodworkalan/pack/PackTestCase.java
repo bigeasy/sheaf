@@ -664,7 +664,7 @@ public class PackTestCase
     {
         List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
         listOfListsOfSizes.add(new TreeSet<Long>());
-        Iterator<Long> iterator = new BySizeTableIterator(listOfListsOfSizes);
+        Iterator<Long> iterator = new ByRemainingTableIterator(listOfListsOfSizes);
         iterator.remove();
     }
     
@@ -673,7 +673,7 @@ public class PackTestCase
     {
         List<SortedSet<Long>> listOfListsOfSizes = new ArrayList<SortedSet<Long>>();
         listOfListsOfSizes.add(new TreeSet<Long>());
-        Iterator<Long> iterator = new BySizeTableIterator(listOfListsOfSizes);
+        Iterator<Long> iterator = new ByRemainingTableIterator(listOfListsOfSizes);
         iterator.next();
     }
     

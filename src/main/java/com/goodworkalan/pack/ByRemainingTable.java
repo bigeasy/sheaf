@@ -21,12 +21,10 @@ import java.util.TreeSet;
  * A table of pages ordered by size that performs a best fit lookup, returning
  * the page in the collection with the least amount of free space that will
  * accommodate a block of a given size.
- * <p>
- * FIXME Rename ByRemainingTable.
  * 
  * @author Alan Gutierrez
  */
-final class BySizeTable implements Iterable<Long>
+final class ByRemainingTable implements Iterable<Long>
 {
     /** The block alignment. */
     private final int alignment;
@@ -59,7 +57,7 @@ final class BySizeTable implements Iterable<Long>
      * @param alignment
      *            The block alignment.
      */
-    public BySizeTable(int pageSize, int alignment)
+    public ByRemainingTable(int pageSize, int alignment)
     {
         assert pageSize % alignment == 0;
 
@@ -111,7 +109,7 @@ final class BySizeTable implements Iterable<Long>
      */
     public Iterator<Long> iterator()
     {
-        return new BySizeTableIterator(pagesByRemaining);
+        return new ByRemainingTableIterator(pagesByRemaining);
     }
 
     /**
@@ -187,7 +185,7 @@ final class BySizeTable implements Iterable<Long>
      * Remove the given page position from the table.
      * <p>
      * Returns the amount of blocks remaining rounded down to the nearest
-     * alignment. This is used by the {@link BySizeTableRecorder} to relocate
+     * alignment. This is used by the {@link ByRemainingTableRecorder} to relocate
      * the page and amount remaining in the table, when the page moves.
      * 
      * @param position

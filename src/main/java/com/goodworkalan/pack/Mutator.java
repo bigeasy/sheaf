@@ -28,10 +28,10 @@ public final class Mutator
     private final Journal journal;
 
     /** A table that orders allocation pages by the size of bytes remaining. */
-    private final BySizeTable allocPagesBySize;
+    private final ByRemainingTable allocPagesBySize;
     
     /** A table that orders write pages by the size of bytes remaining. */
-    private final BySizeTable writePagesBySize;
+    private final ByRemainingTable writePagesBySize;
 
     /**
      * A map of addresses to movable position references to the blocks the
@@ -99,8 +99,8 @@ public final class Mutator
     Mutator(Pager pager, MoveLatchIterator moveLatchList, MoveNodeRecorder moveNodeRecorder, PageRecorder pageRecorder,
         Journal journal, DirtyPageSet dirtyPages)
     {
-        BySizeTable allocPagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
-        BySizeTable writePagesBySize = new BySizeTable(pager.getPageSize(), pager.getAlignment());
+        ByRemainingTable allocPagesBySize = new ByRemainingTable(pager.getPageSize(), pager.getAlignment());
+        ByRemainingTable writePagesBySize = new ByRemainingTable(pager.getPageSize(), pager.getAlignment());
 
 
 
@@ -141,8 +141,8 @@ public final class Mutator
             
             moveRecorder.add(pageRecorder);
             moveRecorder.add(moveNodeRecorder);
-            moveRecorder.add(new BySizeTableRecorder(allocPagesBySize));
-            moveRecorder.add(new BySizeTableRecorder(writePagesBySize));
+            moveRecorder.add(new ByRemainingTableRecorder(allocPagesBySize));
+            moveRecorder.add(new ByRemainingTableRecorder(writePagesBySize));
             moveRecorder.add(new JournalRecorder(journal));
             
             moveLatches = pager.getMoveLatchList().newIterator(moveRecorder);
@@ -561,7 +561,7 @@ public final class Mutator
                     // Figure out which by size table contains the page.  We
                     // will not reinsert the page if it is not already in the by
                     // size table.
-                    BySizeTable bySize = unallocate ? allocPagesBySize : writePagesBySize;
+                    ByRemainingTable bySize = unallocate ? allocPagesBySize : writePagesBySize;
                     boolean reinsert = bySize.remove(position) != 0;
                     
                     // Free the block from the interim page.

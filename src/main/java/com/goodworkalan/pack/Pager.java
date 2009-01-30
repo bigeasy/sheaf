@@ -110,7 +110,7 @@ final class Pager implements Pack
      * remaining are added to the free page by size table, or the free page set
      * if the user page is completely empty.
      */
-    private final BySizeTable freePageBySize;
+    private final ByRemainingTable freePageBySize;
     
     /**
      * Map of temporary node addresses to byte buffers containing the address
@@ -209,7 +209,7 @@ final class Pager implements Pack
         this.userBoundary = new Boundary(pageSize, userBoundary);
         this.interimBoundary = new Boundary(pageSize, interimBoundary);
         this.rawPageByPosition = new HashMap<Long, PageReference>();
-        this.freePageBySize = new BySizeTable(pageSize, alignment);
+        this.freePageBySize = new ByRemainingTable(pageSize, alignment);
         this.staticPages = Collections.unmodifiableMap(staticPages);
         this.emptyUserPages = new FreeSet();
         this.freeInterimPages = new FreeSet();
@@ -403,7 +403,7 @@ final class Pager implements Pack
      * 
      * @return The best fit lookup table of user pages.
      */
-    public BySizeTable getFreePageBySize()
+    public ByRemainingTable getFreePageBySize()
     {
         return freePageBySize;
     }
