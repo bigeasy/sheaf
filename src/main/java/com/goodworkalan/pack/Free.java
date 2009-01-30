@@ -35,9 +35,10 @@ extends Operation
         addresses.free(address, player.getDirtyPages());
         UserPage user = pager.getPage(player.adjust(position), UserPage.class, new UserPage());
         user.waitOnMirrored();
+        // TODO What is reserve and release about here?
         pager.getFreePageBySize().reserve(user.getRawPage().getPosition());
         user.free(address, player.getDirtyPages());
-        pager.getFreePageBySize().release(user.getRawPage().getPosition());
+        pager.getFreePageBySize().release(user.getRawPage().getPosition(), user.getRawPage().getPosition());
         pager.returnUserPage(user);
     }
 

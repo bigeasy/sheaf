@@ -7,8 +7,6 @@ import java.util.Map;
 
 /**
  * Management of a file as a reusable randomly accessible blocks of data.
- * <p>
- * FIXME Can you pull <code>Sheaf</code> out of this?
  */
 public interface Pack
 {

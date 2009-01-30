@@ -950,11 +950,9 @@ public final class Mutator
                 else
                 {
                     // Was not in set of pages by size.
-                    
                     if (!pager.getEmptyUserPages().reserve(position))
                     {
                         // Was not in set of empty, so it is in use.
-
                         commit.getAddressFromUserPagesToMove().add(position);
                     }
                 }
@@ -1285,7 +1283,18 @@ public final class Mutator
                 {
                     // Consolidate pages by using existing, partially filled
                     // pages to store our new block allocations.
-                    pager.getFreePageBySize().join(allocPagesBySize, pageRecorder.getTrackedUserPages(), commit.getInterimToSharedUserPage(), moveNodeRecorder.getMoveNode());
+                    for (long position : allocPagesBySize)
+                    {
+                        int needed = pager.getPageSize() - (Pack.BLOCK_PAGE_HEADER_SIZE + allocPagesBySize.getRemaining(position));
+                        long found = pager.getFreePageBySize().bestFit(needed);
+                        if (found != 0L)
+                        {
+                            pageRecorder.getTrackedUserPages().add(found);
+                            commit.getInterimToSharedUserPage().put(position, new Movable(moveNodeRecorder.getMoveNode(), found, 0));
+                        }
+                    }
+                
+                    
                     commit.getUnassignedInterimBlockPages().removeAll(commit.getInterimToSharedUserPage().keySet());
                     
                     // Use free data pages to store the interim pages whose
