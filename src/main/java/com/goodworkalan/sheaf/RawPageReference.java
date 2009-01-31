@@ -6,7 +6,7 @@ import java.lang.ref.WeakReference;
 /**
  * A weak reference to a raw page that will queue itself into a
  * <code>ReferenceQueue</code> that will remove the raw page reference from the
- * page by position map of a {@link Pager}.
+ * page by position map of a {@link Sheaf}.
  */
 final class RawPageReference
 extends WeakReference<RawPage>

@@ -10,7 +10,7 @@ import java.util.zip.Checksum;
 
 public final class DirtyPageSet
 {
-    private final Pager pager;
+    private final Sheaf pager;
     
     private final Checksum checksum;
 
@@ -20,7 +20,7 @@ public final class DirtyPageSet
 
     private final int capacity;
     
-    public DirtyPageSet(Pager pager, int capacity)
+    public DirtyPageSet(Sheaf pager, int capacity)
     {
         this.pager = pager;
         this.checksum = new Adler32();
@@ -63,7 +63,7 @@ public final class DirtyPageSet
             }
             catch (IOException e)
             {
-                throw new PackException(Pack.ERROR_IO_WRITE, e);
+                throw new SheafException(101, e);
             }
         }
     }
@@ -80,7 +80,7 @@ public final class DirtyPageSet
                 }
                 catch (IOException e)
                 {
-                    throw new PackException(Pack.ERROR_IO_WRITE, e);
+                    throw new SheafException(101, e);
                 }
             }
         }
@@ -99,7 +99,7 @@ public final class DirtyPageSet
         }
         catch (IOException e)
         {
-            throw new PackException(Pack.ERROR_IO_WRITE, e);
+            throw new SheafException(101, e);
         }
         try
         {
@@ -107,7 +107,7 @@ public final class DirtyPageSet
         }
         catch (IOException e)
         {
-            throw new PackException(Pack.ERROR_IO_FORCE, e);
+            throw new SheafException(102, e);
         }
     }
     

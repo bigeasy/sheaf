@@ -17,7 +17,7 @@ import java.nio.ByteBuffer;
  * <p>
  * The raw page maintains soft reference to a byte buffer of the bytes of the
  * raw page and is itself soft referenced within the map of pages by position
- * within {@link Pager}.
+ * within {@link Sheaf}.
  * <p>
  * The soft references allow both the raw page and the byte buffer to be
  * reclaimed and reclaimed separately.
@@ -34,7 +34,7 @@ import java.nio.ByteBuffer;
 final class RawPage extends Regional
 {
     /** The pager that manages this raw page. */
-    private final Pager pager;
+    private final Sheaf pager;
 
     /**
      * A reference to a class that implements a specific application of a raw
@@ -62,7 +62,7 @@ final class RawPage extends Regional
      * @param position
      *            The position of the page.
      */
-    public RawPage(Pager pager, long position)
+    public RawPage(Sheaf pager, long position)
     {
         super(position);
         this.pager = pager;
@@ -73,7 +73,7 @@ final class RawPage extends Regional
      *
      * @return The pager.
      */
-    public Pager getPager()
+    public Sheaf getPager()
     {
         return pager;
     }
@@ -118,7 +118,7 @@ final class RawPage extends Regional
         }
         catch (IOException e)
         {
-            throw new PackException(Pack.ERROR_IO_READ, e);
+            throw new SheafException(103, e);
         }
         bytes.clear();
 

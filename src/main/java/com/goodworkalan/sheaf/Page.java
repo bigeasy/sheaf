@@ -42,7 +42,7 @@ package com.goodworkalan.sheaf;
  * associated with a <code>RawPage</code> can be promoted from a
  * <code>RelocatablePage</code> to a subclass of <code>RelocatablePage</code>
  * 
- * @see Pager#getPage
+ * @see Sheaf#getPage
  */
 interface Page
 {
@@ -63,20 +63,20 @@ interface Page
      *            The raw page.
      * @param dirtyPages
      *            The collection of dirty pages.
-     * @see Pager#getPage
+     * @see Sheaf#getPage
      */
     public void create(RawPage rawPage, DirtyPageSet dirtyPages);
 
     /**
      * Load this specific interpretation from the specified the raw page. This
-     * method is called from within the {@link Pager#getPage getPage} method of
+     * method is called from within the {@link Sheaf#getPage getPage} method of
      * the <code>Pager</code> when a page is loaded from the file. The specified
      * <code>RawPage</code> will be subsequently returned by {@link #getRawPage
      * getRawPage}.
      * 
      * @param rawPage
      *            The raw page.
-     * @see Pager#getPage
+     * @see Sheaf#getPage
      */
     public void load(RawPage rawPage);
 }
