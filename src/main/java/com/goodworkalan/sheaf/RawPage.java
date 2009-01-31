@@ -31,7 +31,7 @@ import java.nio.ByteBuffer;
  * which maintains a concurrency lock in the data page object. See
  * {@link BlockPage} for more details on the separate soft references.
  */
-final class RawPage extends Regional
+public final class RawPage extends Regional
 {
     /** The pager that manages this raw page. */
     private final Sheaf pager;

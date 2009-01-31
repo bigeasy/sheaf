@@ -59,6 +59,7 @@ public final class DirtyPageSet
             
             try
             {
+                // FIXME Do not use offset here.
                 pager.getDisk().write(pager.getFileChannel(), bytes, pointer.getPosition());
             }
             catch (IOException e)
@@ -76,6 +77,7 @@ public final class DirtyPageSet
             {
                 try
                 {
+                    // FIXME Write with offset.
                     rawPage.write(pager.getDisk(), pager.getFileChannel());
                 }
                 catch (IOException e)

@@ -5,10 +5,12 @@ import java.nio.ByteBuffer;
 /**
  * A structure referencing a position value stored at a specific
  * position in the file guarded by a mutex.
+ * <p>
+ * TODO Need a new name for this. PositionedBuffer? Block? Pagelet? Region?
  *
  * @author Alan Gutierrez
  */
-final class Pointer
+public final class Pointer
 {
     private final ByteBuffer slice;
 

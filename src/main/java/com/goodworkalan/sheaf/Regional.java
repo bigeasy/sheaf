@@ -8,11 +8,13 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-abstract class Regional
+// FIXME Call Pointer class Region. Call this Invalidator or some such.
+public abstract class Regional
 {
     private long position;
     
-    final SortedMap<Integer, Integer> setOfRegions;
+    // FIXME Move regional tests over here.
+    public final SortedMap<Integer, Integer> setOfRegions;
     
     public Regional(long position)
     {
@@ -85,6 +87,7 @@ abstract class Regional
         setOfRegions.put(start, end);
     }
     
+    // FIXME Add the offset.
     public void write(Disk disk, FileChannel fileChannel) throws IOException
     {
         ByteBuffer bytes = getByteBuffer();

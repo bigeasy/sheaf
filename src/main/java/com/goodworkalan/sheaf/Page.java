@@ -44,7 +44,7 @@ package com.goodworkalan.sheaf;
  * 
  * @see Sheaf#getPage
  */
-interface Page
+public interface Page
 {
     /**
      * Return the underlying raw page associated with this page.

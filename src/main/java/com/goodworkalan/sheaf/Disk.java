@@ -28,7 +28,7 @@ import java.nio.channels.FileChannel;
  * to generate I/O failures. These subclasses are not expected to be
  * stateless.
  */
-class Disk
+public class Disk
 {
     /**
      * Create an instance of <code>Disk</code>.
