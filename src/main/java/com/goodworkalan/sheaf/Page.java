@@ -41,6 +41,8 @@ package com.goodworkalan.sheaf;
  * a <code>RawPage</code> can change. Specifically, the <code>Page</code>
  * associated with a <code>RawPage</code> can be promoted from a
  * <code>RelocatablePage</code> to a subclass of <code>RelocatablePage</code>
+ * <p>
+ * TODO Attempt to perform tests with Mockito. If that works, remove this.
  * 
  * @see Sheaf#getPage
  */

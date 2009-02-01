@@ -26,6 +26,8 @@ public final class Sheaf
      * This size of a page.
      */
     private final int pageSize;
+    
+    private final int offset;
 
     /**
      * The map of weak references to raw pages keyed on the file position of the
@@ -51,11 +53,12 @@ public final class Sheaf
      * @param pageSize
      *            The size of a page in the sheaf.
      */
-    public Sheaf(FileChannel fileChannel, Disk disk, int pageSize)
+    public Sheaf(FileChannel fileChannel, Disk disk, int pageSize, int offset)
     {
         this.fileChannel = fileChannel;
         this.disk = disk;
         this.pageSize = pageSize;
+        this.offset = offset;
         this.rawPageByPosition = new HashMap<Long, RawPageReference>();
         this.queue = new ReferenceQueue<RawPage>();
     }
@@ -68,6 +71,11 @@ public final class Sheaf
     public FileChannel getFileChannel()
     {
         return fileChannel;
+    }
+    
+    public int getOffset()
+    {
+        return offset;
     }
 
     /**
@@ -111,7 +119,7 @@ public final class Sheaf
      *
      * @return The address of a new page from the end of file.
      */
-    public long newPage()
+    public long extend()
     {
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
 
@@ -365,6 +373,18 @@ public final class Sheaf
                 assert to == position.getPosition();
                 addRawPageByPosition(position);
             }
+        }
+    }
+    
+    public void force()
+    {
+        try
+        {
+            disk.force(fileChannel);
+        }
+        catch (IOException e)
+        {
+            throw new SheafException(102, e);
         }
     }
 }

@@ -8,18 +8,17 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-// FIXME Call Pointer class Region. Call this Invalidator or some such.
-public abstract class Regional
+// TODO This could be a separate utility class.
+public abstract class Invalidator
 {
     private long position;
     
-    // FIXME Move regional tests over here.
-    public final SortedMap<Integer, Integer> setOfRegions;
+    final SortedMap<Integer, Integer> regions;
     
-    public Regional(long position)
+    public Invalidator(long position)
     {
         this.position = position;
-        this.setOfRegions = new TreeMap<Integer, Integer>();
+        this.regions = new TreeMap<Integer, Integer>();
     }
     
     /**
@@ -60,7 +59,7 @@ public abstract class Regional
         
         INVALIDATE: for(;;)
         {
-            Iterator<Map.Entry<Integer, Integer>> entries = setOfRegions.entrySet().iterator();
+            Iterator<Map.Entry<Integer, Integer>> entries = regions.entrySet().iterator();
             while (entries.hasNext())
             {
                 Map.Entry<Integer, Integer> entry = entries.next();
@@ -84,25 +83,23 @@ public abstract class Regional
             }
             break;
         }
-        setOfRegions.put(start, end);
+        regions.put(start, end);
     }
     
-    // FIXME Add the offset.
-    public void write(Disk disk, FileChannel fileChannel) throws IOException
+    public void write(Disk disk, FileChannel fileChannel, int offset) throws IOException
     {
         ByteBuffer bytes = getByteBuffer();
-        bytes.clear(); // TODO Shouldn't be necessary.
 
-        for(Map.Entry<Integer, Integer> entry: setOfRegions.entrySet())
+        for(Map.Entry<Integer, Integer> entry: regions.entrySet())
         {
             bytes.limit(entry.getValue());
             bytes.position(entry.getKey());
             
-            disk.write(fileChannel, bytes, getPosition() + entry.getKey());
+            disk.write(fileChannel, bytes, offset + getPosition() + entry.getKey());
         }
 
         bytes.limit(bytes.capacity());
         
-        setOfRegions.clear();
+        regions.clear();
     }
 }

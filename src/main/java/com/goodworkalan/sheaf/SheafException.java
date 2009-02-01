@@ -10,7 +10,7 @@ extends RuntimeException
 {
     private static final long serialVersionUID = 20070821L;
     
-    protected final List<Object> listOfArguments = new ArrayList<Object>(); 
+    protected final List<Object> arguments = new ArrayList<Object>(); 
     
     private final int code;
     
@@ -46,7 +46,7 @@ extends RuntimeException
         }
         try
         {
-            return String.format(format, listOfArguments.toArray());
+            return String.format(format, arguments.toArray());
         }
         catch (Throwable e)
         {

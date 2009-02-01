@@ -2,83 +2,74 @@ package com.goodworkalan.sheaf;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.zip.Adler32;
-import java.util.zip.Checksum;
 
+/**
+ * A collection of pages whose byte buffers contain writes that have not been
+ * flushed to disk.
+ * <p>
+ * 
+ * @author Alan Gutierrez
+ */
 public final class DirtyPageSet
 {
-    private final Sheaf pager;
+    /** The sheaf form which the dirty pages came. */
+    private final Sheaf sheaf;
     
-    private final Checksum checksum;
+    private final Map<Long, RawPage> rawPages;
 
-    private final Map<Long, RawPage> mapOfPages;
-
-    private final Map<Long, ByteBuffer> mapOfByteBuffers;
+    private final Map<Long, ByteBuffer> byteBuffers;
 
     private final int capacity;
     
-    public DirtyPageSet(Sheaf pager, int capacity)
+    public DirtyPageSet(Sheaf sheaf, int capacity)
     {
-        this.pager = pager;
-        this.checksum = new Adler32();
-        this.mapOfPages = new HashMap<Long, RawPage>();
-        this.mapOfByteBuffers = new HashMap<Long, ByteBuffer>();
+        this.sheaf = sheaf;
+        this.rawPages = new HashMap<Long, RawPage>();
+        this.byteBuffers = new HashMap<Long, ByteBuffer>();
         this.capacity = capacity;
     }
-    
-    public Checksum getChecksum()
+
+    /**
+     * Add a raw page to the dirty page set.
+     * <p>
+     * The dirty page set will hold a hard reference to the raw page and the
+     * byte buffer of the hard page.
+     * <p>
+     * Because the byte buffer is softly referenced by the raw page, this method
+     * must be called before writing to the byte buffer, in order to ensure that
+     * writes to the byte buffer are not collected.
+     * 
+     * @param rawPage
+     *            The dirty raw page.
+     */
+    public void add(RawPage rawPage)
     {
-        return checksum;
+        rawPages.put(rawPage.getPosition(), rawPage);
+        byteBuffers.put(rawPage.getPosition(), rawPage.getByteBuffer());
     }
     
-    public void add(RawPage page)
-    {
-        mapOfPages.put(page.getPosition(), page);
-        mapOfByteBuffers.put(page.getPosition(), page.getByteBuffer());
-    }
-    
+    /**
+     * Flush the dirty page set if the dirty page set is at its capacity.
+     */
     public void flushIfAtCapacity()
     {
-        if (mapOfPages.size() > capacity)
+        if (rawPages.size() > capacity)
         {
             flush();
         }
     }
     
-    public void flush(Pointer pointer)
-    {
-        flush();
-
-        synchronized (pointer.getMutex())
-        {
-            ByteBuffer bytes = pointer.getByteBuffer();
-            bytes.clear();
-            
-            try
-            {
-                // FIXME Do not use offset here.
-                pager.getDisk().write(pager.getFileChannel(), bytes, pointer.getPosition());
-            }
-            catch (IOException e)
-            {
-                throw new SheafException(101, e);
-            }
-        }
-    }
-
     public void flush()
     {
-        for (RawPage rawPage: mapOfPages.values())
+        for (RawPage rawPage: rawPages.values())
         {
             synchronized (rawPage)
             {
                 try
                 {
-                    // FIXME Write with offset.
-                    rawPage.write(pager.getDisk(), pager.getFileChannel());
+                    rawPage.write(sheaf.getDisk(), sheaf.getFileChannel(), sheaf.getOffset());
                 }
                 catch (IOException e)
                 {
@@ -86,36 +77,13 @@ public final class DirtyPageSet
                 }
             }
         }
-        mapOfPages.clear();
-        mapOfByteBuffers.clear();
+        rawPages.clear();
+        byteBuffers.clear();
     }
 
-    public void commit(ByteBuffer journal, long position)
-    {
-        flush();
-        Disk disk = pager.getDisk();
-        FileChannel fileChannel = pager.getFileChannel();
-        try
-        {
-            disk.write(fileChannel, journal, position);
-        }
-        catch (IOException e)
-        {
-            throw new SheafException(101, e);
-        }
-        try
-        {
-            disk.force(fileChannel);
-        }
-        catch (IOException e)
-        {
-            throw new SheafException(102, e);
-        }
-    }
-    
     public void clear()
     {
-        mapOfByteBuffers.clear();
-        mapOfPages.clear();
+        byteBuffers.clear();
+        rawPages.clear();
     }
 }
