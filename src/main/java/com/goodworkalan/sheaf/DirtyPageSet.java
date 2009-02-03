@@ -14,18 +14,17 @@ import java.util.Map;
  */
 public final class DirtyPageSet
 {
-    /** The sheaf form which the dirty pages came. */
-    private final Sheaf sheaf;
-    
+    /** A map of page positions to hard references to raw pages. */
     private final Map<Long, RawPage> rawPages;
 
+    /** A map of page positions to hard references to page byte buffers. */
     private final Map<Long, ByteBuffer> byteBuffers;
 
+    /** The capacity of the dirty page set, when it should be flushed. */
     private final int capacity;
     
-    public DirtyPageSet(Sheaf sheaf, int capacity)
+    public DirtyPageSet(int capacity)
     {
-        this.sheaf = sheaf;
         this.rawPages = new HashMap<Long, RawPage>();
         this.byteBuffers = new HashMap<Long, ByteBuffer>();
         this.capacity = capacity;
@@ -60,11 +59,17 @@ public final class DirtyPageSet
             flush();
         }
     }
-    
+
+    /**
+     * Flush the dirty page set writing the dirty raw pages to the sheafs from
+     * which they came and releasing all hard references to raw pages and their
+     * associated byte buffers.
+     */
     public void flush()
     {
         for (RawPage rawPage: rawPages.values())
         {
+            Sheaf sheaf = rawPage.getSheaf();
             synchronized (rawPage)
             {
                 try
@@ -81,9 +86,13 @@ public final class DirtyPageSet
         byteBuffers.clear();
     }
 
+    /**
+     * Release all hard references to raw pages and their associated byte
+     * buffers without writing the changes.
+     */
     public void clear()
     {
-        byteBuffers.clear();
         rawPages.clear();
+        byteBuffers.clear();
     }
 }

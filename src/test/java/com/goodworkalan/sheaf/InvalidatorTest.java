@@ -7,7 +7,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 
-import org.junit.Test;
+import org.testng.annotations.Test;
 
 public class InvalidatorTest
 {
@@ -54,7 +54,7 @@ public class InvalidatorTest
 
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
         
-        Invalidator regional = new Invalidator(0L)
+        DirtyRegionMap regional = new DirtyRegionMap(0L)
         {
             @Override
             public ByteBuffer getByteBuffer()

@@ -6,32 +6,44 @@ import java.nio.ByteBuffer;
 /**
  * A structure referencing a position value stored at a specific position in the
  * file guarded by a mutex.
+ * <p>
+ * TODO Maybe move back to pack. You're not actually using this here.
  * 
  * @author Alan Gutierrez
  */
-public final class Region
+public final class Segment
 {
-    private final ByteBuffer slice;
+    private final ByteBuffer byteBuffer;
 
     private final long position;
 
     private final Object mutex;
 
-    public Region(ByteBuffer slice, long position, Object mutex)
+    public Segment(ByteBuffer byteBuffer, long position, Object mutex)
     {
-        this.slice = slice;
+        this.byteBuffer = byteBuffer;
         this.position = position;
         this.mutex = mutex;
     }
 
+    /**
+     * Return the position of the segment.
+     * 
+     * @return The position of the segment.
+     */
     public long getPosition()
     {
         return position;
     }
 
+    /**
+     * Return the byte buffer containing the bytes in the segment.
+     * 
+     * @return The byte buffer.
+     */
     public ByteBuffer getByteBuffer()
     {
-        return slice;
+        return byteBuffer;
     }
 
     /**
@@ -49,7 +61,7 @@ public final class Region
     {
         try
         {
-            sheaf.getDisk().write(sheaf.getFileChannel(), slice, position);
+            sheaf.getDisk().write(sheaf.getFileChannel(), byteBuffer, position);
         }
         catch (IOException e)
         {

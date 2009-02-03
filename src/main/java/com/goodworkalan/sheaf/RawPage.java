@@ -31,10 +31,10 @@ import java.nio.ByteBuffer;
  * which maintains a concurrency lock in the data page object. See
  * {@link BlockPage} for more details on the separate soft references.
  */
-public final class RawPage extends Invalidator
+public final class RawPage extends DirtyRegionMap
 {
-    /** The pager that manages this raw page. */
-    private final Sheaf pager;
+    /** The sheaf that manages this raw page. */
+    private final Sheaf sheaf;
 
     /**
      * A reference to a class that implements a specific application of a raw
@@ -54,30 +54,30 @@ public final class RawPage extends Invalidator
 
     /**
      * Create a raw page at the specified position associated with the specified
-     * pager. The byte buffer is not loaded until the {@link #getByteBuffer
+     * sheaf. The byte buffer is not loaded until the {@link #getByteBuffer
      * getByteBuffer} method is called.
      * 
      * @param pager
-     *            The pager that manages this raw page.
+     *            The sheaf that manages this raw page.
      * @param position
      *            The position of the page.
      */
     public RawPage(Sheaf pager, long position)
     {
         super(position);
-        this.pager = pager;
+        this.sheaf = pager;
     }
 
     /**
-     * Get the pager that manages this raw page.
+     * Get the sheaf that manages this raw page.
      *
-     * @return The pager.
+     * @return The sheaf.
      */
-    public Sheaf getPager()
+    public Sheaf getSheaf()
     {
-        return pager;
+        return sheaf;
     }
-
+    
     /**
      * Set the <code>Page</code> class that implements a specific type of page
      * that reads and writes to this underlying raw page.
@@ -110,11 +110,11 @@ public final class RawPage extends Invalidator
      */
     private ByteBuffer load()
     {
-        int pageSize = pager.getPageSize();
+        int pageSize = sheaf.getPageSize();
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
         try
         {
-            pager.getDisk().read(pager.getFileChannel(), bytes, getPosition());
+            sheaf.getDisk().read(sheaf.getFileChannel(), bytes, getPosition());
         }
         catch (IOException e)
         {

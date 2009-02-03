@@ -8,14 +8,20 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-// TODO This could be a separate utility class.
-public abstract class Invalidator
+/**
+ * Dirty regions of a page as map of offsets to counts of dirty bytes. This
+ * is a base class for raw pages and headers that want to write only the
+ * regions of a page that have changed. 
+ *  
+ * @author Alan Gutierrez
+ */
+public abstract class DirtyRegionMap
 {
     private long position;
     
     final SortedMap<Integer, Integer> regions;
     
-    public Invalidator(long position)
+    public DirtyRegionMap(long position)
     {
         this.position = position;
         this.regions = new TreeMap<Integer, Integer>();

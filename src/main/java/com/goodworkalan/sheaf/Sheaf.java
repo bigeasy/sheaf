@@ -208,10 +208,10 @@ public final class Sheaf
      * Get a given page implementation of an underlying raw page for the given
      * position. If the page does not exist, the given page instance is used to
      * load the contents of the underlying raw page. Creation of the page is
-     * syncrhronized so that all mutators will reference the same instace of
+     * synchronized so that all mutators will reference the same instance of
      * <code>Page</code> and <code>RawPage</code>.
      * <p>
-     * If the given page class is a subclass of the page instance currenlty
+     * If the given page class is a subclass of the page instance currently
      * mapped to the page position, the given page is used to load the contents
      * of the underlying raw page and the current page instance is replaced with
      * the subclass page instance. This is used to upgrade a relocatable page,
@@ -219,7 +219,7 @@ public final class Sheaf
      * block).
      * <p>
      * If the given page class is a superclass of the page instance currently
-     * mappsed to the page position, the current page is returned.
+     * mapped to the page position, the current page is returned.
      * <p>
      * The page instance is one that is created solely for this invocation of
      * <code>getPage</code>. It a page of the correct type is in the map of
