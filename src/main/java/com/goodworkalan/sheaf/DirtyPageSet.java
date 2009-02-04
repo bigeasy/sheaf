@@ -74,7 +74,7 @@ public final class DirtyPageSet
             {
                 try
                 {
-                    rawPage.write(sheaf.getDisk(), sheaf.getFileChannel(), sheaf.getOffset());
+                    rawPage.write(sheaf.getFileChannel(), sheaf.getOffset());
                 }
                 catch (IOException e)
                 {

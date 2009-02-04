@@ -15,12 +15,6 @@ public final class Sheaf
 {
     /** An file channel opened on the associated file. */
     private final FileChannel fileChannel;
-
-    /**
-     * Wrapper interface to file channel to allow for IO error
-     * simulation during testing.
-     */
-    private final Disk disk;
     
     /**
      * This size of a page.
@@ -43,20 +37,24 @@ public final class Sheaf
     private final ReferenceQueue<RawPage> queue;
 
     /**
-     * Create a new pager.
+     * Create a new sheaf the divides the given file channel into pages of the
+     * given page size starting at the given offset.
+     * <p>
+     * The offset added to the positions of pages in the sheaf to get an actual
+     * file position. The offset allows client programmers to use the start of
+     * the file for header information, but still have nicely rounded page
+     * positions beginning at page zero.
      * 
      * @param fileChannel
      *            An file channel opened on the associated file.
-     * @param disk
-     *            Wrapper interface to file channel to allow for IO error
-     *            simulation during testing.
      * @param pageSize
      *            The size of a page in the sheaf.
+     * @param offset
+     *            The offset of the first page.
      */
-    public Sheaf(FileChannel fileChannel, Disk disk, int pageSize, int offset)
+    public Sheaf(FileChannel fileChannel, int pageSize, int offset)
     {
         this.fileChannel = fileChannel;
-        this.disk = disk;
         this.pageSize = pageSize;
         this.offset = offset;
         this.rawPageByPosition = new HashMap<Long, RawPageReference>();
@@ -72,22 +70,17 @@ public final class Sheaf
     {
         return fileChannel;
     }
-    
+
+    /**
+     * Return the offset into the file where the first page is location. This
+     * offset is added to the positions of {@link RawPage} instances to
+     * determine the actual position of the raw page.
+     * 
+     * @return The offset of the first page.
+     */
     public int getOffset()
     {
         return offset;
-    }
-
-    /**
-     * Return the disk object used to read and write to the file channel. The
-     * disk is an class that can be overridden to generate I/O errors during
-     * testing.
-     * 
-     * @return The disk.
-     */
-    public Disk getDisk()
-    {
-        return disk;
     }
 
     /**
@@ -104,12 +97,15 @@ public final class Sheaf
      * Remove the references to pages that have garbage collected from their
      * reference queue and from the map of raw pages by position.
      */
-    private synchronized void collect()
+    private void collect()
     {
-        RawPageReference pageReference = null;
-        while ((pageReference = (RawPageReference) queue.poll()) != null)
+        synchronized (rawPageByPosition)
         {
-            rawPageByPosition.remove(pageReference.getPosition());
+            RawPageReference pageReference = null;
+            while ((pageReference = (RawPageReference) queue.poll()) != null)
+            {
+                rawPageByPosition.remove(pageReference.getPosition());
+            }
         }
     }
 
@@ -130,11 +126,11 @@ public final class Sheaf
 
         long position;
 
-        synchronized (disk)
+        synchronized (this)
         {
             try
             {
-                position = disk.size(fileChannel);
+                position = fileChannel.size();
             }
             catch (IOException e)
             {
@@ -143,7 +139,7 @@ public final class Sheaf
 
             try
             {
-                disk.write(fileChannel, bytes, position);
+                fileChannel.write(bytes, position);
             }
             catch (IOException e)
             {
@@ -152,7 +148,7 @@ public final class Sheaf
 
             try
             {
-                if (disk.size(fileChannel) % 1024 != 0)
+                if ((fileChannel.size() - getOffset()) % 1024 != 0)
                 {
                     throw new SheafException(105);
                 }
@@ -373,18 +369,6 @@ public final class Sheaf
                 assert to == position.getPosition();
                 addRawPageByPosition(position);
             }
-        }
-    }
-    
-    public void force()
-    {
-        try
-        {
-            disk.force(fileChannel);
-        }
-        catch (IOException e)
-        {
-            throw new SheafException(102, e);
         }
     }
 }

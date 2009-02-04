@@ -9,7 +9,7 @@ import java.nio.channels.FileChannel;
 
 import org.testng.annotations.Test;
 
-public class InvalidatorTest
+public class DirtyRegionMapTest
 {
     private File newFile()
     {
@@ -47,7 +47,8 @@ public class InvalidatorTest
         }
     }
 
-    @Test public void invalidator() throws IOException
+    @Test
+    public void invalidate() throws IOException
     {
         Disk disk = new Disk();
         FileChannel fileChannel = disk.open(newFile());

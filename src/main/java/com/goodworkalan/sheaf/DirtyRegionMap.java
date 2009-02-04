@@ -17,10 +17,19 @@ import java.util.TreeMap;
  */
 public abstract class DirtyRegionMap
 {
+    /** The file position at the beginning of the region.*/
     private long position;
     
+    /** The map of dirty regions offsets to count of dirty bytes. */
     final SortedMap<Integer, Integer> regions;
-    
+
+    /**
+     * Construct a dirty region map that will track the dirty regions of the
+     * byte content at the given file position.
+     * 
+     * @param position
+     *            The position of byte content.
+     */
     public DirtyRegionMap(long position)
     {
         this.position = position;
@@ -47,8 +56,24 @@ public abstract class DirtyRegionMap
         this.position = position;
     }
 
+    /**
+     * Return the byte content associated with this dirty region map. Subclasses
+     * will define this method to return a byte buffer that corresponds to the
+     * given file position, accounting for any offsets.
+     * 
+     * @return The byte content associated with this dirty region map.
+     */
     public abstract ByteBuffer getByteBuffer();
 
+    /**
+     * Mark as dirty the given length of bytes at the given offset.
+     * <p>
+     * If the specified region is overlaps or a another dirty region, the
+     * regions are combined to create a single dirty region.
+     *  
+     * @param offset The offset of the dirty region.
+     * @param length The length of the dirty region.
+     */
     public void invalidate(int offset, int length)
     {
         int start = offset;
@@ -91,8 +116,19 @@ public abstract class DirtyRegionMap
         }
         regions.put(start, end);
     }
-    
-    public void write(Disk disk, FileChannel fileChannel, int offset) throws IOException
+
+    /**
+     * Write the dirty regions to the given file channel using the given disk at
+     * the position of this dirty region map offset by the given offset.
+     * 
+     * @param fileChannel
+     *            The file channel to write to.
+     * @param offset
+     *            An offset to add to the dirty region map file position.
+     * @throws IOException
+     *             If an I/O error occours.
+     */
+    public void write(FileChannel fileChannel, int offset) throws IOException
     {
         ByteBuffer bytes = getByteBuffer();
 
@@ -101,7 +137,7 @@ public abstract class DirtyRegionMap
             bytes.limit(entry.getValue());
             bytes.position(entry.getKey());
             
-            disk.write(fileChannel, bytes, offset + getPosition() + entry.getKey());
+            fileChannel.write(bytes, offset + getPosition() + entry.getKey());
         }
 
         bytes.limit(bytes.capacity());

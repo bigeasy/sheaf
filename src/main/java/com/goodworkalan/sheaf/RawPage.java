@@ -104,7 +104,8 @@ public final class RawPage extends DirtyRegionMap
     }
 
     /**
-     * Load the byte buffer from the file channel of the pager.
+     * Load the byte buffer from the file channel of the sheaf at the position
+     * of this page offset by the offset of the sheaf.
      * 
      * @return A byte buffer of the contents of this page.
      */
@@ -114,7 +115,7 @@ public final class RawPage extends DirtyRegionMap
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
         try
         {
-            sheaf.getDisk().read(sheaf.getFileChannel(), bytes, getPosition());
+            sheaf.getFileChannel().read(bytes, sheaf.getOffset() + getPosition());
         }
         catch (IOException e)
         {
@@ -127,7 +128,8 @@ public final class RawPage extends DirtyRegionMap
 
     /**
      * Returns the softly referenced byte buffer of the content of this raw
-     * page.
+     * page. The byte buffer is read from the file channel of the sheaf at the
+     * position of this page offset by the offset of the sheaf.
      * <p>
      * The byte buffer is lazily initialized, so that the byte buffer is read on
      * the first call to this method.
