@@ -4,6 +4,7 @@ import static junit.framework.Assert.assertEquals;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 
@@ -25,12 +26,12 @@ public class DirtyRegionMapTest
         }
     }
 
-    private void assertBuffer(Disk disk, FileChannel fileChannel,
+    private void assertBuffer(FileChannel fileChannel,
             final ByteBuffer expected, ByteBuffer actual) throws IOException
     {
         expected.clear();
         actual.clear();
-        disk.read(fileChannel, actual, 0L);
+        fileChannel.read(actual, 0L);
         actual.flip();
         
         for (int i = 0; i < 64; i++)
@@ -50,8 +51,7 @@ public class DirtyRegionMapTest
     @Test
     public void invalidate() throws IOException
     {
-        Disk disk = new Disk();
-        FileChannel fileChannel = disk.open(newFile());
+        FileChannel fileChannel = new RandomAccessFile(newFile(), "rw").getChannel();
 
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
         
@@ -71,10 +71,10 @@ public class DirtyRegionMapTest
         
         regional.invalidate(0, 64);
         
-        regional.write(disk, fileChannel, 0);
+        regional.write(fileChannel, 0);
         
         ByteBuffer actual = ByteBuffer.allocateDirect(64);
-        assertBuffer(disk, fileChannel, expected, actual);
+        assertBuffer(fileChannel, expected, actual);
         
         for (int i = 3; i < 6; i++)
         {
@@ -90,9 +90,9 @@ public class DirtyRegionMapTest
         
         assertEquals(2, regional.regions.size());
         
-        regional.write(disk, fileChannel, 0);
+        regional.write(fileChannel, 0);
         
-        assertBuffer(disk, fileChannel, expected, actual);
+        assertBuffer(fileChannel, expected, actual);
         
         for (int i = 3; i < 10; i++)
         {
@@ -103,9 +103,9 @@ public class DirtyRegionMapTest
 
         assertEquals(1, regional.regions.size());
 
-        regional.write(disk, fileChannel, 0);
+        regional.write(fileChannel, 0);
         
-        assertBuffer(disk, fileChannel, expected, actual);
+        assertBuffer(fileChannel, expected, actual);
         
         for (int i = 3; i < 10; i++)
         {
@@ -115,8 +115,8 @@ public class DirtyRegionMapTest
         regional.invalidate(3, 3);
         assertEquals(1, regional.regions.size());
 
-        regional.write(disk, fileChannel, 0);
-        assertBuffer(disk, fileChannel, expected, actual);
+        regional.write(fileChannel, 0);
+        assertBuffer(fileChannel, expected, actual);
 
         for (int i = 2; i < 11; i++)
         {
@@ -143,8 +143,8 @@ public class DirtyRegionMapTest
         regional.invalidate(8, 3);
         assertEquals(1, regional.regions.size());
 
-        regional.write(disk, fileChannel, 0);
-        assertBuffer(disk, fileChannel, expected, actual);
+        regional.write(fileChannel, 0);
+        assertBuffer(fileChannel, expected, actual);
         
         for (int i = 2; i < 16; i++)
         {
@@ -159,7 +159,7 @@ public class DirtyRegionMapTest
         regional.invalidate(2, 14);
         assertEquals(1, regional.regions.size());
 
-        regional.write(disk, fileChannel, 0);
-        assertBuffer(disk, fileChannel, expected, actual);
+        regional.write(fileChannel, 0);
+        assertBuffer(fileChannel, expected, actual);
     }
 }

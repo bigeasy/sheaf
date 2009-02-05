@@ -42,16 +42,30 @@ package com.goodworkalan.sheaf;
  * associated with a <code>RawPage</code> can be promoted from a
  * <code>RelocatablePage</code> to a subclass of <code>RelocatablePage</code>
  * 
- * @see Sheaf#getPage
+ * @see Sheaf#getPage(long, Class, Page)
+ * @see Sheaf#setPage(long, Class, Page, DirtyPageSet, boolean)
  */
-public interface Page
+public abstract class Page
 {
+    /** The underlying raw page. */
+    private RawPage rawPage;
+    
     /**
      * Return the underlying raw page associated with this page.
+     * <p>
+     * FIXME Make it a bean property. Set it then call load.
      * 
      * @return The raw page.
      */
-    public RawPage getRawPage();
+    public RawPage getRawPage()
+    {
+        return rawPage;
+    }
+    
+    public void setRawPage(RawPage rawPage)
+    {
+        this.rawPage = rawPage;
+    }
 
     /**
      * Initialize the raw page to the specific interpretation implemented by
@@ -59,13 +73,13 @@ public interface Page
      * a new raw page is allocated. The specified raw page will subsequently be
      * returned by {@link #getRawPage getRawPage}.
      * 
-     * @param rawPage
-     *            The raw page.
      * @param dirtyPages
      *            The collection of dirty pages.
-     * @see Sheaf#getPage
+     * @see Sheaf#setPage(long, Class, Page, DirtyPageSet, boolean)
      */
-    public void create(RawPage rawPage, DirtyPageSet dirtyPages);
+    public void create(DirtyPageSet dirtyPages)
+    {
+    }
 
     /**
      * Load this specific interpretation from the specified the raw page. This
@@ -74,9 +88,9 @@ public interface Page
      * <code>RawPage</code> will be subsequently returned by {@link #getRawPage
      * getRawPage}.
      * 
-     * @param rawPage
-     *            The raw page.
-     * @see Sheaf#getPage
+     * @see Sheaf#getPage(long, Class, Page)
      */
-    public void load(RawPage rawPage);
+    public void load()
+    {
+    }
 }

@@ -16,11 +16,10 @@ public final class Sheaf
     /** An file channel opened on the associated file. */
     private final FileChannel fileChannel;
     
-    /**
-     * This size of a page.
-     */
+    /** The size of a page. */
     private final int pageSize;
     
+    /** The offset of the first page. */
     private final int offset;
 
     /**
@@ -253,7 +252,9 @@ public final class Sheaf
             }
             if (found == null)
             {
-                page.load(rawPage);
+                page.setRawPage(rawPage);
+                rawPage.setPage(page);
+                page.load();
             }
             else
             {
@@ -268,7 +269,9 @@ public final class Sheaf
                 {
                     throw new IllegalStateException();
                 }
-                page.load(rawPage);
+                page.setRawPage(rawPage);
+                rawPage.setPage(page);
+                page.load();
             }
         }
         return pageClass.cast(rawPage.getPage());
@@ -312,12 +315,16 @@ public final class Sheaf
                 // TODO Not sure about this. Maybe lock on existing?
                 synchronized (existing)
                 {
-                    page.create(existing, dirtyPages);
+                    page.setRawPage(existing);
+                    existing.setPage(page);
+                    page.create(dirtyPages);
                 }
             }
             else
             {
-                page.create(rawPage, dirtyPages);
+                page.setRawPage(rawPage);
+                rawPage.setPage(page);
+                page.create(dirtyPages);
                 addRawPageByPosition(rawPage);
             }
         }
