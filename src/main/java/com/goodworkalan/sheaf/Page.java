@@ -49,7 +49,20 @@ public abstract class Page
 {
     /** The underlying raw page. */
     private RawPage rawPage;
-    
+
+    /**
+     * Set the underlying raw page.
+     * <p>
+     * This can only be set by the <code>Sheaf</code> that maintains the
+     * <code>RawPage</code>.
+     * 
+     * @param rawPage
+     */
+    void setRawPage(RawPage rawPage)
+    {
+        this.rawPage = rawPage;
+    }
+
     /**
      * Return the underlying raw page associated with this page.
      * <p>
@@ -62,11 +75,6 @@ public abstract class Page
         return rawPage;
     }
     
-    public void setRawPage(RawPage rawPage)
-    {
-        this.rawPage = rawPage;
-    }
-
     /**
      * Initialize the raw page to the specific interpretation implemented by
      * this page. This method is called from within the <code>Pager</code> when

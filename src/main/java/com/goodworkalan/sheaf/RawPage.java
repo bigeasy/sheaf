@@ -81,12 +81,15 @@ public final class RawPage extends DirtyRegionMap
     /**
      * Set the <code>Page</code> class that implements a specific type of page
      * that reads and writes to this underlying raw page.
+     * <p>
+     * This can only be set by the <code>Sheaf</code> that maintains the
+     * <code>RawPage</code>.
      * 
      * @param page
      *            The <code>Page</code> class that reads and writes to this raw
      *            page.
      */
-    public void setPage(Page page)
+    void setPage(Page page)
     {
         this.page = page;
     }
