@@ -308,7 +308,7 @@ public final class Sheaf
      *            already exist in the map of pages by position.
      * @return The page given.
      */
-    public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages, boolean extant)
+    public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages)
     {
         position =  position / pageSize * pageSize;
         RawPage rawPage = new RawPage(this, position);
@@ -318,17 +318,7 @@ public final class Sheaf
             RawPage existing = removeRawPageByPosition(position);
             if (existing != null)
             {
-                if (!extant)
-                {
-                    throw new IllegalStateException();
-                }
-                // TODO Not sure about this. Maybe lock on existing?
-                synchronized (existing)
-                {
-                    page.setRawPage(existing);
-                    existing.setPage(page);
-                    page.create(dirtyPages);
-                }
+                throw new IllegalStateException();
             }
             else
             {
@@ -350,9 +340,50 @@ public final class Sheaf
         }
     }
 
+    private void copy(RawPage rawPage, long to)
+    {
+        ByteBuffer bytes = rawPage.getByteBuffer();
+        bytes.clear();
+        try
+        {
+            getFileChannel().write(bytes, to);
+        }
+        catch (IOException e)
+        {
+            throw new SheafException(0, e);
+        }
+        rawPage.setPosition(to);
+    }
+
     public void move(long from, long to)
     {
-        // FIXME Implement!
+        RawPage rawPage = null;
+        synchronized (rawPageByPosition)
+        {
+            if (getRawPageByPosition(to) != null)
+            {
+                throw new IllegalStateException();
+            }
+            rawPage = getRawPageByPosition(from);
+            if (rawPage == null)
+            {
+                copy(new RawPage(this, from), to);
+            }
+        }
+        synchronized (rawPage)
+        {
+            synchronized (rawPageByPosition)
+            {
+                if (getRawPageByPosition(to) != null)
+                {
+                    throw new IllegalStateException();
+                }
+                removeRawPageByPosition(from);
+                copy(new RawPage(this, from), to);
+                addRawPageByPosition(rawPage);
+            }
+            rawPage.setPosition(to);
+        }
     }
 
     /**
