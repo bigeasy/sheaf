@@ -135,6 +135,11 @@ public final class Sheaf
             {
                 throw new SheafException(104, e);
             }
+            
+            if (position < offset)
+            {
+                position = offset;
+            }
 
             try
             {
@@ -147,7 +152,8 @@ public final class Sheaf
 
             try
             {
-                if ((fileChannel.size() - getOffset()) % 1024 != 0)
+                long size = fileChannel.size();
+                if ((size - getOffset()) % pageSize != 0)
                 {
                     throw new SheafException(105);
                 }
@@ -158,7 +164,7 @@ public final class Sheaf
             }
         }
 
-        return position;
+        return position - offset;
     }
 
     /**
@@ -224,6 +230,10 @@ public final class Sheaf
      * The given page class is nothing more than a type token, to cast the page
      * to correct page type, without generating unchecked cast compiler
      * warnings.
+     * <p>
+     * TODO Pass in a PageFactory instead and have it create a page base on the
+     * contents of the raw page? Still could just build itself by returning
+     * this.
      * 
      * @param position
      *            The page position.
@@ -330,6 +340,19 @@ public final class Sheaf
         }
 
         return pageClass.cast(rawPage.getPage());
+    }
+    
+    public void free(long position)
+    {
+        synchronized (rawPageByPosition)
+        {
+            removeRawPageByPosition(position);
+        }
+    }
+
+    public void move(long from, long to)
+    {
+        // FIXME Implement!
     }
 
     /**

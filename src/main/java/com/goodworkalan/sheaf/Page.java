@@ -65,8 +65,6 @@ public abstract class Page
 
     /**
      * Return the underlying raw page associated with this page.
-     * <p>
-     * FIXME Make it a bean property. Set it then call load.
      * 
      * @return The raw page.
      */

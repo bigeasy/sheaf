@@ -56,6 +56,10 @@
         </dependency>
     </dependencies>
 
+    <properties>
+        <site.javadoc.show>protected</site.javadoc.show>
+    </properties>
+
     <build>
         <resources>
             <resource>
