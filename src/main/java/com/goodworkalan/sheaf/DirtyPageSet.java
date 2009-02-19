@@ -20,15 +20,23 @@ public final class DirtyPageSet
     /** A map of page positions to hard references to page byte buffers. */
     private final Map<Long, ByteBuffer> byteBuffers;
 
-    /** The capacity of the dirty page set, when it should be flushed. */
-    private final int capacity;
-    
-    // TODO Document.
-    public DirtyPageSet(int capacity)
+    /**
+     * Construct a dirty page set.
+     */
+    public DirtyPageSet()
     {
         this.rawPages = new HashMap<Long, RawPage>();
         this.byteBuffers = new HashMap<Long, ByteBuffer>();
-        this.capacity = capacity;
+    }
+    
+    /**
+     * Return the count of dirty pages held by this dirty page set.
+     * 
+     * @return The size of the set.
+     */
+    public int size()
+    {
+        return rawPages.size();
     }
 
     /**
@@ -50,17 +58,6 @@ public final class DirtyPageSet
         byteBuffers.put(rawPage.getPosition(), rawPage.getByteBuffer());
     }
     
-    /**
-     * Flush the dirty page set if the dirty page set is at its capacity.
-     */
-    public void flushIfAtCapacity()
-    {
-        if (rawPages.size() > capacity)
-        {
-            flush();
-        }
-    }
-
     /**
      * Flush the dirty page set writing the dirty raw pages to the sheafs from
      * which they came and releasing all hard references to raw pages and their

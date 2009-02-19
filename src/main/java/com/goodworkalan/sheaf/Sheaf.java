@@ -245,6 +245,7 @@ public final class Sheaf
     {
         position = (long) Math.floor(position - (position % pageSize));
         RawPage rawPage = new RawPage(this, position);
+        // FIXME Pointless lock.
         synchronized (rawPage)
         {
             RawPage found = null;
