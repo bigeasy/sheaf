@@ -230,10 +230,6 @@ public final class Sheaf
      * The given page class is nothing more than a type token, to cast the page
      * to correct page type, without generating unchecked cast compiler
      * warnings.
-     * <p>
-     * TODO Pass in a PageFactory instead and have it create a page base on the
-     * contents of the raw page? Still could just build itself by returning
-     * this.
      * 
      * @param position
      *            The page position.
@@ -332,6 +328,7 @@ public final class Sheaf
         return pageClass.cast(rawPage.getPage());
     }
     
+    // TODO Document.
     public void free(long position)
     {
         synchronized (rawPageByPosition)
@@ -340,6 +337,7 @@ public final class Sheaf
         }
     }
 
+    // TODO Document.
     private void copy(RawPage rawPage, long to)
     {
         ByteBuffer bytes = rawPage.getByteBuffer();
@@ -355,6 +353,7 @@ public final class Sheaf
         rawPage.setPosition(to);
     }
 
+    // TODO Document.
     public void move(long from, long to)
     {
         RawPage rawPage = null;

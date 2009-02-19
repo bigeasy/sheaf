@@ -23,6 +23,7 @@ public final class DirtyPageSet
     /** The capacity of the dirty page set, when it should be flushed. */
     private final int capacity;
     
+    // TODO Document.
     public DirtyPageSet(int capacity)
     {
         this.rawPages = new HashMap<Long, RawPage>();

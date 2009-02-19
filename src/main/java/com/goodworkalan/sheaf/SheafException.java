@@ -22,10 +22,12 @@ extends RuntimeException
     
     /** The error code. */
     private final int code;
-    
+
     /**
      * Create a Sheaf exception with the given error code.
-     * @param code The error code.
+     * 
+     * @param code
+     *            The error code.
      */
     public SheafException(int code)
     {

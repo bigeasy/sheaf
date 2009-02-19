@@ -45,7 +45,7 @@ package com.goodworkalan.sheaf;
  * @see Sheaf#getPage(long, Class, Page)
  * @see Sheaf#setPage(long, Class, Page, DirtyPageSet, boolean)
  */
-public abstract class Page
+public class Page
 {
     /** The underlying raw page. */
     private RawPage rawPage;
