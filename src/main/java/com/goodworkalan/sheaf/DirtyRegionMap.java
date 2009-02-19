@@ -51,7 +51,7 @@ public abstract class DirtyRegionMap
      * 
      * @param position The position of the page.
      */
-    public synchronized void setPosition(long position)
+    protected synchronized void setPosition(long position)
     {
         this.position = position;
     }

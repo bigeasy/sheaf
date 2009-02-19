@@ -77,7 +77,7 @@ public final class RawPage extends DirtyRegionMap
     {
         return sheaf;
     }
-    
+
     /**
      * Set the <code>Page</code> class that implements a specific type of page
      * that reads and writes to this underlying raw page.

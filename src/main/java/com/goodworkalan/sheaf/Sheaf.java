@@ -245,28 +245,24 @@ public final class Sheaf
     {
         position = (long) Math.floor(position - (position % pageSize));
         RawPage rawPage = new RawPage(this, position);
-        // FIXME Pointless lock.
-        synchronized (rawPage)
+        RawPage found = null;
+        synchronized (rawPageByPosition)
         {
-            RawPage found = null;
-            synchronized (rawPageByPosition)
-            {
-                found = getRawPageByPosition(position);
-                if (found == null)
-                {
-                    addRawPageByPosition(rawPage);
-                }
-            }
+            found = getRawPageByPosition(position);
             if (found == null)
             {
-                page.setRawPage(rawPage);
-                rawPage.setPage(page);
-                page.load();
+                addRawPageByPosition(rawPage);
             }
-            else
-            {
-                rawPage = found;
-            }
+        }
+        if (found == null)
+        {
+            page.setRawPage(rawPage);
+            rawPage.setPage(page);
+            page.load();
+        }
+        else
+        {
+            rawPage = found;
         }
         synchronized (rawPage)
         {
@@ -289,6 +285,10 @@ public final class Sheaf
      * to the given page class and given page. This method is called after a
      * page has been moved and its type has been changed, from user block page
      * to address page, or from interim page to user block page.
+     * <p>
+     * The given page instance must not be referenced by any other thread. Page
+     * instances cannot be reused. Each page instance must map to one and only
+     * one page position.
      * 
      * @param position
      *            The page position.
@@ -296,13 +296,9 @@ public final class Sheaf
      *            A type token indicating the type of page, used to cast the
      *            page.
      * @param page
-     *            An instance to used to load the page if the page does not
-     *            exist in the page map.
+     *            An instance to used to create the page.
      * @param dirtyPages
      *            The set of dirty pages.
-     * @param extant
-     *            If false, the method will assert that the page does not
-     *            already exist in the map of pages by position.
      * @return The page given.
      */
     public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages)
@@ -328,24 +324,51 @@ public final class Sheaf
 
         return pageClass.cast(rawPage.getPage());
     }
-    
-    // TODO Document.
+
+    /**
+     * Free the page at the given page position. The raw page is removed from
+     * the map of raw pages by position. The position of the raw page is set to
+     * a negative value so that anyone holding onto an outstanding raw page will
+     * know that it has been freed.
+     * <p>
+     * This method will synchronize on the sheaf then synchronize on the raw
+     * page currently mapped to the page position, if any, to set its position
+     * value to null. Callers must not call this method while in a synchronized
+     * block that is synchronized on the raw page mapped to the given position
+     * or deadlock will eventually occur.
+     * 
+     * @param position The page position to free.
+     */
     public void free(long position)
     {
         synchronized (rawPageByPosition)
         {
-            removeRawPageByPosition(position);
+            RawPage rawPage = removeRawPageByPosition(position);
+            if (rawPage != null)
+            {
+                synchronized (rawPage)
+                {
+                    rawPage.setPosition(-1L);
+                }
+            }
         }
     }
 
-    // TODO Document.
+    /**
+     * Copy the raw page to the given page position.
+     * 
+     * @param rawPage
+     *            The raw page.
+     * @param to
+     *            The page position.
+     */
     private void copy(RawPage rawPage, long to)
     {
         ByteBuffer bytes = rawPage.getByteBuffer();
         bytes.clear();
         try
         {
-            getFileChannel().write(bytes, to);
+            getFileChannel().write(bytes, getOffset() + to);
         }
         catch (IOException e)
         {
@@ -354,7 +377,25 @@ public final class Sheaf
         rawPage.setPosition(to);
     }
 
-    // TODO Document.
+    /**
+     * Move the contents at the page position given by from the the destination
+     * page position given by to.
+     * <p>
+     * The destination page position must not currently contain a page. If the
+     * destination page is currently in memory in a raw page, an
+     * <code>IllegalStateException</code> is thrown.
+     * <p>
+     * This method will synchronize on the sheaf then synchronize on the raw
+     * page currently mapped to the source page position, if any, to set its
+     * position value to the destination position. Callers must not call this
+     * method while in a synchronized block that is synchronized on the raw page
+     * mapped to the given position or deadlock will eventually occur.
+     * 
+     * @param from
+     *            The source page position.
+     * @param to
+     *            The destination page position.
+     */
     public void move(long from, long to)
     {
         RawPage rawPage = null;
@@ -369,20 +410,16 @@ public final class Sheaf
             {
                 copy(new RawPage(this, from), to);
             }
-        }
-        synchronized (rawPage)
-        {
-            synchronized (rawPageByPosition)
+            else
             {
-                if (getRawPageByPosition(to) != null)
+                synchronized (rawPage)
                 {
-                    throw new IllegalStateException();
+                    removeRawPageByPosition(from);
+                    copy(new RawPage(this, from), to);
+                    addRawPageByPosition(rawPage);
+                    rawPage.setPosition(to);
                 }
-                removeRawPageByPosition(from);
-                copy(new RawPage(this, from), to);
-                addRawPageByPosition(rawPage);
             }
-            rawPage.setPosition(to);
         }
     }
 
@@ -407,30 +444,6 @@ public final class Sheaf
             collect();
         }
         return p;
-    }
-
-    /**
-     * Relocate a page in the pager by removing it from the map of pages by
-     * position at the given from position and adding it at the given to
-     * position. This only moves the <code>RawPage</code> in the pager, it does
-     * not copy the page to the new position in the underlying file.
-     * 
-     * @param from
-     *            The position to move from.
-     * @param to
-     *            The position to move to.
-     */
-    public void relocate(long from, long to)
-    {
-        synchronized (rawPageByPosition)
-        {
-            RawPage position = removeRawPageByPosition(from);
-            if (position != null)
-            {
-                assert to == position.getPosition();
-                addRawPageByPosition(position);
-            }
-        }
     }
 }
 
