@@ -10,7 +10,7 @@ import java.nio.channels.FileChannel;
 
 import org.testng.annotations.Test;
 
-public class DirtyRegionMapTest
+public class DirtyMapTest
 {
     private File newFile()
     {
