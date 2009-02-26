@@ -15,7 +15,7 @@ import java.util.TreeMap;
  *  
  * @author Alan Gutierrez
  */
-public abstract class DirtyRegionMap
+public abstract class DirtyMap
 {
     /** The file position at the beginning of the region.*/
     private long position;
@@ -30,7 +30,7 @@ public abstract class DirtyRegionMap
      * @param position
      *            The position of byte content.
      */
-    public DirtyRegionMap(long position)
+    public DirtyMap(long position)
     {
         this.position = position;
         this.regions = new TreeMap<Integer, Integer>();
@@ -70,11 +70,13 @@ public abstract class DirtyRegionMap
      * <p>
      * If the specified region is overlaps or a another dirty region, the
      * regions are combined to create a single dirty region.
-     *  
-     * @param offset The offset of the dirty region.
-     * @param length The length of the dirty region.
+     * 
+     * @param offset
+     *            The offset of the dirty region.
+     * @param length
+     *            The length of the dirty region.
      */
-    public void invalidate(int offset, int length)
+    public void dirty(int offset, int length)
     {
         int start = offset;
         int end = offset + length;

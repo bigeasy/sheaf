@@ -31,7 +31,7 @@ import java.nio.ByteBuffer;
  * which maintains a concurrency lock in the data page object. See
  * {@link BlockPage} for more details on the separate soft references.
  */
-public final class RawPage extends DirtyRegionMap
+public final class RawPage extends DirtyMap
 {
     /** The sheaf that manages this raw page. */
     private final Sheaf sheaf;

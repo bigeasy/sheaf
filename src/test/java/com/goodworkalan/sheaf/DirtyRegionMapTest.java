@@ -55,7 +55,7 @@ public class DirtyRegionMapTest
 
         final ByteBuffer expected = ByteBuffer.allocateDirect(64);
         
-        DirtyRegionMap regional = new DirtyRegionMap(0L)
+        DirtyMap regional = new DirtyMap(0L)
         {
             @Override
             public ByteBuffer getByteBuffer()
@@ -69,7 +69,7 @@ public class DirtyRegionMapTest
             expected.put(i, (byte) 0);
         }
         
-        regional.invalidate(0, 64);
+        regional.dirty(0, 64);
         
         regional.write(fileChannel, 0);
         
@@ -80,13 +80,13 @@ public class DirtyRegionMapTest
         {
             expected.put(i, (byte) i);
         }
-        regional.invalidate(3, 3);
+        regional.dirty(3, 3);
 
         for (int i = 7; i < 10; i++)
         {
             expected.put(i, (byte) i);
         }
-        regional.invalidate(7, 3);
+        regional.dirty(7, 3);
         
         assertEquals(2, regional.regions.size());
         
@@ -98,8 +98,8 @@ public class DirtyRegionMapTest
         {
             expected.put(i, (byte) -i);
         }
-        regional.invalidate(3, 3);
-        regional.invalidate(6, 4);
+        regional.dirty(3, 3);
+        regional.dirty(6, 4);
 
         assertEquals(1, regional.regions.size());
 
@@ -111,8 +111,8 @@ public class DirtyRegionMapTest
         {
             expected.put(i, (byte) i);
         }
-        regional.invalidate(6, 4);
-        regional.invalidate(3, 3);
+        regional.dirty(6, 4);
+        regional.dirty(3, 3);
         assertEquals(1, regional.regions.size());
 
         regional.write(fileChannel, 0);
@@ -123,24 +123,24 @@ public class DirtyRegionMapTest
             expected.put(i, (byte) i);
         }
         // Two invalid regions.
-        regional.invalidate(3, 3);
-        regional.invalidate(7, 3);
+        regional.dirty(3, 3);
+        regional.dirty(7, 3);
         assertEquals(2, regional.regions.size());
         
         // First region extended by one.
-        regional.invalidate(2, 4);
+        regional.dirty(2, 4);
         assertEquals(2, regional.regions.size());
         
         // First region replace by larger region and merged into second region.
-        regional.invalidate(2, 5);
+        regional.dirty(2, 5);
         assertEquals(1, regional.regions.size());
 
         // Invalidating an already invalid region.
-        regional.invalidate(3, 3);
+        regional.dirty(3, 3);
         assertEquals(1, regional.regions.size());
         
         // Extending a region.
-        regional.invalidate(8, 3);
+        regional.dirty(8, 3);
         assertEquals(1, regional.regions.size());
 
         regional.write(fileChannel, 0);
@@ -151,12 +151,12 @@ public class DirtyRegionMapTest
             expected.put(i, (byte) -i);
         }
         // Swallowing entire regions.
-        regional.invalidate(3, 3);
-        regional.invalidate(7, 3);
+        regional.dirty(3, 3);
+        regional.dirty(7, 3);
         assertEquals(2, regional.regions.size());
-        regional.invalidate(11, 2);
+        regional.dirty(11, 2);
         assertEquals(3, regional.regions.size());
-        regional.invalidate(2, 14);
+        regional.dirty(2, 14);
         assertEquals(1, regional.regions.size());
 
         regional.write(fileChannel, 0);
