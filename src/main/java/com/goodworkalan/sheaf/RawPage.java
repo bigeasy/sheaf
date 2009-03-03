@@ -30,6 +30,9 @@ import java.nio.ByteBuffer;
  * can be collected. The separate soft references only benefit the data page
  * which maintains a concurrency lock in the data page object. See
  * {@link BlockPage} for more details on the separate soft references.
+ * <p>
+ * FIXME Create Region base class.
+ * FIXME Move a default header class into here.
  */
 public final class RawPage extends DirtyMap
 {

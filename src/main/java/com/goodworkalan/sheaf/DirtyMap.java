@@ -12,7 +12,9 @@ import java.util.TreeMap;
  * Dirty regions of a page as map of offsets to counts of dirty bytes. This
  * is a base class for raw pages and headers that want to write only the
  * regions of a page that have changed. 
- *  
+ * <p>
+ * FIXME Rename DirtyByteMap.
+ * 
  * @author Alan Gutierrez
  */
 public abstract class DirtyMap

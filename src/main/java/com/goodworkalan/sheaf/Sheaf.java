@@ -15,7 +15,7 @@ public final class Sheaf
 {
     /** An file channel opened on the associated file. */
     private final FileChannel fileChannel;
-    
+
     /** The size of a page. */
     private final int pageSize;
     
@@ -246,23 +246,29 @@ public final class Sheaf
         position = (long) Math.floor(position - (position % pageSize));
         RawPage rawPage = new RawPage(this, position);
         RawPage found = null;
-        synchronized (rawPageByPosition)
+        // Must synchronize since the page will be added, then initialized.
+        // After being added to the map, the uninitialized raw page may be
+        // read in the class checking synchronization block.
+        synchronized (rawPage)
         {
-            found = getRawPageByPosition(position);
+            synchronized (rawPageByPosition)
+            {
+                found = getRawPageByPosition(position);
+                if (found == null)
+                {
+                    addRawPageByPosition(rawPage);
+                }
+            }
             if (found == null)
             {
-                addRawPageByPosition(rawPage);
+                page.setRawPage(rawPage);
+                rawPage.setPage(page);
+                page.load();
             }
-        }
-        if (found == null)
-        {
-            page.setRawPage(rawPage);
-            rawPage.setPage(page);
-            page.load();
-        }
-        else
-        {
-            rawPage = found;
+            else
+            {
+                rawPage = found;
+            }
         }
         synchronized (rawPage)
         {
