@@ -1,5 +1,5 @@
 rm -rf ./target
-mvn -Dsite.javadoc.show=private site
+mvn -Dsite.javadoc.show=private -Dsite.javadoc.visibility=private site
 rsync -az -e ssh ./target/site/apidocs/ maribor.blogometer.com:/cb/www/static/curlybraces/documentation/sheaf/api/private/
 rsync -az -e ssh ./target/site/xref maribor.blogometer.com:/cb/www/static/curlybraces/documentation/sheaf/
 rsync -az -e ssh ./target/site/cobertura maribor.blogometer.com:/cb/www/static/curlybraces/documentation/sheaf/

@@ -8,6 +8,9 @@ import java.nio.channels.FileChannel;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import com.goodworkalan.region.DirtyByteMap;
+import com.goodworkalan.region.Writable;
+
 /**
  * A representation of the basic page attributes of position and byte buffer
  * associated with an application of the raw page implemented by {@link Page}.

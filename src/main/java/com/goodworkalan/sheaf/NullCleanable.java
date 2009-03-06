@@ -1,5 +1,7 @@
 package com.goodworkalan.sheaf;
 
+import com.goodworkalan.region.Cleanable;
+
 /**
  * A null implementation of {@link Cleanable} that does not bother to record
  * which bytes are clean or dirty.

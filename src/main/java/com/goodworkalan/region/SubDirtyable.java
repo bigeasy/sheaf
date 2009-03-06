@@ -1,4 +1,4 @@
-package com.goodworkalan.sheaf;
+package com.goodworkalan.region;
 
 // TODO Document.
 public class SubDirtyable implements Cleanable

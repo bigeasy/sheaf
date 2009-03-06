@@ -1,10 +1,12 @@
-package com.goodworkalan.sheaf;
+package com.goodworkalan.region;
 
 import static junit.framework.Assert.assertEquals;
 
 import java.io.IOException;
 
 import org.testng.annotations.Test;
+
+import com.goodworkalan.region.DirtyByteMap;
 
 public class DirtyByteMapTest
 {

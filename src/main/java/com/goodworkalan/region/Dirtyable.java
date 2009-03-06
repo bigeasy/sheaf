@@ -1,4 +1,4 @@
-package com.goodworkalan.sheaf;
+package com.goodworkalan.region;
 
 /**
  * Used to mark regions of a buffer as dirty and in need of writing to disk.
