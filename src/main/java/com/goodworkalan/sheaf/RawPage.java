@@ -208,25 +208,49 @@ public final class RawPage implements Writable
         return bytes;
     }
 
-    // TODO Document.
+    /**
+     * Write the dirty regions to the given file channel using the given disk at
+     * the position of this dirty region map offset by the given offset.
+     * 
+     * @param fileChannel
+     *            The file channel to write to.
+     * @param offset
+     *            An offset to add to the dirty region map file position.
+     * @throws IOException
+     *             If an I/O error occurs.
+     */
     public void write(FileChannel fileChannel, int offset) throws IOException
     {
         dirtyByteMap.write(getByteBuffer(), fileChannel, getPosition() + offset);
     }
-    
-    // TODO Document.
+
+    /**
+     * Get the length of raw page buffer.
+     * 
+     * @return The length of raw page buffer.
+     */
     public int getLength()
     {
         return dirtyByteMap.getLength();
     }
-    
-    // TODO Document.
+
+    /**
+     * Mark as dirty the bytes in the byte buffer starting at the given offset
+     * and extending for the given length.
+     * 
+     * @param offset
+     *            The offset of the dirty region.
+     * @param length
+     *            The length of the dirty region.
+     */
     public void dirty(int offset, int length)
     {
         dirtyByteMap.dirty(offset, length);
     }
     
-    // TODO Document.
+    /**
+     * Mark as dirty the entire byte buffer.
+     */
     public void dirty()
     {
         dirtyByteMap.dirty();
