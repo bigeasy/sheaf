@@ -3,10 +3,21 @@ package com.goodworkalan.sheaf;
 import java.nio.ByteBuffer;
 import java.util.concurrent.locks.Lock;
 
-// TODO Document.
+/**
+ * A lockable and dirtyable region of a file channel. A region maps a byte
+ * buffer to a lock to guard writing to the byte buffer and a position in the
+ * file. A region implements the {@link Dirtyable} interface to that is can
+ * track which bytes in the byte buffer need to be written to disk.
+ * 
+ * @author Alan Gutierrez
+ */
 public interface Region extends Dirtyable
 {
-    // TODO Document.
+    /**
+     * Get the lock used to guard the underlying byte buffer.
+     * 
+     * @return The lock used to guard the region.
+     */
     public Lock getLock();
 
     /**

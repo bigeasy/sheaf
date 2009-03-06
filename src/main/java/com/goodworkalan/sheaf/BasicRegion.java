@@ -3,10 +3,21 @@ package com.goodworkalan.sheaf;
 import java.nio.ByteBuffer;
 import java.util.concurrent.locks.Lock;
 
-// TODO Document.
+/**
+ * <p>
+ * When a region does not need to track which bytes are dirty, a
+ * {@link NullCleanable} can be used to implement the <code>Dirtyable</code>
+ * interface.
+ * <p>
+ * The lock can be ignored in the case of a region that is never accessed
+ * concurrently. When a region is never accessed concurrently, locking the
+ * uncontended lock ought not to create a significant performance penalty.
+ * 
+ * @author Alan Gutierrez
+ */
 public class BasicRegion extends AbstractRegion
 {
-    // TODO Document.
+    /** Used to track which bytes in the byte buffer are dirty. */
     public Dirtyable dirtyable;
     
     // TODO Document.
