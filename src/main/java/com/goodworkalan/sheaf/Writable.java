@@ -3,6 +3,7 @@ package com.goodworkalan.sheaf;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 
+// TODO Document.
 public interface Writable extends Region
 {
     /**

@@ -3,8 +3,10 @@ package com.goodworkalan.sheaf;
 import java.nio.ByteBuffer;
 import java.util.concurrent.locks.Lock;
 
+// TODO Document.
 public interface Region extends Dirtyable
 {
+    // TODO Document.
     public Lock getLock();
 
     /**

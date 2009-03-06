@@ -205,21 +205,25 @@ public final class RawPage implements Writable
         return bytes;
     }
 
+    // TODO Document.
     public void write(FileChannel fileChannel, int offset) throws IOException
     {
         dirtyByteMap.write(getByteBuffer(), fileChannel, getPosition() + offset);
     }
     
+    // TODO Document.
     public int getLength()
     {
         return dirtyByteMap.getLength();
     }
     
+    // TODO Document.
     public void dirty(int offset, int length)
     {
         dirtyByteMap.dirty(offset, length);
     }
     
+    // TODO Document.
     public void dirty()
     {
         dirtyByteMap.dirty();

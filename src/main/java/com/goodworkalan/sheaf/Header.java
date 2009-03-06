@@ -5,16 +5,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.Lock;
 
+// TODO Document.
 public class Header<K> extends BasicWritable
 {
+    // TODO Document.
     private final Map<K, List<Integer>> offsets;
 
+    // TODO Document.
     public Header(long position, Map<K, List<Integer>> offsets, ByteBuffer byteBuffer, Lock lock)
     {
         super(position, byteBuffer, lock, new DirtyByteMap(byteBuffer.capacity()));
         this.offsets = offsets;
     }
     
+    // TODO Document.
     public Region get(K key)
     {
         List<Integer> offset = offsets.get(key);

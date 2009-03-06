@@ -1,13 +1,18 @@
 package com.goodworkalan.sheaf;
 
+// TODO Document.
 public class SubDirtyable implements Cleanable
 {
+    // TODO Document.
     private final int offset;
     
+    // TODO Document.
     private final int length;
     
+    // TODO Document.
     private final Cleanable dirtyable;
 
+    // TODO Document.
     public SubDirtyable(Cleanable dirtyable, int offset, int length)
     {
         this.offset = offset;
@@ -15,16 +20,19 @@ public class SubDirtyable implements Cleanable
         this.dirtyable = dirtyable;
     }
     
+    // TODO Document.
     public int getLength()
     {
         return length;
     }
 
+    // TODO Document.
     public void dirty()
     {
         dirty(0, length);
     }
 
+    // TODO Document.
     public void dirty(int offset, int length)
     {
         if (length > getLength())
@@ -34,6 +42,7 @@ public class SubDirtyable implements Cleanable
         dirtyable.dirty(this.offset + offset, length);
     }
     
+    // TODO Document.
     public void clean(int offset, int length)
     {
         if (length > getLength())
@@ -43,6 +52,7 @@ public class SubDirtyable implements Cleanable
         dirtyable.clean(this.offset + offset, length);
     }
     
+    // TODO Document.
     public void clean()
     {
         clean(0, length);

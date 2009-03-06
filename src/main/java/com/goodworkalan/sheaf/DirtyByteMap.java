@@ -21,6 +21,7 @@ public class DirtyByteMap implements Cleanable
     /** The map of dirty regions offsets to count of dirty bytes. */
     final SortedMap<Integer, Integer> dirtied;
     
+    // TODO Document.
     private final int length;
 
     /**
@@ -36,16 +37,19 @@ public class DirtyByteMap implements Cleanable
         this.dirtied = new TreeMap<Integer, Integer>();
     }
     
+    // TODO Document.
     public Map<Integer, Integer> toMap()
     {
         return Collections.unmodifiableMap(dirtied);
     }
     
+    // TODO Document.
     public int getLength()
     {
         return length;
     }
 
+    // TODO Document.
     public void dirty()
     {
         dirty(0, getLength());
@@ -105,6 +109,7 @@ public class DirtyByteMap implements Cleanable
         dirtied.put(start, end);
     }
     
+    // TODO Document.
     public void clean(int offset, int length)
     {
         int start = offset;
@@ -152,11 +157,13 @@ public class DirtyByteMap implements Cleanable
         }
     }
     
+    // TODO Document.
     public void clean()
     {
         dirtied.clear();
     }
 
+    // TODO Document.
     public void write(ByteBuffer bytes, FileChannel fileChannel, long position) throws IOException
     {
         for(Map.Entry<Integer, Integer> entry: toMap().entrySet())
