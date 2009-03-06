@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * A representation of the basic page attributes of position and byte buffer
@@ -28,16 +31,18 @@ import java.nio.ByteBuffer;
  * the dirty pages to file. Once the raw page is written to disk we let go of
  * the hard reference to the raw page and byte buffer in the raw page map. It
  * can be collected. The separate soft references only benefit the data page
- * which maintains a concurrency lock in the data page object. See
- * {@link BlockPage} for more details on the separate soft references.
- * <p>
- * FIXME Create Region base class.
- * FIXME Move a default header class into here.
+ * which maintains a concurrency lock in the data page object.
  */
-public final class RawPage extends DirtyMap
+public final class RawPage implements Writable
 {
     /** The sheaf that manages this raw page. */
     private final Sheaf sheaf;
+    
+    private final Lock lock;
+    
+    private final DirtyByteMap dirtyByteMap;
+
+    private long position;
 
     /**
      * A reference to a class that implements a specific application of a raw
@@ -54,21 +59,43 @@ public final class RawPage extends DirtyMap
      * and writes them out in a batch.
      */
     private Reference<ByteBuffer> byteBufferReference;
+    
+    /**
+     * Get the page size boundary aligned position of the page in file.
+     * 
+     * @return The position of the page.
+     */
+    public synchronized long getPosition()
+    {
+        return position;
+    }
+
+    /**
+     * Set the page size boundary aligned position of the page in file.
+     * 
+     * @param position The position of the page.
+     */
+    protected synchronized void setPosition(long position)
+    {
+        this.position = position;
+    }
 
     /**
      * Create a raw page at the specified position associated with the specified
      * sheaf. The byte buffer is not loaded until the {@link #getByteBuffer
      * getByteBuffer} method is called.
      * 
-     * @param pager
-     *            The sheaf that manages this raw page.
+     * @param sheaf
+     *            The page manager.
      * @param position
      *            The position of the page.
      */
-    public RawPage(Sheaf pager, long position)
+    public RawPage(Sheaf sheaf, long position)
     {
-        super(position);
-        this.sheaf = pager;
+        this.dirtyByteMap = new DirtyByteMap(sheaf.getPageSize());
+        this.sheaf = sheaf;
+        this.position = position;
+        this.lock = new ReentrantLock();
     }
 
     /**
@@ -79,6 +106,11 @@ public final class RawPage extends DirtyMap
     public Sheaf getSheaf()
     {
         return sheaf;
+    }
+    
+    public Lock getLock()
+    {
+        return lock;
     }
 
     /**
@@ -171,5 +203,25 @@ public final class RawPage extends DirtyMap
         }
 
         return bytes;
+    }
+
+    public void write(FileChannel fileChannel, int offset) throws IOException
+    {
+        dirtyByteMap.write(getByteBuffer(), fileChannel, getPosition() + offset);
+    }
+    
+    public int getLength()
+    {
+        return dirtyByteMap.getLength();
+    }
+    
+    public void dirty(int offset, int length)
+    {
+        dirtyByteMap.dirty(offset, length);
+    }
+    
+    public void dirty()
+    {
+        dirtyByteMap.dirty();
     }
 }

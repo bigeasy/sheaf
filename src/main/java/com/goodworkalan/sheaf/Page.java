@@ -43,7 +43,7 @@ package com.goodworkalan.sheaf;
  * <code>RelocatablePage</code> to a subclass of <code>RelocatablePage</code>
  * 
  * @see Sheaf#getPage(long, Class, Page)
- * @see Sheaf#setPage(long, Class, Page, DirtyPageSet, boolean)
+ * @see Sheaf#setPage(long, Class, Page, DirtyPageSet)
  */
 public class Page
 {
@@ -68,7 +68,7 @@ public class Page
      * 
      * @return The raw page.
      */
-    public RawPage getRawPage()
+    public RawPage getRawPage_()
     {
         return rawPage;
     }
@@ -77,11 +77,11 @@ public class Page
      * Initialize the raw page to the specific interpretation implemented by
      * this page. This method is called from within the <code>Pager</code> when
      * a new raw page is allocated. The specified raw page will subsequently be
-     * returned by {@link #getRawPage getRawPage}.
+     * returned by {@link #getRawPage_() getRawPage}.
      * 
      * @param dirtyPages
      *            The collection of dirty pages.
-     * @see Sheaf#setPage(long, Class, Page, DirtyPageSet, boolean)
+     * @see Sheaf#setPage(long, Class, Page, DirtyPageSet)
      */
     public void create(DirtyPageSet dirtyPages)
     {
@@ -91,7 +91,7 @@ public class Page
      * Load this specific interpretation from the specified the raw page. This
      * method is called from within the {@link Sheaf#getPage getPage} method of
      * the <code>Pager</code> when a page is loaded from the file. The specified
-     * <code>RawPage</code> will be subsequently returned by {@link #getRawPage
+     * <code>RawPage</code> will be subsequently returned by {@link #getRawPage_()
      * getRawPage}.
      * 
      * @see Sheaf#getPage(long, Class, Page)

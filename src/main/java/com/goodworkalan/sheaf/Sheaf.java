@@ -249,7 +249,9 @@ public final class Sheaf
         // Must synchronize since the page will be added, then initialized.
         // After being added to the map, the uninitialized raw page may be
         // read in the class checking synchronization block.
-        synchronized (rawPage)
+        RawPage locked = rawPage;
+        locked.getLock().lock();
+        try
         {
             synchronized (rawPageByPosition)
             {
@@ -270,7 +272,12 @@ public final class Sheaf
                 rawPage = found;
             }
         }
-        synchronized (rawPage)
+        finally
+        {
+            locked.getLock().unlock();
+        }
+        rawPage.getLock().lock();
+        try
         {
             if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
             {
@@ -282,6 +289,10 @@ public final class Sheaf
                 rawPage.setPage(page);
                 page.load();
             }
+        }
+        finally
+        {
+            rawPage.getLock().unlock();
         }
         return pageClass.cast(rawPage.getPage());
     }
@@ -352,9 +363,14 @@ public final class Sheaf
             RawPage rawPage = removeRawPageByPosition(position);
             if (rawPage != null)
             {
-                synchronized (rawPage)
+                rawPage.getLock().lock();
+                try
                 {
                     rawPage.setPosition(-1L);
+                }
+                finally
+                {
+                    rawPage.getLock().unlock();
                 }
             }
         }
@@ -418,12 +434,17 @@ public final class Sheaf
             }
             else
             {
-                synchronized (rawPage)
+                rawPage.getLock().lock();
+                try
                 {
                     removeRawPageByPosition(from);
                     copy(new RawPage(this, from), to);
                     addRawPageByPosition(rawPage);
                     rawPage.setPosition(to);
+                }
+                finally
+                {
+                    rawPage.getLock().unlock();
                 }
             }
         }
