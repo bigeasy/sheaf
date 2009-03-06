@@ -68,7 +68,7 @@ public class Page
      * 
      * @return The raw page.
      */
-    public RawPage getRawPage_()
+    public RawPage getRawPage()
     {
         return rawPage;
     }
