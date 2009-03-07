@@ -77,7 +77,7 @@ public class Page
      * Initialize the raw page to the specific interpretation implemented by
      * this page. This method is called from within the <code>Pager</code> when
      * a new raw page is allocated. The specified raw page will subsequently be
-     * returned by {@link #getRawPage_() getRawPage}.
+     * returned by {@link #getRawPage() getRawPage}.
      * 
      * @param dirtyPages
      *            The collection of dirty pages.
@@ -91,7 +91,7 @@ public class Page
      * Load this specific interpretation from the specified the raw page. This
      * method is called from within the {@link Sheaf#getPage getPage} method of
      * the <code>Pager</code> when a page is loaded from the file. The specified
-     * <code>RawPage</code> will be subsequently returned by {@link #getRawPage_()
+     * <code>RawPage</code> will be subsequently returned by {@link #getRawPage()
      * getRawPage}.
      * 
      * @see Sheaf#getPage(long, Class, Page)
