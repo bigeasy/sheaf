@@ -61,6 +61,13 @@
         </dependency>
     </dependencies>
 
+    <distributionManagement>
+      <repository>
+        <id>ssh-repository</id>
+        <url>scpexe://maribor.blogometer.com/cb/www/static/goodworkalan/m2/repository</url>
+      </repository>
+    </distributionManagement>
+
     <properties>
         <site.javadoc.show>protected</site.javadoc.show>
         <site.javadoc.visiblity>public</site.javadoc.visiblity>
@@ -164,7 +171,6 @@
                 <reportSet>
                     <id>html</id>
                     <configuration>
-                        <show>private</show>
                         <show>${site.javadoc.show}</show>
                         <offlineLinks>
                             <offlineLink>
