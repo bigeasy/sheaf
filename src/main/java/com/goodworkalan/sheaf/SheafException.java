@@ -8,6 +8,8 @@ import java.util.ResourceBundle;
 /**
  * A general purpose exception that indicates that an error occurred in one 
  * of the classes in the sheaf package.
+ * <p>
+ * FIXME Assign error codes to static constants.
  *   
  * @author Alan Gutierrez
  */

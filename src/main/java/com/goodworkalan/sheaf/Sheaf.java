@@ -206,6 +206,18 @@ public final class Sheaf
     }
 
     /**
+     * Get the page position that contains the given position.
+     * 
+     * @param position
+     *            The byte position.
+     * @return The position of the page that contains the position.
+     */
+    public long floor(long position)
+    {
+        return position - (position % pageSize);
+    }
+
+    /**
      * Get a given page implementation of an underlying raw page for the given
      * position. If the page does not exist, the given page instance is used to
      * load the contents of the underlying raw page. Creation of the page is
@@ -243,7 +255,7 @@ public final class Sheaf
      */
     public <P extends Page> P getPage(long position, Class<P> pageClass, P page)
     {
-        position = (long) Math.floor(position - (position % pageSize));
+        position = floor(position);
         RawPage rawPage = new RawPage(this, position);
         RawPage found = null;
         // Must synchronize since the page will be added, then initialized.
@@ -320,7 +332,7 @@ public final class Sheaf
      */
     public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages)
     {
-        position =  position / pageSize * pageSize;
+        position =  floor(position);
         RawPage rawPage = new RawPage(this, position);
 
         synchronized (rawPageByPosition)
@@ -358,6 +370,7 @@ public final class Sheaf
      */
     public void free(long position)
     {
+        position = floor(position);
         synchronized (rawPageByPosition)
         {
             RawPage rawPage = removeRawPageByPosition(position);
@@ -420,6 +433,9 @@ public final class Sheaf
      */
     public void move(long from, long to)
     {
+        from = floor(from);
+        to = floor(to);
+        
         RawPage rawPage = null;
         synchronized (rawPageByPosition)
         {
