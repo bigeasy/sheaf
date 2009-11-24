@@ -6,22 +6,20 @@ import java.util.MissingResourceException;
 import java.util.ResourceBundle;
 
 /**
- * A general purpose exception that indicates that an error occurred in one 
- * of the classes in the sheaf package.
+ * A general purpose exception that indicates that an error occurred in one of
+ * the classes in the sheaf package.
  * <p>
  * FIXME Assign error codes to static constants.
- *   
+ * 
  * @author Alan Gutierrez
  */
-public final class SheafException
-extends RuntimeException
-{
+public final class SheafException extends RuntimeException {
     /** The serial version id. */
     private static final long serialVersionUID = 20070821L;
-    
+
     /** A list of arguments to the formatted error message. */
-    private final List<Object> arguments = new ArrayList<Object>(); 
-    
+    private final List<Object> arguments = new ArrayList<Object>();
+
     /** The error code. */
     private final int code;
 
@@ -31,8 +29,7 @@ extends RuntimeException
      * @param code
      *            The error code.
      */
-    public SheafException(int code)
-    {
+    public SheafException(int code) {
         this.code = code;
     }
 
@@ -45,8 +42,7 @@ extends RuntimeException
      * @param cause
      *            The cause exception.
      */
-    public SheafException(int code, Throwable cause)
-    {
+    public SheafException(int code, Throwable cause) {
         super(cause);
         this.code = code;
     }
@@ -56,8 +52,7 @@ extends RuntimeException
      * 
      * @return The error code.
      */
-    public int getCode()
-    {
+    public int getCode() {
         return code;
     }
 
@@ -69,8 +64,7 @@ extends RuntimeException
      *            The format argument.
      * @return This sheaf exception for chained invocation of add.
      */
-    public SheafException add(Object argument)
-    {
+    public SheafException add(Object argument) {
         arguments.add(argument);
         return this;
     }
@@ -82,25 +76,18 @@ extends RuntimeException
      * @return The exception message.
      */
     @Override
-    public String getMessage()
-    {
+    public String getMessage() {
         String key = Integer.toString(code);
         ResourceBundle exceptions = ResourceBundle.getBundle("com.goodworkalan.sheaf.exceptions");
         String format;
-        try
-        {
+        try {
             format = exceptions.getString(key);
-        }
-        catch (MissingResourceException e)
-        {
+        } catch (MissingResourceException e) {
             return key;
         }
-        try
-        {
+        try {
             return String.format(format, arguments.toArray());
-        }
-        catch (Throwable e)
-        {
+        } catch (Throwable e) {
             throw new Error(key, e);
         }
     }
