@@ -45,8 +45,7 @@ package com.goodworkalan.sheaf;
  * @see Sheaf#getPage(long, Class, Page)
  * @see Sheaf#setPage(long, Class, Page, DirtyPageSet)
  */
-public class Page
-{
+public class Page {
     /** The underlying raw page. */
     private RawPage rawPage;
 
@@ -58,8 +57,7 @@ public class Page
      * 
      * @param rawPage
      */
-    void setRawPage(RawPage rawPage)
-    {
+    void setRawPage(RawPage rawPage) {
         this.rawPage = rawPage;
     }
 
@@ -68,11 +66,10 @@ public class Page
      * 
      * @return The raw page.
      */
-    public RawPage getRawPage()
-    {
+    public RawPage getRawPage() {
         return rawPage;
     }
-    
+
     /**
      * Initialize the raw page to the specific interpretation implemented by
      * this page. This method is called from within the <code>Pager</code> when
@@ -83,20 +80,18 @@ public class Page
      *            The collection of dirty pages.
      * @see Sheaf#setPage(long, Class, Page, DirtyPageSet)
      */
-    public void create(DirtyPageSet dirtyPages)
-    {
+    public void create(DirtyPageSet dirtyPages) {
     }
 
     /**
      * Load this specific interpretation from the specified the raw page. This
      * method is called from within the {@link Sheaf#getPage getPage} method of
      * the <code>Pager</code> when a page is loaded from the file. The specified
-     * <code>RawPage</code> will be subsequently returned by {@link #getRawPage()
-     * getRawPage}.
+     * <code>RawPage</code> will be subsequently returned by
+     * {@link #getRawPage() getRawPage}.
      * 
      * @see Sheaf#getPage(long, Class, Page)
      */
-    public void load()
-    {
+    public void load() {
     }
 }
