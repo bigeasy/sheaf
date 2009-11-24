@@ -36,13 +36,12 @@ import com.goodworkalan.region.Writable;
  * can be collected. The separate soft references only benefit the data page
  * which maintains a concurrency lock in the data page object.
  */
-public final class RawPage implements Writable
-{
+public final class RawPage implements Writable {
     /** The sheaf that manages this raw page. */
     private final Sheaf sheaf;
-    
+
     private final Lock lock;
-    
+
     private final DirtyByteMap dirtyByteMap;
 
     private long position;
@@ -62,24 +61,23 @@ public final class RawPage implements Writable
      * and writes them out in a batch.
      */
     private Reference<ByteBuffer> byteBufferReference;
-    
+
     /**
      * Get the page size boundary aligned position of the page in file.
      * 
      * @return The position of the page.
      */
-    public synchronized long getPosition()
-    {
+    public synchronized long getPosition() {
         return position;
     }
 
     /**
      * Set the page size boundary aligned position of the page in file.
      * 
-     * @param position The position of the page.
+     * @param position
+     *            The position of the page.
      */
-    protected synchronized void setPosition(long position)
-    {
+    protected synchronized void setPosition(long position) {
         this.position = position;
     }
 
@@ -93,8 +91,7 @@ public final class RawPage implements Writable
      * @param position
      *            The position of the page.
      */
-    public RawPage(Sheaf sheaf, long position)
-    {
+    public RawPage(Sheaf sheaf, long position) {
         this.dirtyByteMap = new DirtyByteMap(sheaf.getPageSize());
         this.sheaf = sheaf;
         this.position = position;
@@ -103,16 +100,14 @@ public final class RawPage implements Writable
 
     /**
      * Get the sheaf that manages this raw page.
-     *
+     * 
      * @return The sheaf.
      */
-    public Sheaf getSheaf()
-    {
+    public Sheaf getSheaf() {
         return sheaf;
     }
-    
-    public Lock getLock()
-    {
+
+    public Lock getLock() {
         return lock;
     }
 
@@ -127,8 +122,7 @@ public final class RawPage implements Writable
      *            The <code>Page</code> class that reads and writes to this raw
      *            page.
      */
-    void setPage(Page page)
-    {
+    void setPage(Page page) {
         this.page = page;
     }
 
@@ -139,8 +133,7 @@ public final class RawPage implements Writable
      * @return The <code>Page</code> class that reads and writes to this raw
      *         page.
      */
-    public Page getPage()
-    {
+    public Page getPage() {
         return page;
     }
 
@@ -150,16 +143,12 @@ public final class RawPage implements Writable
      * 
      * @return A byte buffer of the contents of this page.
      */
-    private ByteBuffer load()
-    {
+    private ByteBuffer load() {
         int pageSize = sheaf.getPageSize();
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
-        try
-        {
+        try {
             sheaf.getFileChannel().read(bytes, sheaf.getOffset() + getPosition());
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new SheafException(103, e);
         }
         bytes.clear();
@@ -186,20 +175,15 @@ public final class RawPage implements Writable
      * 
      * @return A byte buffer of the contents of this page.
      */
-    public synchronized ByteBuffer getByteBuffer()
-    {
+    public synchronized ByteBuffer getByteBuffer() {
         ByteBuffer bytes = null;
 
-        if (byteBufferReference == null)
-        {
+        if (byteBufferReference == null) {
             bytes = load();
             byteBufferReference = new WeakReference<ByteBuffer>(bytes);
-        }
-        else
-        {
+        } else {
             bytes = byteBufferReference.get();
-            if (bytes == null)
-            {
+            if (bytes == null) {
                 bytes = load();
                 byteBufferReference = new WeakReference<ByteBuffer>(bytes);
             }
@@ -219,8 +203,7 @@ public final class RawPage implements Writable
      * @throws IOException
      *             If an I/O error occurs.
      */
-    public void write(FileChannel fileChannel, int offset) throws IOException
-    {
+    public void write(FileChannel fileChannel, int offset) throws IOException {
         dirtyByteMap.write(getByteBuffer(), fileChannel, getPosition() + offset);
     }
 
@@ -229,8 +212,7 @@ public final class RawPage implements Writable
      * 
      * @return The length of raw page buffer.
      */
-    public int getLength()
-    {
+    public int getLength() {
         return dirtyByteMap.getLength();
     }
 
@@ -243,16 +225,14 @@ public final class RawPage implements Writable
      * @param length
      *            The length of the dirty region.
      */
-    public void dirty(int offset, int length)
-    {
+    public void dirty(int offset, int length) {
         dirtyByteMap.dirty(offset, length);
     }
-    
+
     /**
      * Mark as dirty the entire byte buffer.
      */
-    public void dirty()
-    {
+    public void dirty() {
         dirtyByteMap.dirty();
     }
 }
