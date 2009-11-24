@@ -6,7 +6,7 @@
     <groupId>com.goodworkalan</groupId>
     <artifactId>sheaf</artifactId>
     <packaging>jar</packaging>
-    <version>0.1.X</version>
+    <version>0.1${version.suffix}</version>
 
     <name>sheaf</name>
     <description>Divides a file into pages.</description>
@@ -44,7 +44,7 @@
         <dependency>
             <groupId>com.goodworkalan</groupId>
             <artifactId>region</artifactId>
-            <version>0.1.X</version> 
+            <version>0.1${version.suffix}</version> 
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
@@ -63,14 +63,17 @@
 
     <distributionManagement>
       <repository>
-        <id>ssh-repository</id>
-        <url>scpexe://maribor.blogometer.com/cb/www/static/goodworkalan/m2/repository</url>
+        <id>goodworkalan-repository</id>
+        <url>scpexe://ljubljana.blogometer.com${distribution.repository.path}</url>
       </repository>
     </distributionManagement>
+
 
     <properties>
         <site.javadoc.show>protected</site.javadoc.show>
         <site.javadoc.visiblity>public</site.javadoc.visiblity>
+        <version.suffix>-SNAPSHOT</version.suffix>
+        <distribution.repository.path>/opt/var/www/static/goodworkalan/m2/snapshots</distribution.repository.path>
     </properties>
 
     <build>
