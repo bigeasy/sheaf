@@ -11,14 +11,13 @@ import java.util.Map;
  * A container for outstanding <code>Page</code> objects that maps addresses to
  * soft referenced <code>Page</code> objects.
  */
-public final class Sheaf
-{
+public final class Sheaf {
     /** An file channel opened on the associated file. */
     private final FileChannel fileChannel;
 
     /** The size of a page. */
     private final int pageSize;
-    
+
     /** The offset of the first page. */
     private final int offset;
 
@@ -51,8 +50,7 @@ public final class Sheaf
      * @param offset
      *            The offset of the first page.
      */
-    public Sheaf(FileChannel fileChannel, int pageSize, int offset)
-    {
+    public Sheaf(FileChannel fileChannel, int pageSize, int offset) {
         this.fileChannel = fileChannel;
         this.pageSize = pageSize;
         this.offset = offset;
@@ -65,8 +63,7 @@ public final class Sheaf
      * 
      * @return The open file channel.
      */
-    public FileChannel getFileChannel()
-    {
+    public FileChannel getFileChannel() {
         return fileChannel;
     }
 
@@ -77,8 +74,7 @@ public final class Sheaf
      * 
      * @return The offset of the first page.
      */
-    public int getOffset()
-    {
+    public int getOffset() {
         return offset;
     }
 
@@ -87,8 +83,7 @@ public final class Sheaf
      * 
      * @return The page size.
      */
-    public int getPageSize()
-    {
+    public int getPageSize() {
         return pageSize;
     }
 
@@ -96,13 +91,10 @@ public final class Sheaf
      * Remove the references to pages that have garbage collected from their
      * reference queue and from the map of raw pages by position.
      */
-    private void collect()
-    {
-        synchronized (rawPageByPosition)
-        {
+    private void collect() {
+        synchronized (rawPageByPosition) {
             RawPageReference pageReference = null;
-            while ((pageReference = (RawPageReference) queue.poll()) != null)
-            {
+            while ((pageReference = (RawPageReference) queue.poll()) != null) {
                 rawPageByPosition.remove(pageReference.getPosition());
             }
         }
@@ -111,11 +103,10 @@ public final class Sheaf
     /**
      * Allocate a new page from the end of the file by extending the length of
      * the file.
-     *
+     * 
      * @return The address of a new page from the end of file.
      */
-    public long extend()
-    {
+    public long extend() {
         ByteBuffer bytes = ByteBuffer.allocateDirect(pageSize);
 
         bytes.putLong(0L); // Checksum.
@@ -125,41 +116,29 @@ public final class Sheaf
 
         long position;
 
-        synchronized (this)
-        {
-            try
-            {
+        synchronized (this) {
+            try {
                 position = fileChannel.size();
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new SheafException(104, e);
             }
-            
-            if (position < offset)
-            {
+
+            if (position < offset) {
                 position = offset;
             }
 
-            try
-            {
+            try {
                 fileChannel.write(bytes, position);
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new SheafException(101, e);
             }
 
-            try
-            {
+            try {
                 long size = fileChannel.size();
-                if ((size - getOffset()) % pageSize != 0)
-                {
+                if ((size - getOffset()) % pageSize != 0) {
                     throw new SheafException(105);
                 }
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new SheafException(104, e);
             }
         }
@@ -169,15 +148,14 @@ public final class Sheaf
 
     /**
      * Add a raw page to the page by position map.
-     *
-     * @param rawPage The raw page.
+     * 
+     * @param rawPage
+     *            The raw page.
      */
-    private void addRawPageByPosition(RawPage rawPage)
-    {
+    private void addRawPageByPosition(RawPage rawPage) {
         RawPageReference intended = new RawPageReference(rawPage, queue);
         RawPageReference existing = rawPageByPosition.get(intended.getPosition());
-        if (existing != null)
-        {
+        if (existing != null) {
             existing.enqueue();
             collect();
         }
@@ -194,12 +172,10 @@ public final class Sheaf
      * @return The page currently mapped to the position or null if no page is
      *         mapped.
      */
-    private RawPage getRawPageByPosition(long position)
-    {
+    private RawPage getRawPageByPosition(long position) {
         RawPage page = null;
         RawPageReference chunkReference = rawPageByPosition.get(position);
-        if (chunkReference != null)
-        {
+        if (chunkReference != null) {
             page = chunkReference.get();
         }
         return page;
@@ -212,8 +188,7 @@ public final class Sheaf
      *            The byte position.
      * @return The position of the page that contains the position.
      */
-    public long floor(long position)
-    {
+    public long floor(long position) {
         return position - (position % pageSize);
     }
 
@@ -253,8 +228,7 @@ public final class Sheaf
      *            exist in the page map.
      * @return The page of the given type for the given position.
      */
-    public <P extends Page> P getPage(long position, Class<P> pageClass, P page)
-    {
+    public <P extends Page> P getPage(long position, Class<P> pageClass, P page) {
         position = floor(position);
         RawPage rawPage = new RawPage(this, position);
         RawPage found = null;
@@ -263,47 +237,35 @@ public final class Sheaf
         // read in the class checking synchronization block.
         RawPage locked = rawPage;
         locked.getLock().lock();
-        try
-        {
-            synchronized (rawPageByPosition)
-            {
+        try {
+            synchronized (rawPageByPosition) {
                 found = getRawPageByPosition(position);
-                if (found == null)
-                {
+                if (found == null) {
                     addRawPageByPosition(rawPage);
                 }
             }
-            if (found == null)
-            {
+            if (found == null) {
                 page.setRawPage(rawPage);
                 rawPage.setPage(page);
                 page.load();
-            }
-            else
-            {
+            } else {
                 rawPage = found;
             }
-        }
-        finally
-        {
+        } finally {
             locked.getLock().unlock();
         }
         rawPage.getLock().lock();
-        try
-        {
-            if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass()))
-            {
-                if (!rawPage.getPage().getClass().isAssignableFrom(page.getClass()))
-                {
+        try {
+            if (!page.getClass().isAssignableFrom(rawPage.getPage().getClass())) {
+                if (!rawPage.getPage().getClass().isAssignableFrom(
+                        page.getClass())) {
                     throw new IllegalStateException();
                 }
                 page.setRawPage(rawPage);
                 rawPage.setPage(page);
                 page.load();
             }
-        }
-        finally
-        {
+        } finally {
             rawPage.getLock().unlock();
         }
         return pageClass.cast(rawPage.getPage());
@@ -330,16 +292,13 @@ public final class Sheaf
      *            The set of dirty pages.
      * @return The page given.
      */
-    public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages)
- {
-        position =  floor(position);
+    public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages) {
+        position = floor(position);
         RawPage rawPage = new RawPage(this, position);
 
-        synchronized (rawPageByPosition)
-        {
+        synchronized (rawPageByPosition) {
             RawPage existing = removeRawPageByPosition(position);
-            if (existing != null)
-            {
+            if (existing != null) {
                 throw new IllegalStateException();
             }
             page.setRawPage(rawPage);
@@ -363,23 +322,18 @@ public final class Sheaf
      * block that is synchronized on the raw page mapped to the given position
      * or deadlock will eventually occur.
      * 
-     * @param position The page position to free.
+     * @param position
+     *            The page position to free.
      */
-    public void free(long position)
-    {
+    public void free(long position) {
         position = floor(position);
-        synchronized (rawPageByPosition)
-        {
+        synchronized (rawPageByPosition) {
             RawPage rawPage = removeRawPageByPosition(position);
-            if (rawPage != null)
-            {
+            if (rawPage != null) {
                 rawPage.getLock().lock();
-                try
-                {
+                try {
                     rawPage.setPosition(-1L);
-                }
-                finally
-                {
+                } finally {
                     rawPage.getLock().unlock();
                 }
             }
@@ -394,16 +348,12 @@ public final class Sheaf
      * @param to
      *            The page position.
      */
-    private void copy(RawPage rawPage, long to)
-    {
+    private void copy(RawPage rawPage, long to) {
         ByteBuffer bytes = rawPage.getByteBuffer();
         bytes.clear();
-        try
-        {
+        try {
             getFileChannel().write(bytes, getOffset() + to);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new SheafException(0, e);
         }
         rawPage.setPosition(to);
@@ -428,35 +378,26 @@ public final class Sheaf
      * @param to
      *            The destination page position.
      */
-    public void move(long from, long to)
-    {
+    public void move(long from, long to) {
         from = floor(from);
         to = floor(to);
-        
+
         RawPage rawPage = null;
-        synchronized (rawPageByPosition)
-        {
-            if (getRawPageByPosition(to) != null)
-            {
+        synchronized (rawPageByPosition) {
+            if (getRawPageByPosition(to) != null) {
                 throw new IllegalStateException();
             }
             rawPage = getRawPageByPosition(from);
-            if (rawPage == null)
-            {
+            if (rawPage == null) {
                 copy(new RawPage(this, from), to);
-            }
-            else
-            {
+            } else {
                 rawPage.getLock().lock();
-                try
-                {
+                try {
                     removeRawPageByPosition(from);
                     copy(new RawPage(this, from), to);
                     addRawPageByPosition(rawPage);
                     rawPage.setPosition(to);
-                }
-                finally
-                {
+                } finally {
                     rawPage.getLock().unlock();
                 }
             }
@@ -473,12 +414,10 @@ public final class Sheaf
      * @return The page currently mapped to the position or null if no page is
      *         mapped.
      */
-    private RawPage removeRawPageByPosition(long position)
-    {
+    private RawPage removeRawPageByPosition(long position) {
         RawPageReference existing = rawPageByPosition.get(new Long(position));
         RawPage p = null;
-        if (existing != null)
-        {
+        if (existing != null) {
             p = existing.get();
             existing.enqueue();
             collect();
