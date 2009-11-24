@@ -331,7 +331,7 @@ public final class Sheaf
      * @return The page given.
      */
     public <P extends Page> P setPage(long position, Class<P> pageClass, P page, DirtyPageSet dirtyPages)
-    {
+ {
         position =  floor(position);
         RawPage rawPage = new RawPage(this, position);
 
@@ -342,13 +342,10 @@ public final class Sheaf
             {
                 throw new IllegalStateException();
             }
-            else
-            {
-                page.setRawPage(rawPage);
-                rawPage.setPage(page);
-                page.create(dirtyPages);
-                addRawPageByPosition(rawPage);
-            }
+            page.setRawPage(rawPage);
+            rawPage.setPage(page);
+            page.create(dirtyPages);
+            addRawPageByPosition(rawPage);
         }
 
         return pageClass.cast(rawPage.getPage());
