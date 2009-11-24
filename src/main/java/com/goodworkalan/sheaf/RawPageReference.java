@@ -8,9 +8,7 @@ import java.lang.ref.WeakReference;
  * <code>ReferenceQueue</code> that will remove the raw page reference from the
  * page by position map of a {@link Sheaf}.
  */
-final class RawPageReference
-extends WeakReference<RawPage>
-{
+final class RawPageReference extends WeakReference<RawPage> {
     /** The file position of the raw page. */
     private final long position;
 
@@ -23,8 +21,7 @@ extends WeakReference<RawPage>
      * @param queue
      *            The reference queue.
      */
-    public RawPageReference(RawPage page, ReferenceQueue<RawPage> queue)
-    {
+    public RawPageReference(RawPage page, ReferenceQueue<RawPage> queue) {
         super(page, queue);
         this.position = page.getPosition();
     }
@@ -34,8 +31,7 @@ extends WeakReference<RawPage>
      * 
      * @return The file position.
      */
-    public long getPosition()
-    {
+    public long getPosition() {
         return position;
     }
 }
