@@ -12,7 +12,7 @@ public class SheafProject extends ProjectModule {
                 .produces("com.github.bigeasy.sheaf/sheaf/0.1")
                 .main()
                     .depends()
-                        .include("com.goodworkalan/region/0.+1")
+                        .include("com.github.bigeasy.region/region/0.+1")
                         .end()
                     .end()
                 .test()
