@@ -2,14 +2,14 @@
 <classpath>
   <classpathentry kind="src" path="src/main/java"/>
   <classpathentry excluding="**/*.java" kind="src" path="src/main/resources"/>
-	<classpathentry kind="src" output="target/test-classes" path="src/test/java"/>
+  <classpathentry kind="src" output="target/test-classes" path="src/test/java"/>
   <classpathentry kind="output" path="target/classes"/>
   <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/>
   <classpathentry kind="var" path="M2_REPO/org/mockito/mockito-core/1.6/mockito-core-1.6.jar"/>
-  <classpathentry kind="var" path="M2_REPO/org/testng/testng/5.10/testng-5.10.jar" sourcepath="M2_REPO/org/testng/testng/5.10/testng-5.10-sources.jar"/>
-  <classpathentry kind="var" path="M2_REPO/com/goodworkalan/region/0.1/region-0.1.jar" sourcepath="M2_REPO/com/goodworkalan/region/0.1/region-0.1-sources.jar">
+  <classpathentry kind="var" path="M2_REPO/org/testng/testng-jdk15/5.10/testng-jdk15-5.10.jar"/>
+  <classpathentry kind="var" path="M2_REPO/com/github/bigeasy/region/region/0.1/region-0.1.jar" sourcepath="M2_REPO/com/github/bigeasy/region/region/0.1/region-0.1-sources.jar">
     <attributes>
-      <attribute name="javadoc_location" value="jar:file:/Users/alan/.m2/repository/com/goodworkalan/region/0.1/region-0.1-javadoc.jar!/"/>
+      <attribute name="javadoc_location" value="jar:file:/Users/alan/.m2/repository/com/github/bigeasy/region/region/0.1/region-0.1-javadoc.jar!/"/>
     </attributes>
   </classpathentry>
   <classpathentry kind="var" path="M2_REPO/org/hamcrest/hamcrest-core/1.1/hamcrest-core-1.1.jar" sourcepath="M2_REPO/org/hamcrest/hamcrest-core/1.1/hamcrest-core-1.1-sources.jar"/>
