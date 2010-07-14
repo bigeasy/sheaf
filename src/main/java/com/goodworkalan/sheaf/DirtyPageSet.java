@@ -12,8 +12,7 @@ import java.util.Map;
  * 
  * @author Alan Gutierrez
  */
-public final class DirtyPageSet
-{
+public final class DirtyPageSet {
     /** A map of page positions to hard references to raw pages. */
     private final Map<Long, RawPage> rawPages;
 
@@ -23,19 +22,17 @@ public final class DirtyPageSet
     /**
      * Construct a dirty page set.
      */
-    public DirtyPageSet()
-    {
+    public DirtyPageSet() {
         this.rawPages = new HashMap<Long, RawPage>();
         this.byteBuffers = new HashMap<Long, ByteBuffer>();
     }
-    
+
     /**
      * Return the count of dirty pages held by this dirty page set.
      * 
      * @return The size of the set.
      */
-    public int size()
-    {
+    public int size() {
         return rawPages.size();
     }
 
@@ -52,30 +49,24 @@ public final class DirtyPageSet
      * @param rawPage
      *            The dirty raw page.
      */
-    public void add(RawPage rawPage)
-    {
+    public void add(RawPage rawPage) {
         rawPages.put(rawPage.getPosition(), rawPage);
         byteBuffers.put(rawPage.getPosition(), rawPage.getByteBuffer());
     }
-    
+
     /**
      * Flush the dirty page set writing the dirty raw pages to the sheafs from
      * which they came and releasing all hard references to raw pages and their
      * associated byte buffers.
      */
-    public void flush()
-    {
+    public void flush() {
         for (RawPage rawPage: rawPages.values())
         {
             Sheaf sheaf = rawPage.getSheaf();
-            synchronized (rawPage)
-            {
-                try
-                {
+            synchronized (rawPage) {
+                try {
                     rawPage.write(sheaf.getFileChannel(), sheaf.getOffset());
-                }
-                catch (IOException e)
-                {
+                } catch (IOException e) {
                     throw new SheafException(101, e);
                 }
             }
@@ -88,8 +79,7 @@ public final class DirtyPageSet
      * Release all hard references to raw pages and their associated byte
      * buffers without writing the changes.
      */
-    public void clear()
-    {
+    public void clear() {
         rawPages.clear();
         byteBuffers.clear();
     }
