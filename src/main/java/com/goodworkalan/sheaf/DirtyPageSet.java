@@ -8,7 +8,6 @@ import java.util.Map;
 /**
  * A collection of pages whose byte buffers contain writes that have not been
  * flushed to disk.
- * <p>
  * 
  * @author Alan Gutierrez
  */
